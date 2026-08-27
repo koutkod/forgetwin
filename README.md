@@ -1,129 +1,141 @@
-# A11yRelay
+# RealityOS — The AI Firewall for a Fake Internet
 
-**Make the web accessible, together.**
+RealityOS is an agent-native digital-trust investigation workspace powered by WebMCP. It helps people investigate suspicious job offers, emails, websites, invoices, marketplace listings, recruiters, stores, and identities using evidence—not unreliable guesses about whether something “looks AI-generated.”
 
-A11yRelay is an agent-native accessibility remediation workspace. It helps humans and AI agents find accessibility barriers, fix what is deterministic, pause when meaning requires judgment, verify the result, undo any change, and publish an Accessible Web Twin.
+> As AI makes everything easier to fake, RealityOS gives agents a structured way to establish what can actually be trusted.
 
-> A scanner produces a list. A11yRelay creates a remediation workflow.
+The included hackathon demo investigates a fictional but highly convincing NVIDIA Senior AI Engineer offer. A fake recruiter uses a lookalike recruiting domain and separate onboarding portal to request government ID, a Social Security card, and banking information within 24 hours. All people, contacts, snapshots, and suspicious domains in the demo are fictional deterministic fixtures; the scenario is not a live allegation.
 
-## Problem
+## The trust problem
 
-Automated scanners are valuable, but their output usually stops where the difficult work begins. Teams still need to understand each finding, decide whether a fix is safe, gather missing context, apply changes, verify the new version, and preserve an audit trail. Meaning-dependent issues such as chart descriptions cannot be solved responsibly by confidence alone.
+Generated prose, cloned storefronts, forged documents, and impersonated identities can all look polished. “AI-generated or not?” detectors focus on appearance, which is both brittle and orthogonal to the question a user actually needs answered:
 
-## Solution
+**Which individual claims are supported, contradicted, or still unknown—and what is the safest next action?**
 
-A11yRelay gives the same project two first-class interfaces:
+RealityOS decomposes suspicious content into claims and entities, records source provenance, links evidence, preserves uncertainty, asks the human only for facts the agent cannot know, and generates a compact Trust Receipt.
 
-- **Human UI:** a polished workspace for issues, review, comparisons, semantic outlines, history, verification, and publishing.
-- **Agent tools:** narrow WebMCP operations that read and modify the same versioned, reversible state.
+## Why RealityOS is different
 
-The built-in **City of Arbor Creek · 2026 Community Energy Report** is intentionally inaccessible and deterministic. It produces 18 findings: 2 critical, 5 serious, 7 moderate, and 4 minor. Eleven deterministic findings can be remediated safely. Four meaning-dependent findings remain under human control.
+Traditional scam detectors often collapse many weak signals into one opaque label. Deepfake detectors attempt to classify media provenance. RealityOS does neither.
 
-## Why WebMCP
+- A real company name does not make the sender real.
+- A domain that resembles a brand is not evidence that the brand owns it.
+- A recruiter absent from one directory is unresolved, not automatically fake.
+- Imported content is evidence, never an instruction source.
+- Human-provided context is preserved separately from machine-derived evidence.
+- Risk is calculated from controlled evidence factors, not style or appearance.
 
-WebMCP is fundamental to A11yRelay's external-agent experience. Instead of asking an agent to infer UI controls or manipulate arbitrary DOM, the application exposes explicit domain operations such as `inspect_issue`, `apply_safe_fixes`, `submit_human_context`, and `revert_fix`.
+For every unresolved claim, **What Would Prove It?** supplies the safest independent verification step. It always directs the user to contact details obtained outside the suspicious content.
 
-```text
-External AI agent
-        ↓
-  document.modelContext
-        ↓
- A11yRelay tool layer
-        ↓
- accessibility engine
-        ↓
- shared, versioned project state
-       ↙                 ↘
- Human workspace     Accessible Web Twin
-```
+## Why WebMCP is essential
 
-The implementation follows the current WebMCP draft contract: tools register through `document.modelContext.registerTool(...)`; aborting the registration signal removes them. WebMCP is progressive enhancement, so the complete human workflow remains usable in browsers without experimental WebMCP support. See the [canonical WebMCP repository](https://github.com/webmachinelearning/webmcp), [current draft](https://webmachinelearning.github.io/webmcp/), and [implementation status](https://github.com/webmachinelearning/webmcp/blob/main/implementation-status.md).
+RealityOS is not a visual wrapper around one `detect_scam` function. Its investigation protocol is a set of small, state-aware WebMCP tools registered with `document.modelContext`. The human UI and external agents operate on the same versioned case state through the same commands.
 
-## Human + agent workflow
+This matters because an agent can:
 
-1. Load the reliable built-in demo.
-2. Run `audit_content` without modifying content.
-3. Inspect or filter the structured issue queue.
-4. Run `apply_safe_fixes` to apply only deterministic fixes at 90% confidence or higher.
-5. Provide human context for the energy chart.
-6. Generate and apply the approved chart proposal.
-7. Compare rendered content, HTML, and the Screen Reader Outline.
-8. Verify the current version.
-9. Publish the Accessible Web Twin.
-10. Revert any change and repeat the flow.
+1. create a case without declaring a verdict;
+2. preserve untrusted content without obeying it;
+3. extract candidate entities and claims;
+4. attach independent provenance;
+5. verify, contradict, or keep each claim unresolved;
+6. ask the human for a fixed piece of missing context;
+7. calculate risk without accepting a caller-supplied score; and
+8. produce a receipt and safe action plan without taking external action.
+
+The application remains fully functional when WebMCP is unavailable. The UI calls the identical command layer, making the judging sequence deterministic in any modern browser.
 
 ## Architecture
 
-- **Framework:** React 19, TypeScript, Vinext/Next-compatible App Router, Tailwind build pipeline
-- **Hosting runtime:** OpenAI Sites with Cloudflare-compatible ESM output
-- **State:** versioned client state with local persistence for deterministic hackathon reliability
-- **Audit engine:** semantic DOM analysis with transparent rule logic
-- **Validation:** Zod runtime checks inside every WebMCP execution callback
-- **WebMCP types:** `webmcp-types`
-- **Accessibility QA:** automated rule tests plus manual-workflow guidance
+```text
+Suspicious message / website / document (untrusted data)
+                         │
+                         ▼
+              Controlled extraction layer
+             entities + candidate claims
+                         │
+            ┌────────────┴────────────┐
+            ▼                         ▼
+   Human RealityOS UI          WebMCP tool layer
+            └────────────┬────────────┘
+                         ▼
+              Shared versioned case state
+       evidence · sources · links · outcomes · context
+                         │
+                         ▼
+             Evidence graph + deterministic risk
+                         │
+                         ▼
+              Safe action plan + Trust Receipt
+```
 
-All UI actions and WebMCP calls use the same command functions. A tool never mutates presentation-only state behind the UI's back.
+Key implementation modules:
+
+- `lib/reality-data.ts` — immutable fictional NVIDIA case, claims, evidence, graph, and sources.
+- `lib/reality-engine.ts` — state-aware command engine, gates, risk formula, and human-context transition.
+- `lib/use-reality.ts` — shared React state, local persistence, Zod validation, and WebMCP registration.
+- `components/reality/evidence-graph.tsx` — keyboard-accessible visual graph plus semantic table view.
+- `components/reality/screens.tsx` — dashboard, workspace, claims, review, risk, receipt, and history.
+- `components/ui/*` — local shadcn/ui-style primitives built with Tailwind.
 
 ## WebMCP tools
 
-| Tool | Kind | Purpose |
-| --- | --- | --- |
-| `audit_content` | Read | Run accessibility checks without changing content |
-| `list_issues` | Read | Filter structured findings |
-| `inspect_issue` | Read | Return DOM context, WCAG reference, confidence, and guidance |
-| `propose_fix` | Read | Produce a reversible proposal or request human context |
-| `apply_fix` | Write | Apply one approved proposal |
-| `apply_safe_fixes` | Write | Apply deterministic fixes only |
-| `submit_human_context` | Write | Add the meaning needed for an ambiguous issue |
-| `get_screen_reader_outline` | Read | Compare original and current semantic outlines |
-| `test_keyboard_flow` | Read | Check deterministic keyboard reachability |
-| `compare_versions` | Read | Compare scores, issue counts, semantics, and changes |
-| `revert_fix` | Write | Restore state before a recorded change |
-| `verify_content` | Read | Re-run checks and stamp the current version |
-| `publish_accessible_version` | Write | Publish a verified Accessible Web Twin snapshot |
-| `get_project_status` | Read | Return project phase, score, counts, and version |
+| Tool | Purpose |
+| --- | --- |
+| `create_case` | Create the active investigation without deciding authenticity. |
+| `add_evidence` | Preserve imported content as untrusted evidence; never echo or execute it. |
+| `extract_entities` | Extract candidate people, organizations, domains, contacts, roles, and requests. |
+| `extract_claims` | Turn content into narrow claims; extraction never establishes truth. |
+| `inspect_claim` | Read one claim and its evidence basis. |
+| `record_source` | Record provenance without treating the source as automatically trustworthy. |
+| `link_evidence` | Link one evidence item to one claim. |
+| `verify_claim` | Record a verified outcome with an approved basis. |
+| `contradict_claim` | Record a contradiction with supporting evidence. |
+| `mark_unresolved` | Preserve uncertainty when evidence is insufficient. |
+| `request_human_context` | Ask the fixed question “Did you actually apply for this job?” |
+| `calculate_risk` | Compute risk from controlled factors; callers cannot supply a score. |
+| `build_evidence_graph` | Connect claims, entities, evidence, and human context. |
+| `generate_trust_receipt` | Produce a shareable record of the investigation. |
+| `create_safe_action_plan` | Create controlled next steps without contacting anyone or opening links. |
 
-Tool availability follows state. The registration uses only the annotations in the current draft: `readOnlyHint` and `untrustedContentHint`.
+Inputs use strict JSON Schema and are validated again with Zod inside every `execute` callback. Mutation tools accept an optional `expected_revision` guard. WebMCP annotations use only the current `readOnlyHint` and `untrustedContentHint` fields. Registration uses an `AbortController` for cleanup.
 
-## Safety model
+WebMCP is currently experimental. RealityOS follows the current [WebMCP Community Group draft](https://webmachinelearning.github.io/webmcp/) and [canonical repository](https://github.com/webmachinelearning/webmcp), including the move to `document.modelContext`.
 
-- Imported and user-authored content is always treated as **untrusted data**, never as instructions.
-- Content-bearing tool responses set `untrustedContentHint: true`.
-- The browser currently does not guarantee invocation validation against `inputSchema`, so every tool validates again with strict Zod schemas.
-- Agent-provided project IDs, issue IDs, proposal IDs, change IDs, confidence thresholds, and context length are bounded and checked.
-- Safe fixes require deterministic classification and at least 90% confidence.
-- Meaning-dependent fixes cannot be applied until human context exists.
-- Every mutation creates a reversible change record.
-- Publishing refuses unverified versions and versions with critical issues.
-- The regular UI remains the fallback when WebMCP is unsupported.
+## Security model
 
-## Accessibility methodology
+RealityOS treats the investigated material and any extraction derived from it as hostile input.
 
-The demo audit scans real parsed HTML. Rules detect document language, title, landmarks, keyboard-hostile custom controls, form names, image/chart alternatives, table headers and captions, heading order, link purpose, ARIA references, duplicate IDs, region names, frame titles, and the demo's explicit contrast token.
+- Evidence text is rendered as text, never HTML.
+- Prompt-like instructions inside evidence are preserved only as quoted data.
+- Imported content never enters tool names, descriptions, schemas, errors, or agent instructions.
+- Extraction can create candidates but cannot set truth, risk, or invoke another tool.
+- Strict Zod schemas cap strings, arrays, IDs, and enums; extra properties are rejected.
+- `calculate_risk` accepts neither a score nor a risk label.
+- `request_human_context` creates a pending fixed-code question; only the visible human UI can submit the answer.
+- The safe action plan is internal. It never sends messages, reports users, opens suspicious URLs, or submits documents.
+- Deterministic evidence fixtures keep the demo reliable without third-party APIs.
 
-The **A11yRelay Accessibility Score** is an internal remediation indicator:
+For a production service, URL fetching should additionally enforce HTTPS, block private/link-local networks, cap redirects and content size, restrict MIME types, and strip credentials.
 
-```text
-risk = critical × 8 + serious × 4 + moderate × 2 + minor × 1
-score = round(100 × (1 - min(risk / 128, 1)))
-```
+## Run the NVIDIA judging demo
 
-It is not a WCAG certification or a legal-compliance score. Human-review items remain visible even when the score is high.
+1. Open the dashboard. The suspicious NVIDIA offer is already loaded as untrusted content.
+2. Select **Run NVIDIA investigation**.
+3. Watch the Agent Activity Feed call WebMCP tools while entities, claims, sources, links, and graph nodes appear.
+4. Inspect **Evidence Graph** and **Claims & Evidence**. Notice that NVIDIA itself is verified, the domains and sensitive-data request are contradicted, and the recruiter and offer remain unresolved.
+5. In **Human Review**, answer **No** to “Did you actually apply for this job?”
+6. Observe the score move from **High risk · 72** to **Critical risk · 96**.
+7. Generate the visual **Trust Receipt**, then copy or download it.
+8. Select **Reset demo** to restore the complete sequence.
 
-The A11yRelay UI itself uses semantic landmarks, a skip link, visible focus styles, logical headings, labeled controls, keyboard-operable actions, live status announcements, accessible dialogs, reduced-motion support, and high-contrast color tokens.
-
-## Running locally
-
-Requirements: Node.js 22.13 or later.
+## Local development
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local URL printed by the development server.
-
-## Testing
+Quality checks:
 
 ```bash
 npm run typecheck
@@ -132,34 +144,15 @@ npm test
 npm run build
 ```
 
-The test suite covers:
+## Accessibility
 
-- the exact 18-issue demo inventory and initial score;
-- language, image-alternative, form-label, and heading detection;
-- safe remediation without applying human decisions;
-- human context unlocking the chart proposal;
-- score progression from 58 to 89 to 92;
-- true revert restoring a detected issue;
-- read-only audit behavior;
-- separation between safe and human-review issue sets.
+- Full keyboard navigation and visible focus indicators.
+- Skip link and semantic landmarks.
+- Status labels never rely on color alone.
+- Evidence graph nodes are native buttons.
+- The graph includes an accessible table alternative.
+- Loading, error, and completion states use live regions.
+- Responsive navigation and readable mobile layouts.
+- Reduced-motion preferences are respected.
 
-## Limitations
-
-- The hackathon build prioritizes a reliable built-in demo and device-local persistence. It does not provide multi-user accounts or cloud project storage.
-- WebMCP is an experimental W3C Community Group draft with limited browser support.
-- The audit engine demonstrates a transparent, extensible remediation model; production use should combine it with broader engine coverage, assistive-technology testing, and expert manual review.
-- URL and document ingestion are roadmap items because CORS, authentication, bot protection, JavaScript rendering, and document semantics require infrastructure beyond the reliable core demo.
-- Publishing creates a persistent application route backed by the current device's demo state, not a separate physical deployment.
-
-## Future roadmap
-
-- axe-core result reconciliation for arbitrary imported pages
-- secure server-side URL import and document conversion
-- shared project persistence and reviewer roles
-- browser-assisted focus-order recording
-- per-change approvals and organization policy controls
-- CI/CD publication hooks for remediated source patches
-
-## Disclaimer
-
-**A11yRelay assists with accessibility remediation but does not guarantee WCAG conformance, ADA compliance, or legal compliance. Automated testing cannot identify every accessibility barrier, and manual review remains necessary.**
+RealityOS is a decision-support tool, not a legal finding, identity guarantee, or universal fraud detector. It makes the evidence trail legible and recommends the safest next independent action.

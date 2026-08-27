@@ -13,22 +13,22 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'http://localhost:3000'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'https://a11yrelay.ingdesir.chatgpt.site'),
   title: {
-    default: 'A11yRelay — Accessibility remediation for humans and agents',
-    template: '%s · A11yRelay',
+    default: 'RealityOS — The AI Firewall for a Fake Internet',
+    template: '%s · RealityOS',
   },
-  description: 'Find accessibility barriers, fix what is safe, and ask humans when meaning matters with structured WebMCP tools.',
+  description: 'Investigate suspicious digital content through evidence, claim verification, and agent-native WebMCP tools.',
   openGraph: {
-    title: 'A11yRelay',
-    description: 'Accessibility remediation for humans and AI agents.',
+    title: 'RealityOS',
+    description: 'The AI firewall for a fake internet.',
     type: 'website',
-    images: [{url:'/og.png',width:1792,height:1024,alt:'A11yRelay — Accessibility remediation for humans and AI agents.'}],
+    images: [{url:'/og.png',width:1672,height:941,alt:'RealityOS — The AI firewall for a fake internet.'}],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'A11yRelay',
-    description: 'Accessibility remediation for humans and AI agents.',
+    title: 'RealityOS',
+    description: 'The AI firewall for a fake internet.',
     images: ['/og.png'],
   },
 };
