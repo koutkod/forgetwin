@@ -6,7 +6,7 @@ const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
 const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'https://a11yrelay.ingdesir.chatgpt.site'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'https://forgetwin.ingdesir.chatgpt.site'),
   title: 'ForgeTwin — Don’t generate it. Engineer it.',
   description: 'A browser-based AI engineering lab where humans and agents build, simulate, diagnose, and improve working machines together.',
   openGraph: {
