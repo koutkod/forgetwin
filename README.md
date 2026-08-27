@@ -1,121 +1,114 @@
-# RealityOS — The AI Firewall for a Fake Internet
+# ForgeTwin — Don’t generate it. Engineer it.
 
-RealityOS is an agent-native digital-trust investigation workspace powered by WebMCP. It investigates suspicious job offers, emails, websites, invoices, marketplace listings, recruiters, stores, and online identities by decomposing them into testable claims and attaching evidence—not by guessing whether something “looks AI-generated.”
+ForgeTwin is a browser-based AI engineering lab where a human and an external agent build, test, and improve a working machine through WebMCP. The hackathon demo tackles one concrete brief:
 
-> As AI makes everything easier to fake, RealityOS gives agents a structured way to establish what can actually be trusted.
+> Build a machine that sorts red and blue boxes into separate bins at 20+ boxes per minute using no more than 7 components.
 
-The app opens directly into the investigation dashboard. It includes both a real-input workflow and a deterministic NVIDIA job-offer demo for reliable judging.
+This is not a rendered concept or a scripted success animation. ForgeTwin runs a deterministic Rapier rigid-body simulation. The first machine fails because the diverter fires too late; telemetry exposes the measured travel time and collision events; the agent retunes the actuator; and the second run passes. The human can then move the sensor and the agent must adapt to that shared change without undoing it.
 
-## The trust problem
+## Why ForgeTwin
 
-Generated prose, cloned storefronts, forged invoices, and impersonated identities can all look polished. Appearance detectors answer the wrong question. A user needs to know:
+Generative tools are good at producing plausible pictures of machines. Engineering requires a harder loop: manipulate a shared design, execute it against physical constraints, observe measurable failure, preserve human intent, and revise until the requirements are met.
 
-**Which individual claims are verified, contradicted, or still unresolved—and what is the safest next action?**
+ForgeTwin makes that loop legible. Every edit is versioned, every simulation produces telemetry, every agent action appears in the activity feed, and every pass or failure is derived from the same canonical workspace the human sees.
 
-RealityOS preserves the difference between:
+## Judge-ready demo
 
-- verified claims supported by explicitly linked independent evidence;
-- contradicted claims opposed by explicitly linked independent evidence;
-- unresolved claims that still lack a sufficient basis; and
-- context supplied directly by the human.
+1. Select **Watch the AI engineer** on the opening screen.
+2. ForgeTwin creates the sorter, adds exactly seven components, connects the sensor and servo, installs a control rule, and runs the first simulation.
+3. The first revision fails deterministically: packages collide at the diverter because its 1,040 ms timing is later than the measured 1,033 ms sensor-to-gate travel window.
+4. Select **Replay failure** for a 0.25× slow-motion replay with collision telemetry, or toggle **X-Ray** to reveal sensor beams, collider volumes, velocity vectors, joints, and the diverter path.
+5. Select **Diagnose & fix**. The agent reads telemetry, retunes the diverter to 828 ms, and reruns the physical simulation.
+6. The revised machine passes at 41.4 boxes/minute, 100% sorting accuracy, zero collisions, zero jams, and seven components.
+7. For the human-agent challenge, select the color sensor and drag it left in the 3D scene (or use the accessible position control). ForgeTwin records a human-owned transform.
+8. Select **Retune around my edit**. The old timing now fails, the agent detects the new shared state, calculates a new 1,445 ms command, and passes again without moving the sensor back.
+9. Open **Compare** to inspect the before/after design, metric deltas, timing change, and preserved human constraint.
+10. Use **Reset demo** to return to the exact judging start state.
 
-For every unresolved claim, **What Would Prove It?** generates a safe verification step that starts outside the suspicious material.
-
-## What works for real
-
-Users can submit pasted content, a public URL, or both. The live workflow:
-
-1. creates a versioned case;
-2. quarantines the submitted material as untrusted content;
-3. retrieves public webpages through the server-only Firecrawl evidence route;
-4. stores URL, final URL, retrieval time, target status, and SHA-256 content digest;
-5. extracts candidate emails, domains, phone numbers, roles, requests, and factual claims;
-6. starts every extracted claim as unresolved;
-7. builds a dynamic evidence graph from persisted relationships;
-8. calculates transparent risk from controlled content signals, claim outcomes, and human context;
-9. lets an investigator add an independently obtained evidence URL and explicitly link it as supporting or contradicting a claim; and
-10. generates a downloadable Trust Receipt.
-
-The suspicious page cannot prove itself. A subject URL is context-only. To record verified or contradicted, RealityOS requires a separately retrieved source marked as independent, an explicit `supports` or `contradicts` link, and the matching evidence ID as the claim outcome basis.
-
-If Firecrawl is unavailable, RealityOS continues with a clearly labeled content-only fallback. Candidate extraction, the graph, human review, risk calculation, and receipts still work without external APIs.
-
-## Why WebMCP is essential
-
-RealityOS is not a wrapper around one `detect_scam` call. It registers 15 small tools with `document.modelContext`. External agents and the human UI operate on the same versioned case state and the activity feed identifies the actual caller.
-
-| Tool | Purpose |
-| --- | --- |
-| `create_case` | Create a case without deciding authenticity. |
-| `add_evidence` | Preserve imported text as untrusted evidence. |
-| `extract_entities` | Extract candidate identities, contacts, domains, roles, and requests. |
-| `extract_claims` | Create narrow candidate claims; extraction never establishes truth. |
-| `inspect_claim` | Read one claim and bounded evidence metadata without mutation. |
-| `record_source` | Retrieve a public source through the protected server route. |
-| `link_evidence` | Persist a supports, contradicts, or context relationship. |
-| `verify_claim` | Record verified only with a compatible independent basis. |
-| `contradict_claim` | Record contradicted only with a compatible independent basis. |
-| `mark_unresolved` | Preserve uncertainty when evidence is insufficient. |
-| `request_human_context` | Ask one controlled question appropriate to the case. |
-| `calculate_risk` | Compute risk from controlled factors; callers cannot provide a score. |
-| `build_evidence_graph` | Build the active claim/entity/evidence graph. |
-| `generate_trust_receipt` | Produce a shareable evidence and risk record. |
-| `create_safe_action_plan` | Generate internal next steps without taking external action. |
-
-Every WebMCP mutation requires the prior state revision. The asynchronous `record_source` tool also requires the active case ID, performs the server fetch itself, and rechecks both values before committing. Agents cannot supply webpage contents or forge retrieval provenance through the public tool schema.
+The scenario uses a fixed seed, fixed 60 Hz timestep, and an 18-second simulation window, so it remains reliable without external services.
 
 ## Architecture
 
 ```text
-Submitted text / subject URL (always untrusted)
-                         │
-          ┌──────────────┴──────────────┐
-          ▼                             ▼
-  Controlled local extraction     POST /api/evidence
-  candidates + risk signals       URL guard → Firecrawl
-          │                        sanitized provenance
-          └──────────────┬──────────────┘
-                         ▼
-             Shared versioned case state
-        claims · sources · evidence links · context
-                         │
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-   Human workspace   WebMCP tools   Evidence graph
-        └────────────────┬────────────────┘
-                         ▼
-              Risk + safe action plan
-                         ▼
-                   Trust Receipt
+Human controls ─────┐
+                    ├──► canonical versioned workspace ──► React Three Fiber scene
+External WebMCP ────┘                  │
+                                       ├──► guarded command engine
+                                       ├──► Rapier rigid-body simulation
+                                       └──► telemetry + events + revisions
+                                                      │
+                                activity feed ◄───────┴──────► compare / restore
 ```
+
+- **Next.js + TypeScript** provide the application shell and typed client architecture.
+- **Tailwind CSS** and custom component styles deliver the responsive futuristic lab UI.
+- **React Three Fiber + Three.js** render the live digital twin and replay timeline.
+- **Rapier** is the authoritative simulation layer. Boxes are rigid bodies, the conveyor advances them at the configured motor speed, and collisions/jams are derived from physical positions and actuator timing.
+- **Zod** validates every public tool input before a state transition.
+- **WebMCP** exposes small engineering primitives over the same state as the human UI.
+- **localStorage** preserves the current workspace across refreshes; no account, backend, or network API is required for the demo.
 
 Key modules:
 
-- `app/api/evidence/route.ts` — server-only Firecrawl proxy, URL safety policy, response caps, provenance digest.
-- `lib/live-analysis.ts` — deterministic real-input entity, claim, risk, graph, question, and safe-action logic.
-- `lib/reality-engine.ts` — shared state-aware command layer and evidence-enforced claim outcomes.
-- `lib/use-reality.ts` — local persistence, Zod schemas, asynchronous source retrieval, and WebMCP registration.
-- `components/reality/evidence-graph.tsx` — interactive visual graph with an accessible table alternative.
-- `components/reality/screens.tsx` — dashboard, intake, workspace, claims, review, risk, receipt, and history.
+- `components/forge/forge-scene.tsx` — interactive 3D workspace, playback, selection, human sensor movement, and X-Ray overlays.
+- `lib/forge-simulation.ts` — deterministic Rapier simulation and failure telemetry.
+- `lib/forge-engine.ts` — versioned command engine, revision guards, ownership constraints, undo/restore, and comparisons.
+- `lib/use-forge.ts` — shared React state, persistence, WebMCP registration, and activity events.
+- `app/forgetwin-app.tsx` — landing screen, lab controls, metrics, telemetry, failure replay, history, and guided demo orchestration.
 
-## Security model
+## WebMCP is the product boundary
 
-RealityOS treats all investigated content and scraped webpage text as hostile input.
+ForgeTwin deliberately does not expose a single `build_machine` or `solve_design` shortcut. An agent must work through the same inspect → edit → simulate → diagnose → revise loop as a human. The page registers these tools through `document.modelContext`:
 
-- Evidence is rendered as text, never HTML.
-- Imported instructions are quoted data and never enter agent instructions.
-- URL intake allows only HTTP/HTTPS on standard ports and rejects credentials, localhost, private/link-local ranges, IPv4-mapped IPv6, common wildcard-to-local services, and suspicious final redirect targets.
-- Firecrawl credentials remain server-side.
-- Live responses are no-store, capped to 12,000 markdown characters and 25 validated public links, stripped of control/bidirectional formatting characters, and hashed with SHA-256.
-- Firecrawl caching is disabled for investigation requests.
-- Source recording does not infer trust.
-- Subject content is `adjudicable: false` and cannot independently set a claim outcome.
-- Claim outcomes require a persisted compatible evidence relationship.
-- Human questions can be requested by an agent, but only the visible UI can answer them.
-- Any material evidence, link, claim, or human change invalidates prior risk, action-plan, and receipt state.
-- Safe action plans never contact people, open suspicious links, submit data, or file reports.
+| Tool | Responsibility |
+| --- | --- |
+| `inspect_workspace` | Read the canonical design, revision, ownership locks, goal, and latest run. |
+| `inspect_component_catalog` | Discover available components and constraints. |
+| `set_design_goal` | Define the measurable throughput, accuracy, and component budget. |
+| `add_component` | Add one catalog component to the active design. |
+| `move_component` | Move a component while respecting human-owned transforms. |
+| `rotate_component` | Rotate a component while respecting ownership constraints. |
+| `connect_components` | Create a typed machine connection. |
+| `attach_sensor` | Bind a sensor to a control target. |
+| `attach_actuator` | Bind an actuator to its machine role. |
+| `create_control_rule` | Create the color-routing rule. |
+| `set_motor_speed` | Tune conveyor velocity. |
+| `set_actuator_timing` | Tune the servo command delay. |
+| `run_simulation` | Execute the deterministic Rapier trial and store its result. |
+| `inspect_telemetry` | Read measured timing, throughput, accuracy, and recommendations. |
+| `get_failure_events` | Read jams, wrong-bin events, and timing failures. |
+| `inspect_collisions` | Read collision pairs, timestamps, positions, and impulses. |
+| `compare_designs` | Compare two immutable revisions and their simulation metrics. |
+| `restore_revision` | Restore a design while preserving later human-owned transforms. |
 
-The hosted hackathon deployment is owner-only by default, so the evidence endpoint inherits the site access boundary. Add durable per-user quotas before making the service public at scale.
+All mutating tools require `expectedRevision` and `workspaceNonce`. Stale agents receive a structured `STALE_REVISION` or `WORKSPACE_REPLACED` error instead of silently overwriting newer human work. Read tools report current ownership metadata, and agent mutations cannot move a component whose transform was claimed by a human.
+
+## Shared-state human challenge
+
+When a human moves the sensor, ForgeTwin records the transform with `owner: human`, creates a revision, invalidates the prior simulation, and surfaces the change to `inspect_workspace`. The agent must recompute the sensor-to-diverter travel time and retune the actuator. Moving the sensor back is rejected by the command engine, including after revision restore.
+
+This is the important WebMCP idea: the browser is not merely a display for an agent. It is a shared, stateful engineering environment with explicit concurrency and ownership semantics.
+
+## Safety and determinism
+
+- Tool inputs are schema-validated and bounded.
+- Every mutation uses optimistic concurrency guards.
+- Runs are deterministic from a fixed seed and fixed timestep.
+- Pass/fail is calculated from telemetry, not supplied by a caller.
+- Component count, throughput, accuracy, collisions, and jams all contribute to the goal verdict.
+- Human-owned transforms survive agent edits and revision restores.
+- The demo has no network dependency and no hidden external action.
+- Reset replaces the workspace nonce, preventing an old agent context from mutating a new demo.
+
+## Accessibility
+
+- Semantic landmarks, labels, and native buttons.
+- Visible keyboard focus and reduced-motion support.
+- Keyboard-selectable components and accessible sensor position controls.
+- Status text accompanies every color-coded state.
+- Live regions announce simulation and agent progress.
+- Responsive desktop, tablet, and mobile layouts.
+- Canvas content has a text alternative, with all essential data duplicated in accessible controls and telemetry.
 
 ## Run locally
 
@@ -123,8 +116,6 @@ Requirements: Node.js 22.13 or newer.
 
 ```bash
 npm install
-cp .env.example .env.local
-# Add FIRECRAWL_API_KEY to .env.local
 npm run dev
 ```
 
@@ -139,38 +130,6 @@ npm test
 npm run build
 ```
 
-## Run a real investigation
+No API key is required. `NEXT_PUBLIC_SITE_ORIGIN` is optional and only controls the canonical base URL used by social metadata.
 
-1. On the dashboard, enter a case title and type.
-2. Paste the suspicious content, add a public URL, or use both.
-3. Select **Start real investigation**.
-4. Watch the live source status and activity feed.
-5. Review the graph and unresolved claim ledger.
-6. Answer the controlled human-context question.
-7. If you have an independently obtained official source, add its URL in **Claims & Evidence**.
-8. After reviewing that source, explicitly record a claim as verified, contradicted, or unresolved.
-9. Review the transparent risk contributions and generate the Trust Receipt.
-
-## Run the NVIDIA judging demo
-
-1. Select **Reset demo**.
-2. Select **Run NVIDIA demo**.
-3. Watch the command feed create the case, extract nine entities and six claims, record deterministic independent evidence, and build the graph.
-4. Confirm that NVIDIA itself is verified, the recruiting domain/portal/sensitive request are contradicted, and the recruiter/offer remain unresolved.
-5. Answer **No** to **“Did you actually apply for this job?”**
-6. Verify the risk changes from **High risk · 72** to **Critical risk · 96**.
-7. Generate, copy, or download the Trust Receipt.
-
-All people, contacts, snapshots, and suspicious domains in the NVIDIA scenario are fictional deterministic fixtures. The scenario is not a live allegation.
-
-## Accessibility
-
-- Full keyboard navigation and visible focus indicators.
-- Skip link and semantic landmarks.
-- Native buttons and form labels.
-- Status labels never rely on color alone.
-- Accessible graph table alternative.
-- Live loading, error, and completion announcements.
-- Responsive layouts and reduced-motion support.
-
-RealityOS is a decision-support tool, not a legal finding, identity guarantee, or universal fraud detector. It makes the evidence trail legible and recommends the safest independent next action.
+> The AI didn’t generate a picture of a machine. It engineered one, watched it fail, learned from the physics, and fixed it.

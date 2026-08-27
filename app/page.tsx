@@ -1,5 +1,5 @@
-import { RealityApp } from './reality-app';
+import { ForgeTwinApp } from './forgetwin-app';
 
 export default function Home() {
-  return <RealityApp />;
+  return <ForgeTwinApp />;
 }
