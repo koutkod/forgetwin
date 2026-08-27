@@ -2,6 +2,9 @@ export type ViewId = 'dashboard' | 'workspace' | 'graph' | 'claims' | 'review' |
 
 export type TrustStatus = 'verified' | 'unresolved' | 'contradicted' | 'human';
 export type RiskLevel = 'Not assessed' | 'Low risk' | 'Guarded risk' | 'High risk' | 'Critical risk';
+export type CaseMode = 'demo' | 'live';
+export type CaseType = 'job_offer' | 'email' | 'website' | 'invoice' | 'marketplace' | 'identity' | 'other';
+export type HumanQuestionCode = 'job_application_history' | 'purchase_recognition' | 'prior_relationship' | 'message_expected';
 
 export interface Entity {
   id: string;
@@ -19,6 +22,12 @@ export interface Evidence {
   direction: 'supports' | 'contradicts' | 'context';
   reliability: 'High' | 'Medium' | 'Human provided';
   untrusted?: boolean;
+  adjudicable?: boolean;
+  live?: boolean;
+  locator?: string;
+  contentPreview?: string;
+  contentDigest?: string;
+  provider?: 'firecrawl' | 'deterministic' | 'human';
 }
 
 export interface Claim {
@@ -55,7 +64,7 @@ export interface AgentEvent {
   tool: string;
   detail: string;
   at: string;
-  source: 'WebMCP' | 'Human';
+  source: 'WebMCP' | 'UI' | 'Human';
   outcome: 'success' | 'waiting';
 }
 
@@ -72,12 +81,57 @@ export interface SourceRecord {
   label: string;
   type: string;
   recorded: boolean;
+  locator?: string;
+  live?: boolean;
+}
+
+export interface EvidenceLink {
+  id: string;
+  claimId: string;
+  evidenceId: string;
+  relationship: 'supports' | 'contradicts' | 'context';
+}
+
+export interface RiskFactor {
+  id: string;
+  title: string;
+  points: number;
+  detail: string;
+  basisIds: string[];
+}
+
+export interface LiveSourceData {
+  success: boolean;
+  requestedUrl: string;
+  provider?: 'firecrawl';
+  untrusted?: true;
+  trustInferred?: false;
+  finalUrl?: string;
+  title?: string;
+  description?: string;
+  markdown?: string;
+  links?: string[];
+  statusCode?: number;
+  cacheState?: string;
+  cachedAt?: string;
+  fetchedAt?: string;
+  contentDigest?: string;
+  error?: string;
 }
 
 export interface RealityState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   revision: number;
   activeView: ViewId;
+  caseId: string;
+  caseNonce: string;
+  caseMode: CaseMode;
+  caseTitle: string;
+  caseType: CaseType;
+  inputText: string;
+  inputUrl: string | null;
+  webEvidenceStatus: 'idle' | 'loading' | 'live' | 'fallback' | 'error';
+  webEvidenceMessage: string | null;
   phase: 'ready' | 'investigating' | 'awaiting-human' | 'assessed' | 'receipt-ready';
   caseCreated: boolean;
   messageAdded: boolean;
@@ -90,10 +144,13 @@ export interface RealityState {
   claims: Claim[];
   evidence: Evidence[];
   sources: SourceRecord[];
+  evidenceLinks: EvidenceLink[];
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   humanAnswer: 'yes' | 'no' | 'unsure' | null;
+  humanQuestionCode: HumanQuestionCode | null;
   humanQuestionPending: boolean;
+  riskFactors: RiskFactor[];
   riskScore: number;
   riskLevel: RiskLevel;
   riskCalculated: boolean;
@@ -106,9 +163,17 @@ export interface RealityState {
 export interface ToolResult {
   ok: true;
   case_id: string;
+  case_nonce: string;
   revision: number;
   message: string;
   data?: unknown;
+}
+
+export interface LiveCaseInput {
+  title: string;
+  caseType: CaseType;
+  text: string;
+  url: string;
 }
 
 export type CommandName =

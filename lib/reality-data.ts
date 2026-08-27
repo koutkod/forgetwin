@@ -1,6 +1,10 @@
-import type { Claim, Entity, Evidence, GraphEdge, GraphNode, RealityState, SourceRecord } from './reality-types';
+import type { Claim, Entity, Evidence, GraphEdge, GraphNode, LiveCaseInput, RealityState, SourceRecord } from './reality-types';
 
 export const DEMO_CASE_ID = 'case-nvidia-offer-001';
+
+function createCaseNonce() {
+  return `nonce-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export const DEMO_MESSAGE = {
   from: 'Evan Kline <evan.kline@nvidia-talentcareers.com>',
@@ -86,9 +90,18 @@ export const GRAPH_EDGES: GraphEdge[] = [
 
 export function createInitialState(): RealityState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     activeView: 'dashboard',
+    caseId: DEMO_CASE_ID,
+    caseNonce: createCaseNonce(),
+    caseMode: 'demo',
+    caseTitle: 'Suspicious NVIDIA AI Engineer offer',
+    caseType: 'job_offer',
+    inputText: DEMO_MESSAGE.body,
+    inputUrl: null,
+    webEvidenceStatus: 'idle',
+    webEvidenceMessage: null,
     phase: 'ready',
     caseCreated: false,
     messageAdded: false,
@@ -101,10 +114,13 @@ export function createInitialState(): RealityState {
     claims: [],
     evidence: [],
     sources: SOURCE_FIXTURES.map((source) => ({ ...source })),
+    evidenceLinks: [],
     graphNodes: [],
     graphEdges: [],
     humanAnswer: null,
+    humanQuestionCode: null,
     humanQuestionPending: false,
+    riskFactors: [],
     riskScore: 0,
     riskLevel: 'Not assessed',
     riskCalculated: false,
@@ -112,5 +128,49 @@ export function createInitialState(): RealityState {
     safePlanGenerated: false,
     activity: [],
     history: [{ id: 'history-loaded', title: 'Suspicious offer loaded', detail: 'NVIDIA Senior AI Engineer offer is ready for investigation.', at: 'Just now', kind: 'system' }],
+  };
+}
+
+export function createLiveInitialState(input: LiveCaseInput): RealityState {
+  const title = input.title.trim() || 'Untitled trust investigation';
+  return {
+    schemaVersion: 2,
+    revision: 0,
+    activeView: 'workspace',
+    caseId: `case-live-${Date.now().toString(36)}`,
+    caseNonce: createCaseNonce(),
+    caseMode: 'live',
+    caseTitle: title.slice(0, 80),
+    caseType: input.caseType,
+    inputText: input.text.trim().slice(0, 12000),
+    inputUrl: input.url.trim() || null,
+    webEvidenceStatus: input.url.trim() ? 'loading' : 'idle',
+    webEvidenceMessage: input.url.trim() ? 'Retrieving a live, quarantined webpage snapshot…' : null,
+    phase: 'ready',
+    caseCreated: false,
+    messageAdded: false,
+    entitiesExtracted: false,
+    claimsExtracted: false,
+    graphBuilt: false,
+    selectedNodeId: null,
+    selectedClaimId: null,
+    entities: [],
+    claims: [],
+    evidence: [],
+    sources: [],
+    evidenceLinks: [],
+    graphNodes: [],
+    graphEdges: [],
+    humanAnswer: null,
+    humanQuestionCode: null,
+    humanQuestionPending: false,
+    riskFactors: [],
+    riskScore: 0,
+    riskLevel: 'Not assessed',
+    riskCalculated: false,
+    receiptGenerated: false,
+    safePlanGenerated: false,
+    activity: [],
+    history: [{ id: 'history-loaded', title: 'Untrusted content loaded', detail: `${title.slice(0, 80)} is ready for evidence-based investigation.`, at: 'Just now', kind: 'system' }],
   };
 }
