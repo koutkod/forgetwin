@@ -1,168 +1,760 @@
-import { demoComponentIds } from './forge-data';
+import { catalogFor, engineeringExamples, worldDefaults } from './forge-data';
+import type {
+  ActuatorBlueprint, AssemblyBlueprint, BodyType, Capability, CompiledWorldPlan,
+  ComponentBlueprint, ConnectionBlueprint, ControlBlueprint, GoalConstraint,
+  JointBlueprint, JointType, MotorBlueprint, PrimitiveKind, SensorBlueprint, Vec3,
+} from './forge-types';
 
-export const DEFAULT_DESIGN_PROMPT = 'Build a machine that sorts red and blue boxes into separate bins at 20+ boxes per minute using no more than 7 components.';
+export const DEFAULT_DESIGN_PROMPT = engineeringExamples[1].prompt;
+export const CHALLENGE_EXAMPLES = engineeringExamples;
 
-export const SORTER_LIMITS = {
-  minThroughputBpm: 5,
-  maxThroughputBpm: 40,
-  minAccuracyPct: 50,
-  maxAccuracyPct: 100,
-  minComponents: 7,
-  maxComponents: 12,
-} as const;
+const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
+const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || 'part';
+const numeric = (value: string | undefined, fallback: number) => value ? Number(value.replaceAll(',', '')) : fallback;
 
-export interface CompiledSorterPlan {
-  brief: string;
-  goal: {
-    throughputBpm: number;
-    minAccuracyPct: number;
-    maxComponents: number;
-    colors: ['red', 'blue'];
+interface ParsedValues {
+  payloadKg: number;
+  liftM: number;
+  spanM: number;
+  reachM: number;
+  durationS: number;
+  throughput: number;
+  flowRateLpm: number;
+  ratio: number;
+  rpm: number;
+  torqueNm: number;
+  placementCm: number;
+  tiltDeg: number;
+  deflectionMm: number;
+  acceleration: number;
+  angleDeg: number;
+  strokeM: number;
+  maxComponents?: number;
+  supplied: Set<string>;
+}
+
+interface ModuleContext {
+  builder: WorldBuilder;
+  text: string;
+  capabilities: Capability[];
+  values: ParsedValues;
+  rootAssemblyId: string;
+}
+
+interface ModuleResult {
+  id: string;
+  mountId: string;
+  editableId: string;
+  handles: Capability[];
+  inputId?: string;
+  outputId?: string;
+  driveId?: string;
+}
+
+interface ModuleRule {
+  id: string;
+  matches: (context: Omit<ModuleContext, 'builder' | 'rootAssemblyId'>) => boolean;
+  compose: (context: ModuleContext) => ModuleResult;
+}
+
+function capture(text: string, regex: RegExp) {
+  return text.match(regex)?.slice(1).find((value) => value !== undefined);
+}
+
+function parseValues(text: string): ParsedValues {
+  const supplied = new Set<string>();
+  const read = (key: string, regex: RegExp, fallback: number) => {
+    const match = capture(text, regex);
+    if (match) supplied.add(key);
+    return numeric(match, fallback);
   };
-  componentIds: readonly string[];
-  motorSpeed: number;
-  initialDelayMs: number;
-  actuatorHoldMs: number;
-  assumptions: string[];
+  const liftCm = capture(text, /(?:lift|raise|raises|raising|travel|height)[^.!?]{0,45}?(\d+(?:\.\d+)?)\s*cm\b/i);
+  if (liftCm) supplied.add('liftM');
+  const strokeCm = capture(text, /(?:stroke|opens?|travel)[^.!?]{0,30}?(\d+(?:\.\d+)?)\s*cm\b/i);
+  if (strokeCm) supplied.add('strokeM');
+  const strokeMeters = capture(text, /(?:(?:stroke|opens?|travel)[^.!?]{0,30}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b|(\d+(?:\.\d+)?)\s*(?:m|meters?)[^.!?]{0,18}?(?:linear\s+)?stroke\b)/i);
+  if (strokeMeters) supplied.add('strokeM');
+  const maxComponents = capture(text, /(?:no more than|at most|maximum(?: of)?|using)\s+(\d+)\s+(?:components?|parts?)/i);
+  if (maxComponents) supplied.add('maxComponents');
+  return {
+    payloadKg: read('payloadKg', /(\d+(?:,\d{3})*(?:\.\d+)?)\s*kg\b/i, 25),
+    liftM: liftCm ? numeric(liftCm, 100) / 100 : read('liftM', /(?:lift|raise|raises|raising|travel|height)[^.!?]{0,45}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b/i, 1),
+    spanM: read('spanM', /(?:(\d+(?:\.\d+)?)\s*(?:m|meters?)\s+(?:bridge|span|drawbridge)|(?:bridge|span|drawbridge)[^.!?]{0,24}?(\d+(?:\.\d+)?)\s*(?:m|meters?))/i, 4),
+    reachM: read('reachM', /(?:reach|reaches|radius)[^.!?]{0,20}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b/i, 1.5),
+    durationS: read('durationS', /(?:under|within|less than|in)\s+(\d+(?:\.\d+)?)\s*(?:s|seconds?)\b/i, 20),
+    throughput: read('throughput', /(\d+(?:\.\d+)?)\s*(?:boxes?|packages?|parts?|items?|objects?)?\s*(?:per\s+minute|\/\s*min)/i, 20),
+    flowRateLpm: read('flowRateLpm', /(\d+(?:\.\d+)?)\s*(?:liters?|litres?|l)\s*(?:per\s+minute|\/\s*min)/i, 20),
+    ratio: read('ratio', /(\d+(?:\.\d+)?)\s*:\s*1\b/i, 4),
+    rpm: read('rpm', /(\d+(?:\.\d+)?)\s*rpm\b/i, 120),
+    torqueNm: read('torqueNm', /(\d+(?:\.\d+)?)\s*n\s*[-·]?\s*m\b/i, 60),
+    placementCm: read('placementCm', /(?:within|accuracy|error)[^.!?]{0,18}?(\d+(?:\.\d+)?)\s*cm\b/i, 5),
+    tiltDeg: read('tiltDeg', /(?:tilt|level)[^.!?]{0,28}?(\d+(?:\.\d+)?)\s*(?:°|degrees?)/i, 8),
+    deflectionMm: read('deflectionMm', /(?:(?:deflection|deflect)[^.!?]{0,20}?(\d+(?:\.\d+)?)\s*mm\b|(\d+(?:\.\d+)?)\s*mm\s*(?:of\s+)?deflection)/i, 10),
+    acceleration: read('acceleration', /(?:acceleration|accelerating)[^.!?]{0,26}?(\d+(?:\.\d+)?)\s*m\/s(?:²|2)/i, .8),
+    angleDeg: read('angleDeg', /(?:rotate|rotation|open|sweep|travel)[^.!?]{0,28}?(\d+(?:\.\d+)?)\s*(?:°|degrees?)/i, 75),
+    strokeM: strokeCm ? numeric(strokeCm, 100) / 100 : strokeMeters ? numeric(strokeMeters, 1) : 1,
+    maxComponents: maxComponents ? Number(maxComponents) : undefined,
+    supplied,
+  };
 }
 
-const NUMBER_WORDS: Record<string, number> = {
-  three: 3,
-  four: 4,
-  five: 5,
-  six: 6,
-  seven: 7,
-  eight: 8,
-  nine: 9,
-  ten: 10,
-  eleven: 11,
-  twelve: 12,
-};
-
-const numberToken = '(?:\\d+(?:\\.\\d+)?|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
-const unsupportedColors = ['green', 'yellow', 'orange', 'purple', 'white', 'black', 'pink', 'brown', 'gray', 'grey', 'teal', 'cyan', 'magenta', 'violet', 'indigo', 'gold', 'silver', 'beige', 'maroon', 'navy', 'lime', 'aqua', 'turquoise', 'crimson', 'amber'];
-
-function normalizeBrief(raw: string) {
-  return raw.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
+function inferCapabilities(text: string): Capability[] {
+  const capabilities = new Set<Capability>(['structure']);
+  if (/conveyor|packages?|boxes|sort|warehouse|factory line|buffer|singulat|feed|recycl|grader|routing/.test(text)) capabilities.add('transport');
+  if (/sort|separat|route|classif|inspect|reject|color|size|material|grader|recycl/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
+  if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient/.test(text)) capabilities.add('lift');
+  if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge/.test(text)) capabilities.add('suspend');
+  if (/rover|vehicle|mobile robot|corridor|obstacle|\bwheels?\b|\bdrive\b/.test(text)) capabilities.add('mobile');
+  if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text)) capabilities.add('manipulate');
+  if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(text)) capabilities.add('transmit');
+  if (/suspension|spring|rough|uneven|tipping|stability|stabiliz|level/.test(text)) capabilities.add('stabilize');
+  if (/solar|light source|\btrack(?:ing|er)?\b|turbine|blade pitch/.test(text)) capabilities.add('track');
+  if (/buffer|queue|spacing|irregular|singulat/.test(text)) capabilities.add('buffer');
+  if (/bin|container|collect|recycling|reject|tank|reservoir/.test(text)) capabilities.add('contain');
+  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|pump/.test(text)) capabilities.add('rotate');
+  if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text)) capabilities.add('measure');
+  return [...capabilities];
 }
 
-function parseNumber(value: string) {
-  return NUMBER_WORDS[value.toLowerCase()] ?? Number(value);
+function identity(text: string, capabilities: Capability[]) {
+  const candidates: Array<[RegExp, string, string]> = [
+    [/pump|reciprocat/, 'Reciprocating pump mechanism', 'Fluid power'],
+    [/four[- ]bar|linkage/, 'Parametric linkage mechanism', 'Mechanism design'],
+    [/drawbridge|folding bridge/, 'Actuated folding span', 'Civil mechanisms'],
+    [/bridge|truss/, 'Parametric load-bearing span', 'Structural engineering'],
+    [/gearbox|transmission|gear train/, 'Parametric power transmission', 'Power transmission'],
+    [/robotic arm|robot arm|manipulat/, 'Articulated robotic mechanism', 'Robotics'],
+    [/crane|hoist/, 'Counterbalanced lifting system', 'Lifting systems'],
+    [/patient/, 'Smooth patient lifting mechanism', 'Medical equipment'],
+    [/elevator|lift|raising/, 'Synchronized lifting mechanism', 'Lifting systems'],
+    [/rover|vehicle|mobile robot/, 'Terrain-capable mobile platform', 'Mobile robotics'],
+    [/solar|light source/, 'Single-axis tracking mechanism', 'Renewable energy'],
+    [/suspension/, 'Compliant suspension mechanism', 'Vehicle dynamics'],
+    [/recycl/, 'Material separation mechanism', 'Recycling'],
+    [/sort|conveyor|warehouse|packages?/, 'Adaptive material-flow mechanism', 'Industrial automation'],
+  ];
+  const found = candidates.find(([pattern]) => pattern.test(text));
+  if (found) return { name: found[1], domain: found[2] };
+  const lead = text.replace(/^(build|design|create|engineer)\s+(?:an?|the)?\s*/i, '').split(/\b(?:that|which|while|using|with)\b/i)[0].trim();
+  return { name: `${lead.slice(0, 45) || capabilities.join(' ')} mechanism`, domain: 'General mechanical engineering' };
 }
 
-function unique(values: number[]) {
-  return [...new Set(values.map((value) => Number(value.toFixed(2))))];
-}
+const symbol = (operator: GoalConstraint['operator']) => operator === 'min' ? '≥' : operator === 'max' ? '≤' : '=';
 
-function collectNumbers(text: string, patterns: RegExp[]) {
-  const values: number[] = [];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) values.push(parseNumber(match[1]));
+function constraintsFor(text: string, capabilities: Capability[], values: ParsedValues): GoalConstraint[] {
+  const result: GoalConstraint[] = [];
+  const add = (metric: string, label: string, operator: GoalConstraint['operator'], target: number, unit: string, key?: keyof ParsedValues) => {
+    if (!result.some((item) => item.metric === metric)) result.push({ metric, label, operator, target, unit, source: key && values.supplied.has(String(key)) ? 'user' : 'inferred' });
+  };
+  const spanSystem = /bridge|truss|structural span/.test(text);
+  const reciprocating = /pump|reciprocat/.test(text);
+  const linkage = /four[- ]bar|linkage/.test(text);
+
+  if (spanSystem) {
+    add('span', 'Clear span', 'min', values.spanM, 'm', 'spanM');
+    add('load_capacity', 'Load capacity', 'min', values.payloadKg === 25 ? 2000 : values.payloadKg, 'kg', 'payloadKg');
+    add('deflection', 'Midspan deflection', 'max', values.deflectionMm, 'mm', 'deflectionMm');
+    add('safety_factor', 'Structural safety factor', 'min', 1.5, '');
+    if (/drawbridge|fold|hing|open|raise/.test(text)) add('response_time', 'Span motion time', 'max', values.durationS, 's', 'durationS');
   }
-  return unique(values.filter(Number.isFinite));
+  if (capabilities.includes('transmit')) {
+    add('speed_ratio', 'Reduction ratio', 'exact', values.ratio, ':1', 'ratio');
+    add('output_torque', 'Output torque', 'min', values.torqueNm, 'N·m', 'torqueNm');
+    add('output_speed', 'Output speed', 'max', values.rpm / values.ratio * 1.05, 'rpm', 'rpm');
+    add('transmission_efficiency', 'Transmission efficiency', 'min', 88, '%');
+  }
+  if (capabilities.includes('manipulate')) {
+    add('payload_capacity', 'Payload capacity', 'min', values.payloadKg, 'kg', 'payloadKg');
+    add('reach', 'Tool reach', 'min', values.reachM, 'm', 'reachM');
+    add('placement_error', 'Placement error', 'max', values.placementCm, 'cm', 'placementCm');
+    add('joint_margin', 'Joint torque margin', 'min', 1.15, 'x');
+  }
+  if (capabilities.includes('mobile')) {
+    add('payload_capacity', 'Payload capacity', 'min', values.payloadKg, 'kg', 'payloadKg');
+    add('course_time', 'Course time', 'max', values.durationS, 's', 'durationS');
+    add('platform_tilt', 'Platform tilt', 'max', values.tiltDeg, '°', 'tiltDeg');
+    add('traction_margin', 'Traction margin', 'min', 1.1, 'x');
+  }
+  if (capabilities.includes('track')) {
+    add('tracking_error', 'Tracking error', 'max', values.tiltDeg === 8 ? 4 : values.tiltDeg, '°', 'tiltDeg');
+    add('actuator_count', 'Actuator count', 'max', /one actuator|single actuator/.test(text) ? 1 : 2, '');
+    add('response_time', 'Response time', 'max', 2.5, 's');
+  }
+  if (capabilities.includes('lift') && !(spanSystem && capabilities.includes('rotate'))) {
+    add('payload_capacity', 'Payload capacity', 'min', values.payloadKg, 'kg', 'payloadKg');
+    add('lift_height', 'Lift height', 'min', values.liftM, 'm', 'liftM');
+    add('stability_margin', 'Stability margin', 'min', capabilities.includes('suspend') ? .2 : .12, 'm');
+    if (/level|synchron/.test(text)) add('platform_tilt', 'Platform tilt', 'max', values.tiltDeg, '°', 'tiltDeg');
+    if (/placement|places?/.test(text)) add('placement_error', 'Placement error', 'max', values.placementCm, 'cm', 'placementCm');
+    if (/acceleration/.test(text)) add('peak_acceleration', 'Peak acceleration', 'max', values.acceleration, 'm/s²', 'acceleration');
+  }
+  if (capabilities.includes('transport')) {
+    add('throughput', 'Throughput', 'min', values.throughput, '/min', 'throughput');
+    if (capabilities.includes('classify')) add('sorting_accuracy', 'Sorting accuracy', 'min', 96, '%');
+    add('collisions', 'Harmful collisions', 'max', 0, '');
+    if (/drop/.test(text)) add('drop_height', 'Drop height', 'max', numeric(capture(text, /(\d+(?:\.\d+)?)\s*cm/i), 15), 'cm');
+  }
+  if (reciprocating) {
+    add('flow_rate', 'Volumetric flow', 'min', values.flowRateLpm, 'L/min', 'flowRateLpm');
+    add('control_error', 'Stroke control error', 'max', 5, '%');
+  }
+  if (linkage || (capabilities.includes('rotate') && !capabilities.includes('transmit') && !capabilities.includes('track') && !spanSystem)) {
+    add('angular_travel', 'Angular travel', 'min', values.angleDeg, '°', 'angleDeg');
+    if (linkage && values.supplied.has('strokeM')) add('lift_height', 'Linear output stroke', 'min', values.strokeM, 'm', 'strokeM');
+    add('control_error', 'Position control error', 'max', 5, '%');
+  }
+  if (!result.length) {
+    add('safety_factor', 'Mechanical safety factor', 'min', 1.35, '');
+    add('control_error', 'Control error', 'max', 5, '%');
+    add('assembly_integrity', 'Connected assembly', 'min', 95, '%');
+  }
+  return result.slice(0, 12);
 }
 
-function oneValue(values: number[], label: string) {
-  if (values.length > 1) throw new Error(`AMBIGUOUS_GOAL: I found conflicting ${label} values (${values.join(' and ')}). Keep one measurable target.`);
-  return values[0];
+class WorldBuilder {
+  assemblies: AssemblyBlueprint[] = [];
+  components: ComponentBlueprint[] = [];
+  connections: ConnectionBlueprint[] = [];
+  joints: JointBlueprint[] = [];
+  motors: MotorBlueprint[] = [];
+  sensors: SensorBlueprint[] = [];
+  actuators: ActuatorBlueprint[] = [];
+  controls: ControlBlueprint[] = [];
+  private ids = new Map<string, number>();
+  private origin: Vec3 = [0, 0, 0];
+  private rootAssemblyId?: string;
+
+  next(prefix: string) {
+    const key = slug(prefix);
+    const count = (this.ids.get(key) ?? 0) + 1;
+    this.ids.set(key, count);
+    return count === 1 ? key : `${key}-${count}`;
+  }
+
+  assembly(name: string, purpose: string, parentId?: string) {
+    const value = { id: this.next(name), name, purpose, parentId: parentId ?? this.rootAssemblyId };
+    this.assemblies.push(value);
+    return value.id;
+  }
+
+  setRoot(id: string) { this.rootAssemblyId = id; }
+
+  at<T>(origin: Vec3, compose: () => T) {
+    const previous = this.origin;
+    this.origin = origin;
+    try { return compose(); } finally { this.origin = previous; }
+  }
+
+  component(primitive: PrimitiveKind, role: string, assemblyId: string, position: Vec3, dimensions?: Vec3, materialId?: string, bodyType?: BodyType, parameters: Record<string, number | string | boolean> = {}, mass?: number) {
+    const item = catalogFor(primitive);
+    const placed = position.map((value, index) => value + this.origin[index]) as Vec3;
+    const size = dimensions ?? [...item.defaultDimensions] as Vec3;
+    const value: ComponentBlueprint = {
+      id: this.next(role), primitive, role, assemblyId, position: placed, rotation: [0, 0, 0], dimensions: size,
+      materialId: materialId ?? item.defaultMaterial, bodyType: bodyType ?? item.defaultBodyType,
+      parameters: { nominal_x: placed[0], nominal_y: placed[1], nominal_z: placed[2], nominal_dx: size[0], nominal_dy: size[1], nominal_dz: size[2], ...parameters }, mass,
+    };
+    this.components.push(value);
+    return value.id;
+  }
+
+  connect(sourceId: string, targetId: string, type: ConnectionBlueprint['type'], channel: string) {
+    const existing = this.connections.find((item) => item.sourceId === sourceId && item.targetId === targetId && item.type === type);
+    if (existing) return existing.id;
+    const value = { id: this.next(`${channel}-connection`), sourceId, targetId, type, channel: slug(channel).replaceAll('-', '_') };
+    this.connections.push(value);
+    return value.id;
+  }
+
+  joint(type: JointType, a: string, b: string, axis: Vec3 = [0, 1, 0], options: Partial<Omit<JointBlueprint, 'id' | 'type' | 'componentA' | 'componentB' | 'axis'>> = {}) {
+    const bodyA = this.components.find((item) => item.id === a);
+    const bodyB = this.components.find((item) => item.id === b);
+    if (!bodyA || !bodyB) throw new Error('Planner attempted to join a missing primitive.');
+    const shared = bodyA.position.map((value, index) => (value + bodyB.position[index]) / 2) as Vec3;
+    const anchorA = shared.map((value, index) => value - bodyA.position[index]) as Vec3;
+    const anchorB = shared.map((value, index) => value - bodyB.position[index]) as Vec3;
+    const value: JointBlueprint = { id: this.next(`${type}-joint`), type, componentA: a, componentB: b, anchorA, anchorB, axis, ...options };
+    this.joints.push(value);
+    return value.id;
+  }
+
+  motor(componentId: string, jointId: string | undefined, maxTorque: number, maxRpm: number) {
+    const value = { id: this.next('motor-drive'), componentId, jointId, maxTorque, maxRpm, direction: 1 };
+    this.motors.push(value);
+    return value.id;
+  }
+
+  sensor(componentId: string, type: SensorBlueprint['type'], channel: string, targetId?: string, range = 4) {
+    const value = { id: this.next(`${channel}-sensor`), componentId, type, channel, targetId, range };
+    this.sensors.push(value);
+    return value.id;
+  }
+
+  actuator(componentId: string, jointId: string, type: ActuatorBlueprint['type'], maxForce: number, maxSpeed: number, travel: number) {
+    const value = { id: this.next(`${type}-actuator`), componentId, jointId, type, maxForce, maxSpeed, travel };
+    this.actuators.push(value);
+    return value.id;
+  }
+
+  control(name: string, mode: ControlBlueprint['mode'], sensorIds: string[], actuatorIds: string[], expression: string, setpoint: number) {
+    const firstSensor = this.sensors.find((item) => item.id === sensorIds[0]);
+    const sensorBody = firstSensor ? this.components.find((item) => item.id === firstSensor.componentId) : undefined;
+    this.controls.push({ id: this.next(`${name}-control`), name, mode, sensorIds, actuatorIds, expression, setpoint, kp: .55, ki: .02, kd: .08, calibrationX: sensorBody?.position[0] ?? 0 });
+  }
 }
 
-function assertRange(value: number, label: string, min: number, max: number, unit: string) {
-  if (value < min || value > max) throw new Error(`OUT_OF_RANGE: ${label} must be between ${min} and ${max}${unit} in this validated sorting cell.`);
+function addSpanMembers(context: ModuleContext): ModuleResult {
+  const { builder, text, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('span members', 'Supports, deck plates, braces, bearings, and optional hinge drive', rootAssemblyId);
+  const folding = /drawbridge|fold|hing|open|raise/.test(text);
+  const spanCount = folding && /(?:two|2)[ -]+(?:hinged[ -]+)?spans?/.test(text) ? 2 : 1;
+  const left = builder.component('support', 'left bearing support', assembly, [-values.spanM / 2, .55, 0], [.55, 1.25, 1.35], 'concrete', 'fixed');
+  const right = builder.component('support', 'right bearing support', assembly, [values.spanM / 2, .55, 0], [.55, 1.25, 1.35], 'concrete', 'fixed');
+  const decks: string[] = [];
+  let previous = left;
+  for (let index = 0; index < spanCount; index += 1) {
+    const length = values.spanM / spanCount;
+    const x = -values.spanM / 2 + length * (index + .5);
+    const deck = builder.component('plate', folding ? `hinged span ${index + 1}` : 'span deck', assembly, [x, 1.25, 0], [length, .085, 1.5], 'steel', folding ? 'dynamic' : 'fixed', { span_m: length });
+    builder.joint(folding ? 'revolute' : 'fixed', previous, deck, [0, 0, 1], { limits: folding ? [0, values.angleDeg * Math.PI / 180] : undefined });
+    decks.push(deck); previous = deck;
+    const braceCount = Math.max(3, Math.min(7, Math.ceil(length / 1.25)));
+    for (let brace = 0; brace < braceCount; brace += 1) {
+      const bx = x - length / 2 + (brace + .5) * length / braceCount;
+      const diagonal = builder.component('beam', `span brace ${index + 1}-${brace + 1}`, assembly, [bx, 1.82, brace % 2 ? .62 : -.62], [length / braceCount * 1.28, .12, .12], 'steel', 'fixed');
+      builder.joint('fixed', deck, diagonal, [1, 0, 0]);
+    }
+  }
+  if (!folding) builder.joint('fixed', previous, right);
+  else builder.connect(previous, right, 'mechanical', 'closing_bearing');
+
+  const loadMass = values.payloadKg === 25 ? 2000 : values.payloadKg;
+  const load = builder.component('container', 'moving design load', assembly, [0, 1.8, 0], [1, .7, .8], 'steel', 'dynamic', { payload_kg: loadMass }, loadMass);
+  builder.connect(decks[0], load, 'mechanical', 'load_contact');
+  const gauge = builder.component('sensor', folding ? 'hinge angle gauge' : 'midspan load gauge', assembly, [0, 1.52, -.62], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(gauge, folding ? 'angle' : 'load', folding ? 'span_angle' : 'midspan_load', decks[0], values.spanM);
+  builder.joint('fixed', decks[0], gauge);
+
+  if (folding) {
+    const hinge = builder.joints.find((item) => item.componentB === decks[0] && item.type === 'revolute')!;
+    const hydraulic = /hydraulic|piston/.test(text);
+    const drive = builder.component(hydraulic ? 'piston' : 'motor', hydraulic ? 'span hydraulic actuator' : 'span drive motor', assembly, [-values.spanM / 2 + .7, .75, -.58], undefined, undefined, 'kinematic');
+    const actuator = builder.actuator(drive, hinge.id, hydraulic ? 'piston' : 'servo', Math.max(1800, loadMass * 9.81 * .55), .65, values.angleDeg * Math.PI / 180);
+    if (!hydraulic) builder.motor(drive, hinge.id, Math.max(160, loadMass * values.spanM * 1.4), 18);
+    const counter = builder.component('counterweight', 'span counterweight', assembly, [-values.spanM / 2 - .65, .85, 0], [.9, .8, .8], 'concrete', 'dynamic', { payload_kg: loadMass * .55 }, loadMass * .55);
+    builder.joint('fixed', left, counter);
+    if (/pulley|cable|counterweight/.test(text)) {
+      const pulley = builder.component('pulley', 'span balance pulley', assembly, [-values.spanM / 2 + .18, 2.05, -.5], [.55, .18, .55], 'steel', 'dynamic');
+      builder.joint('revolute', left, pulley, [0, 0, 1]);
+      const cable = builder.component('cable', 'span balance cable', assembly, [-values.spanM / 2 - .2, 1.45, -.5], [.04, 1.45, .04], 'steel', 'dynamic');
+      builder.connect(cable, pulley, 'mechanical', 'balance_cable_path');
+      builder.connect(cable, counter, 'mechanical', 'counterweight_termination');
+    }
+    builder.control('span motion', 'tracking', [sensor], [actuator], 'track commanded span angle inside hinge and load limits', values.angleDeg);
+    return { id: 'span-members', mountId: left, editableId: gauge, handles: ['structure', 'rotate', 'lift'], driveId: drive, outputId: decks[0] };
+  }
+  return { id: 'span-members', mountId: left, editableId: gauge, handles: ['structure', 'rotate', 'lift'] };
 }
 
-export function compileDesignBrief(raw: string): CompiledSorterPlan {
-  const brief = normalizeBrief(raw);
-  const text = brief.toLowerCase();
-  if (brief.length < 12) throw new Error('VAGUE_GOAL: Describe what to sort and include at least one measurable constraint.');
+function addRollingSupport(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('rolling support', 'Chassis plate, wheel joints, drive shafts, and optional compliant support', rootAssemblyId);
+  const length = Math.max(2.1, Math.min(3.6, 2.1 + values.payloadKg / 120));
+  const width = Math.max(1.25, Math.min(2.1, 1.3 + values.payloadKg / 180));
+  const chassis = builder.component('plate', 'mobile chassis deck', assembly, [0, .9, 0], [length, .24, width], 'aluminum', 'dynamic', { payload_kg: values.payloadKg });
+  const wheelPositions: Vec3[] = [[-length * .35, .52, -width * .52], [-length * .35, .52, width * .52], [length * .35, .52, -width * .52], [length * .35, .52, width * .52]];
+  wheelPositions.forEach((position, index) => {
+    const wheel = builder.component('wheel', `road wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05 });
+    const axle = builder.joint('revolute', chassis, wheel, [0, 0, 1]);
+    if (index >= 2) {
+      const motor = builder.component('motor', `traction motor ${index - 1}`, assembly, [position[0], .66, position[2] * .72], undefined, undefined, 'kinematic');
+      builder.motor(motor, axle, Math.max(38, values.payloadKg * 1.85), 150);
+      builder.connect(motor, wheel, 'power', 'traction_power');
+    }
+    if (context.capabilities.includes('stabilize')) {
+      const stiffness = Math.max(15000, values.payloadKg * 680);
+      const spring = builder.component('spring', `suspension element ${index + 1}`, assembly, [position[0], .82, position[2] * .78], [.12, .55, .12], 'steel', 'dynamic', { stiffness, damping: 2100 });
+      builder.joint('spring', chassis, wheel, [0, 1, 0], { stiffness, damping: 2100, limits: [0, .55] });
+      builder.connect(spring, chassis, 'mechanical', 'spring_mount');
+    }
+  });
+  const payload = builder.component('container', 'mobile payload', assembly, [0, 1.32, 0], [1.1, .58, .85], 'polymer', 'dynamic', { payload_kg: values.payloadKg }, values.payloadKg);
+  builder.joint('fixed', chassis, payload);
+  const imu = builder.component('sensor', 'chassis imu', assembly, [-.4, 1.28, 0], undefined, undefined, 'fixed');
+  const controller = builder.component('controller', 'traction controller', assembly, [.4, 1.25, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(imu, 'imu', 'platform_tilt', chassis, 5);
+  builder.control('traction stability', 'pid', [sensor], [], 'limit wheel torque when tilt or slip rises', values.tiltDeg);
+  builder.joint('fixed', imu, chassis); builder.joint('fixed', controller, chassis);
+  return { id: 'rolling-support', mountId: chassis, editableId: imu, handles: ['mobile', 'stabilize'] };
+}
+
+function addRotaryTransmission(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('rotary transmission', 'Shafts and a parameterized gear mesh', rootAssemblyId);
+  const base = builder.component('frame', 'transmission housing', assembly, [0, .45, 0], [3.6, .22, 2.2], 'aluminum', 'fixed');
+  const inputShaft = builder.component('shaft', 'input shaft', assembly, [-.85, 1.25, 0], [.16, 1.5, .16], 'steel', 'dynamic', { rpm: values.rpm });
+  const outputShaft = builder.component('shaft', 'output shaft', assembly, [.85, 1.25, 0], [.22, 1.5, .22], 'steel', 'dynamic');
+  const inputRadius = .32;
+  const outputRadius = Math.min(1.45, inputRadius * values.ratio);
+  const inputGear = builder.component('gear', 'input gear', assembly, [-.85, 1.25, 0], [inputRadius * 2, .18, inputRadius * 2], 'steel', 'dynamic', { teeth: 18, pitch_radius: inputRadius, mesh_efficiency: .85 });
+  const outputGear = builder.component('gear', 'output gear', assembly, [.85, 1.25, 0], [outputRadius * 2, .22, outputRadius * 2], 'steel', 'dynamic', { teeth: Math.round(18 * values.ratio), pitch_radius: outputRadius, mesh_efficiency: .85 });
+  const inputJoint = builder.joint('revolute', base, inputShaft, [0, 1, 0]);
+  builder.joint('fixed', inputShaft, inputGear);
+  builder.joint('revolute', base, outputShaft, [0, 1, 0]);
+  builder.joint('fixed', outputShaft, outputGear);
+  builder.joint('gear', inputGear, outputGear, [0, 1, 0], { ratio: values.ratio });
+  const motor = builder.component('motor', 'input drive motor', assembly, [-1.55, 1.25, 0], [.46, .55, .46], 'steel', 'kinematic');
+  builder.motor(motor, inputJoint, Math.max(15, values.torqueNm / values.ratio * .72), values.rpm);
+  builder.connect(motor, inputShaft, 'power', 'input_torque');
+  const encoder = builder.component('sensor', 'output encoder', assembly, [1.35, 1.6, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(encoder, 'speed', 'output_rpm', outputShaft, 2);
+  builder.control('speed governor', 'pid', [sensor], [], 'hold output speed at input rpm divided by gear ratio', values.rpm / values.ratio);
+  builder.joint('fixed', encoder, base);
+  return { id: 'rotary-transmission', mountId: base, editableId: encoder, handles: ['transmit', 'rotate'], inputId: inputShaft, outputId: outputShaft };
+}
+
+function addSerialLinkage(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('serial linkage', 'Rotary links, joint drives, and a constructed end-effector chain', rootAssemblyId);
+  const base = builder.component('plate', 'linkage base', assembly, [0, .16, 0], [1.6, .25, 1.4], 'steel', 'fixed');
+  const pedestal = builder.component('beam', 'vertical linkage support', assembly, [0, .85, 0], [.3, 1.5, .3], 'steel', 'dynamic');
+  builder.joint('revolute', base, pedestal, [0, 1, 0], { limits: [-Math.PI, Math.PI] });
+  let parent = pedestal;
+  const linkLength = values.reachM / 3;
+  const actuators: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const link = builder.component('beam', `serial link ${index + 1}`, assembly, [index * linkLength + linkLength / 2, 1.65 + index * .24, 0], [linkLength, .22, .22], 'aluminum', 'dynamic', { link_length: linkLength });
+    const joint = builder.joint('revolute', parent, link, [0, 0, 1], { limits: [-1.8, 1.8] });
+    const servo = builder.component('servo', `link servo ${index + 1}`, assembly, [index * linkLength, 1.65 + index * .24, -.3], undefined, undefined, 'kinematic');
+    actuators.push(builder.actuator(servo, joint, 'servo', Math.max(110, values.payloadKg * 9.81 * values.reachM * .62), 1.8, 3.6));
+    builder.connect(servo, link, 'power', 'joint_drive');
+    parent = link;
+  }
+  const gripper = builder.component('gripper', 'constructed parallel gripper', assembly, [values.reachM, 2.15, 0], undefined, undefined, 'kinematic', { payload_kg: values.payloadKg });
+  builder.joint('fixed', parent, gripper);
+  const camera = builder.component('camera', 'tool pose camera', assembly, [values.reachM - .3, 2.42, 0], undefined, undefined, 'fixed');
+  const vision = builder.sensor(camera, 'camera', 'target_pose', gripper, 4);
+  builder.control('cartesian placement', 'pid', [vision], actuators, 'solve link setpoints from target pose and payload', values.placementCm / 100);
+  builder.connect(camera, gripper, 'signal', 'target_pose');
+  return { id: 'serial-linkage', mountId: base, editableId: camera, handles: ['manipulate', 'rotate'], driveId: actuators[0], outputId: gripper };
+}
+
+function addCableSuspension(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('cable suspension', 'Support frame, pulley path, winch, hook, payload, and balance mass', rootAssemblyId);
+  const baseWidth = Math.max(3.2, 2.8 + values.payloadKg / 180);
+  const base = builder.component('frame', 'suspension base', assembly, [-1, .16, 0], [baseWidth, .28, 2.4], 'steel', 'fixed');
+  const mast = builder.component('beam', 'vertical mast', assembly, [-1.8, 2.25, 0], [.34, 4.4, .34], 'steel', 'fixed');
+  const boomLength = Math.max(3.2, Math.min(5.6, values.liftM + 2.8));
+  const boom = builder.component('beam', 'suspension boom', assembly, [-.1, 4.18, 0], [boomLength, .3, .3], 'steel', 'fixed');
+  builder.joint('fixed', base, mast); builder.joint('fixed', mast, boom);
+  const pulley = builder.component('pulley', 'head pulley', assembly, [1.48, 3.95, 0], [.62, .2, .62], 'steel', 'dynamic');
+  const pulleyJoint = builder.joint('revolute', boom, pulley, [0, 0, 1]);
+  const cable = builder.component('cable', 'load cable', assembly, [1.48, 2.75, 0], [.04, Math.max(1.5, values.liftM), .04], 'steel', 'dynamic');
+  const hook = builder.component('hook', 'load hook', assembly, [1.48, 1.65, 0], undefined, undefined, 'dynamic');
+  const ropeJoint = builder.joint('rope', pulley, hook, [0, 1, 0], { limits: [0, Math.max(1.5, values.liftM)] });
+  builder.connect(cable, hook, 'mechanical', 'cable_termination');
+  const payload = builder.component('container', 'suspended payload', assembly, [1.48, 1.1, 0], [1.05, .65, .7], 'steel', 'dynamic', { payload_kg: values.payloadKg }, values.payloadKg);
+  builder.joint('fixed', hook, payload);
+  const counterMass = Math.max(70, values.payloadKg * .62);
+  const counterweight = builder.component('counterweight', 'balance counterweight', assembly, [-2.55, .85, 0], [1.05, .95, .95], 'concrete', 'dynamic', { payload_kg: counterMass }, counterMass);
+  builder.joint('fixed', base, counterweight);
+  const motor = builder.component('motor', 'cable winch motor', assembly, [-1.35, 3.76, -.45], undefined, undefined, 'kinematic');
+  const actuator = builder.actuator(motor, ropeJoint, 'winch', Math.max(900, values.payloadKg * 9.81 * .72), .8, values.liftM);
+  builder.motor(motor, pulleyJoint, Math.max(105, values.payloadKg * 4.4), 42);
+  const loadSensor = builder.component('sensor', 'load and swing sensor', assembly, [-1.55, 4.4, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(loadSensor, 'load', 'suspended_load', hook, boomLength);
+  const controller = builder.component('controller', 'suspension controller', assembly, [-.5, .55, -1], undefined, undefined, 'fixed');
+  builder.control('suspension stability', 'pid', [sensor], [actuator], 'limit swing while following lift height', values.liftM);
+  builder.joint('fixed', controller, base); builder.joint('fixed', loadSensor, boom);
+  return { id: 'cable-suspension', mountId: base, editableId: loadSensor, handles: ['lift', 'suspend', 'stabilize'], driveId: motor, outputId: hook };
+}
+
+function addParallelGuides(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('parallel linear guides', 'Load platform, parallel slides, pistons, and cross-level feedback', rootAssemblyId);
+  const base = builder.component('frame', 'guide base', assembly, [0, .16, 0], [3.4, .28, 2.4], 'steel', 'fixed');
+  const left = builder.component('beam', 'left linear guide', assembly, [-1.25, 1.8, 0], [.24, 3.5, .24], 'steel', 'fixed');
+  const right = builder.component('beam', 'right linear guide', assembly, [1.25, 1.8, 0], [.24, 3.5, .24], 'steel', 'fixed');
+  const platform = builder.component('plate', 'guided load platform', assembly, [0, .72, 0], [2.8, .22, 1.9], 'aluminum', 'dynamic', { payload_kg: values.payloadKg });
+  builder.joint('fixed', base, left); builder.joint('fixed', base, right);
+  const actuators: string[] = [];
+  [left, right].forEach((guide, index) => {
+    const joint = builder.joint('prismatic', guide, platform, [0, 1, 0], { limits: [0, values.liftM] });
+    const piston = builder.component('piston', `linear drive ${index + 1}`, assembly, [index ? .9 : -.9, .75, 0], [.26, Math.max(1.2, values.liftM), .26], 'steel', 'kinematic');
+    actuators.push(builder.actuator(piston, joint, 'piston', Math.max(850, values.payloadKg * 9.81 * .38), .35, values.liftM));
+  });
+  const payload = builder.component('container', 'platform payload', assembly, [0, 1.08, 0], [1.15, .55, .85], 'polymer', 'dynamic', { payload_kg: values.payloadKg }, values.payloadKg);
+  builder.joint('fixed', platform, payload);
+  const imu = builder.component('sensor', 'platform level sensor', assembly, [-.35, 1, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(imu, 'imu', 'platform_level', platform, 4);
+  builder.control('cross level', 'synchronized', [sensor], actuators, 'synchronize slide travel and limit acceleration', values.acceleration);
+  builder.joint('fixed', imu, platform);
+  return { id: 'parallel-guides', mountId: base, editableId: imu, handles: ['lift', 'stabilize'] };
+}
+
+function addMaterialFlow(context: ModuleContext): ModuleResult {
+  const { builder, values, capabilities, rootAssemblyId } = context;
+  const assembly = builder.assembly('material flow path', 'Powered surface, sensing, routing, and collection primitives', rootAssemblyId);
+  const minimal = values.maxComponents !== undefined && values.maxComponents <= 7;
+  const classify = capabilities.includes('classify');
+  const contain = capabilities.includes('contain');
+  const frame = minimal ? null : builder.component('frame', 'flow support frame', assembly, [0, .18, 0], [6.4, .24, 1.7], 'steel', 'fixed');
+  const conveyor = builder.component('conveyor', 'transport surface', assembly, [-.8, .62, 0], [4.6, .18, 1.15], 'steel', 'fixed', { target_throughput: values.throughput });
+  if (frame) builder.joint('fixed', frame, conveyor);
+  let driveJoint: string | undefined;
+  if (!minimal) {
+    for (let index = 0; index < 3; index += 1) {
+      const roller = builder.component('roller', `drive roller ${index + 1}`, assembly, [-2.3 + index * 1.5, .56, 0], [.18, 1, .18], 'steel', 'dynamic');
+      driveJoint = builder.joint('revolute', frame!, roller, [0, 0, 1]);
+    }
+  }
+  const motor = builder.component('motor', 'transport drive motor', assembly, [-2.75, .54, -.85], undefined, undefined, 'kinematic');
+  builder.motor(motor, driveJoint, Math.max(22, values.throughput), Math.max(72, values.throughput * 3.25));
+  builder.connect(motor, conveyor, 'power', 'transport_power');
+  const sensorBody = builder.component(classify ? 'camera' : 'sensor', classify ? 'classification camera' : 'occupancy sensor', assembly, [-1.35, 1.32, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(sensorBody, classify ? 'camera' : 'presence', classify ? 'item_class' : 'queue_presence', conveyor, 3);
+  builder.connect(sensorBody, conveyor, 'signal', 'flow_observation');
+  const actuatorIds: string[] = [];
+  if (classify) {
+    const router = builder.component('beam', 'routing gate', assembly, [1.1, .92, 0], [1.1, .12, .16], 'aluminum', 'dynamic');
+    const routerJoint = builder.joint('revolute', conveyor, router, [0, 1, 0], { limits: [-.75, .75] });
+    actuatorIds.push(builder.actuator(motor, routerJoint, 'servo', 330, 2.2, 1.5));
+    const rampA = builder.component('ramp', 'accepted output guide', assembly, [2.55, .48, -.85], [2.1, .12, .75], 'aluminum', 'fixed');
+    builder.connect(conveyor, rampA, 'mechanical', 'output_path');
+    if (!minimal) {
+      const rampB = builder.component('ramp', 'alternate output guide', assembly, [2.55, .48, .85], [2.1, .12, .75], 'aluminum', 'fixed');
+      builder.connect(conveyor, rampB, 'mechanical', 'alternate_path');
+    }
+    if (contain) {
+      const binA = builder.component('container', 'output container a', assembly, [3.8, .5, -1.4], [1.15, .8, 1.05], 'polymer', 'fixed');
+      const binB = builder.component('container', 'output container b', assembly, [3.8, .5, 1.4], [1.15, .8, 1.05], 'polymer', 'fixed');
+      builder.connect(rampA, binA, 'mechanical', 'collection_path');
+      builder.connect(conveyor, binB, 'mechanical', 'collection_path');
+    }
+  }
+  if (!minimal) {
+    const controller = builder.component('controller', 'flow controller', assembly, [.35, 1.15, -.85], undefined, undefined, 'fixed');
+    builder.connect(controller, motor, 'signal', 'drive_command');
+  }
+  builder.control('flow routing', classify ? 'state-machine' : 'threshold', [sensor], actuatorIds, classify ? 'classify then route without stopping transport' : 'meter flow when occupancy rises', values.throughput);
+  return { id: 'material-flow', mountId: frame ?? conveyor, editableId: sensorBody, handles: ['transport', 'classify', 'buffer', 'contain'] };
+}
+
+function addTrackingAxis(context: ModuleContext): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly('tracking axis', 'Support, pivoting panel, one actuator, and independent sensing', rootAssemblyId);
+  const base = builder.component('frame', 'tracking base', assembly, [0, .15, 0], [2.8, .26, 2.1], 'steel', 'fixed');
+  const mast = builder.component('beam', 'tracking mast', assembly, [0, 1.3, 0], [.3, 2.5, .3], 'steel', 'fixed');
+  const panel = builder.component('plate', 'tracked panel', assembly, [0, 2.55, 0], [3.4, .14, 2.1], 'composite', 'dynamic', { panel: true });
+  builder.joint('fixed', base, mast);
+  const hinge = builder.joint('revolute', mast, panel, [0, 0, 1], { limits: [-1.25, 1.25] });
+  const servo = builder.component('servo', 'tracking servo', assembly, [0, 2.22, -.42], undefined, undefined, 'kinematic');
+  const actuator = builder.actuator(servo, hinge, 'servo', 700, .7, 2.5);
+  const sensorBody = builder.component('sensor', 'dual light sensor', assembly, [-1.2, 2.72, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(sensorBody, 'light', 'light_error', panel, 10);
+  builder.control('light tracking', 'tracking', [sensor], [actuator], 'drive light error toward zero inside hinge limits', 0);
+  builder.connect(sensorBody, servo, 'signal', 'tracking_error');
+  return { id: 'tracking-axis', mountId: base, editableId: sensorBody, handles: ['track', 'rotate', 'measure'] };
+}
+
+function addReciprocatingLinkage(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('reciprocating linkage', 'Crank, connecting link, slider, chamber, and constructed check valves', rootAssemblyId);
+  const base = builder.component('frame', 'reciprocating base', assembly, [0, .18, 0], [4.6, .26, 2.2], 'steel', 'fixed');
+  const shaft = builder.component('shaft', 'crank shaft', assembly, [-1.25, 1.25, 0], [.18, 1.2, .18], 'steel', 'dynamic');
+  const shaftJoint = builder.joint('revolute', base, shaft, [0, 0, 1]);
+  const flywheel = builder.component('wheel', 'flywheel', assembly, [-1.25, 1.25, 0], [1.15, .22, 1.15], 'steel', 'dynamic', { crank_radius: values.strokeM / 2 });
+  builder.joint('fixed', shaft, flywheel);
+  const slider = builder.component('piston', 'reciprocating plunger', assembly, [.65, 1.25, 0], [.45, Math.max(.6, values.strokeM), .45], 'steel', 'dynamic', { bore_m: .45, stroke_m: values.strokeM });
+  const slideJoint = builder.joint('prismatic', base, slider, [1, 0, 0], { limits: [0, values.strokeM] });
+  const rod = builder.component('beam', 'connecting rod', assembly, [-.2, 1.25, 0], [1.7, .16, .16], 'steel', 'dynamic');
+  builder.joint('spherical', flywheel, rod, [0, 0, 1]); builder.joint('spherical', rod, slider, [0, 0, 1]);
+  const chamber = builder.component('container', 'pump chamber', assembly, [1.25, 1.25, 0], [1.25, .85, 1], 'aluminum', 'fixed', { chamber_l: 18 });
+  builder.connect(slider, chamber, 'mechanical', 'displacement_chamber');
+  for (const side of [-1, 1]) {
+    const valve = builder.component('plate', side < 0 ? 'inlet valve plate' : 'outlet valve plate', assembly, [1.25, 1.25, side * .68], [.38, .08, .38], 'polymer', 'dynamic');
+    const spring = builder.component('spring', side < 0 ? 'inlet valve spring' : 'outlet valve spring', assembly, [1.25, 1.48, side * .68], [.08, .34, .08], 'steel', 'dynamic', { stiffness: 3200, damping: 260 });
+    builder.joint('prismatic', chamber, valve, [0, 0, side], { limits: [0, .08] });
+    builder.connect(spring, valve, 'mechanical', 'check_valve_return');
+  }
+  const motor = builder.component('motor', 'crank drive motor', assembly, [-2, 1.25, 0], undefined, undefined, 'kinematic');
+  builder.motor(motor, shaftJoint, Math.max(30, values.flowRateLpm * 1.8), Math.max(45, values.rpm * .62));
+  const actuator = builder.actuator(slider, slideJoint, 'piston', Math.max(900, values.flowRateLpm * 42), Math.max(.25, values.strokeM), values.strokeM);
+  const sensorBody = builder.component('sensor', 'stroke position sensor', assembly, [.65, 1.75, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(sensorBody, 'position', 'plunger_position', slider, values.strokeM + .5);
+  builder.control('stroke timing', 'pid', [sensor], [actuator], 'phase the plunger with crank angle and valve state', values.strokeM);
+  builder.connect(motor, shaft, 'power', 'crank_torque'); builder.connect(sensorBody, motor, 'signal', 'stroke_feedback');
+  return { id: 'reciprocating-linkage', mountId: base, editableId: sensorBody, handles: ['rotate', 'contain', 'measure'] };
+}
+
+function addFourBar(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('closed linkage', 'Four rigid links and revolute pairs built from lower-level members', rootAssemblyId);
+  const base = builder.component('beam', 'ground link', assembly, [0, .35, 0], [2.8, .22, .28], 'steel', 'fixed');
+  const input = builder.component('beam', 'input crank', assembly, [-1.1, 1.05, 0], [1.4, .18, .22], 'aluminum', 'dynamic');
+  const coupler = builder.component('beam', 'coupler link', assembly, [0, 1.7, 0], [2.2, .18, .22], 'aluminum', 'dynamic');
+  const output = builder.component('beam', 'output rocker', assembly, [1.1, 1.05, 0], [1.4, .18, .22], 'aluminum', 'dynamic');
+  const inputJoint = builder.joint('revolute', base, input, [0, 0, 1], { limits: [-Math.PI, Math.PI] });
+  builder.joint('revolute', input, coupler, [0, 0, 1]); builder.joint('revolute', coupler, output, [0, 0, 1]); builder.joint('revolute', output, base, [0, 0, 1], { limits: [-values.angleDeg * Math.PI / 180, values.angleDeg * Math.PI / 180] });
+  if (values.supplied.has('strokeM')) {
+    const follower = builder.component('piston', 'linear output follower', assembly, [1.9, 1.05, 0], [.24, Math.max(.5, values.strokeM), .24], 'steel', 'dynamic', { stroke_m: values.strokeM });
+    builder.joint('prismatic', base, follower, [1, 0, 0], { limits: [0, values.strokeM] });
+    builder.connect(output, follower, 'mechanical', 'rocker_to_slider');
+  }
+  const motor = builder.component('motor', 'linkage drive motor', assembly, [-1.4, .65, -.35], undefined, undefined, 'kinematic');
+  builder.motor(motor, inputJoint, Math.max(35, values.torqueNm * .55), Math.max(40, values.rpm * .65));
+  const sensorBody = builder.component('sensor', 'rocker angle encoder', assembly, [1.35, 1.55, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(sensorBody, 'angle', 'rocker_angle', output, 3);
+  builder.control('linkage position', 'pid', [sensor], [], 'hold the output rocker inside the requested angular envelope', values.angleDeg);
+  builder.connect(sensorBody, motor, 'signal', 'angle_feedback');
+  return { id: 'closed-linkage', mountId: base, editableId: sensorBody, handles: ['rotate'] };
+}
+
+function addGenericMotion(context: ModuleContext): ModuleResult {
+  const { builder, capabilities, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('constructed motion stage', 'Foundation, support, moving link, actuator, sensor, and controller assembled from primitives', rootAssemblyId);
+  const base = builder.component('frame', 'constructed base', assembly, [0, .15, 0], [3.2, .25, 2.1], 'steel', 'fixed');
+  const support = builder.component('beam', 'primary support', assembly, [-.8, 1.2, 0], [.3, 2.2, .3], 'steel', 'fixed');
+  const link = builder.component('beam', capabilities.includes('rotate') ? 'rotating output link' : 'sliding output link', assembly, [.45, 2.1, 0], [2.4, .24, .24], 'aluminum', 'dynamic');
+  builder.joint('fixed', base, support);
+  const rotary = capabilities.includes('rotate');
+  const motionJoint = builder.joint(rotary ? 'revolute' : 'prismatic', support, link, rotary ? [0, 0, 1] : [1, 0, 0], { limits: rotary ? [0, values.angleDeg * Math.PI / 180] : [0, values.strokeM] });
+  const actuatorBody = builder.component(rotary ? 'servo' : 'piston', 'primary motion actuator', assembly, [-.4, 1.7, -.45], undefined, undefined, 'kinematic');
+  const actuator = builder.actuator(actuatorBody, motionJoint, rotary ? 'servo' : 'linear', 1050, .8, rotary ? values.angleDeg * Math.PI / 180 : values.strokeM);
+  const sensorBody = builder.component('sensor', 'output feedback sensor', assembly, [.2, 2.45, 0], undefined, undefined, 'fixed');
+  const sensor = builder.sensor(sensorBody, rotary ? 'angle' : 'position', rotary ? 'output_angle' : 'output_position', link, 4);
+  const controller = builder.component('controller', 'motion controller', assembly, [-.1, .55, -.7], undefined, undefined, 'fixed');
+  builder.control('constructed motion', 'pid', [sensor], [actuator], 'drive measured output toward the requested motion envelope', rotary ? values.angleDeg : values.strokeM);
+  builder.joint('fixed', sensorBody, support); builder.joint('fixed', controller, base); builder.connect(controller, actuatorBody, 'signal', 'actuator_command');
+  return { id: 'constructed-motion', mountId: base, editableId: sensorBody, handles: rotary ? ['rotate', 'measure'] : ['measure'] };
+}
+
+const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
+  ['beam', /\bbeams?\b/], ['plate', /\bplates?\b/], ['frame', /\bframes?\b/], ['wheel', /\bwheels?\b/],
+  ['shaft', /\bshafts?\b/], ['gear', /\bgears?\b/], ['pulley', /\bpulleys?\b/], ['belt', /\bbelts?\b/],
+  ['motor', /\bmotors?\b/], ['servo', /\bservos?\b/], ['piston', /\bpistons?\b/], ['spring', /\bsprings?\b/],
+  ['sensor', /\bsensors?\b/], ['camera', /\bcameras?\b/], ['conveyor', /\bconveyors?\b/], ['ramp', /\bramps?\b/],
+  ['gripper', /\bgrippers?\b/], ['container', /\bcontainers?\b/], ['counterweight', /\bcounterweights?\b/],
+  ['cable', /\bcables?\b/], ['hook', /\bhooks?\b/], ['roller', /\brollers?\b/],
+];
+
+function requestedPrimitiveCounts(text: string) {
+  const words: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
+  const result = new Map<PrimitiveKind, number>();
+  for (const [kind, noun] of requestedPrimitivePatterns) {
+    const source = noun.source.replace(/^\\b|\\b$/g, '');
+    const match = text.match(new RegExp(`(?:(one|two|three|four|five|six|seven|eight|\\d+)\\s*[- ]?\\s*)?${source}\\b`));
+    if (!match) continue;
+    result.set(kind, match[1] ? words[match[1]] ?? Number(match[1]) : 1);
+  }
+  return result;
+}
+
+function addRequestedPrimitiveBodies(context: ModuleContext, missing: Array<[PrimitiveKind, number]>, mountId: string): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly('requested primitive extension', 'Explicitly requested bodies integrated into the composed mechanism', rootAssemblyId);
+  const created: string[] = [];
+  const actuators: string[] = [];
+  const sensors: string[] = [];
+  let offset = 0;
+  for (const [kind, count] of missing) for (let index = 0; index < count; index += 1) {
+    offset += 1;
+    const dynamic = ['gear', 'wheel', 'pulley', 'piston', 'servo', 'gripper', 'hook', 'spring'].includes(kind);
+    const body = builder.component(kind, `requested ${kind} ${index + 1}`, assembly, [1.2 + offset * .62, 1.05 + (offset % 2) * .5, (offset % 3 - 1) * .55], undefined, undefined, dynamic ? 'dynamic' : undefined);
+    created.push(body);
+    if (kind === 'gear' || kind === 'wheel' || kind === 'pulley') builder.joint('revolute', mountId, body, [0, 1, 0]);
+    else if (kind === 'piston') {
+      const motion = builder.joint('prismatic', mountId, body, [1, 0, 0], { limits: [0, context.values.strokeM] });
+      actuators.push(builder.actuator(body, motion, 'piston', 1050, .6, context.values.strokeM));
+    } else builder.connect(mountId, body, kind === 'camera' || kind === 'sensor' ? 'signal' : 'mechanical', 'explicit_primitive_interface');
+    if (kind === 'camera' || kind === 'sensor') sensors.push(builder.sensor(body, kind === 'camera' ? 'camera' : 'position', 'explicit_observation', created.find((id) => id !== body) ?? mountId, 4));
+    if (kind === 'motor') builder.motor(body, undefined, Math.max(30, context.values.torqueNm), context.values.rpm);
+  }
+  const gears = created.filter((id) => builder.components.find((item) => item.id === id)?.primitive === 'gear');
+  for (let index = 1; index < gears.length; index += 1) builder.joint('gear', gears[index - 1], gears[index], [0, 1, 0], { ratio: context.values.ratio });
+  if (sensors.length && actuators.length) builder.control('explicit mechanism', 'pid', sensors, actuators, 'coordinate the explicitly requested sensing and actuation primitives', context.values.strokeM);
+  return { id: 'requested-primitives', mountId: created[0], editableId: created.find((id) => ['sensor', 'camera'].includes(builder.components.find((item) => item.id === id)?.primitive ?? '')) ?? created[0], handles: ['measure'] };
+}
+
+const moduleRules: ModuleRule[] = [
+  { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
+  { id: 'rolling-support', matches: ({ capabilities }) => capabilities.includes('mobile'), compose: addRollingSupport },
+  { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },
+  { id: 'serial-linkage', matches: ({ capabilities }) => capabilities.includes('manipulate'), compose: addSerialLinkage },
+  { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addCableSuspension },
+  { id: 'parallel-guides', matches: ({ text, capabilities }) => capabilities.includes('lift') && !capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addParallelGuides },
+  { id: 'material-flow', matches: ({ capabilities }) => capabilities.includes('transport'), compose: addMaterialFlow },
+  { id: 'tracking-axis', matches: ({ capabilities }) => capabilities.includes('track'), compose: addTrackingAxis },
+  { id: 'reciprocating-linkage', matches: ({ text }) => /pump|reciprocat/.test(text), compose: addReciprocatingLinkage },
+  { id: 'closed-linkage', matches: ({ text }) => /four[- ]bar|linkage/.test(text), compose: addFourBar },
+];
+
+export function compileDesignBrief(raw: string): CompiledWorldPlan {
+  const brief = normalize(raw);
+  if (brief.length < 12) throw new Error('VAGUE_GOAL: Describe the physical system, what it should do, and a measurable outcome.');
   if (brief.length > 500) throw new Error('OUT_OF_RANGE: Keep the engineering brief under 500 characters.');
+  if (/\b(?:do not|don['’]?t|never)\s+(?:build|design|create|engineer)\b/i.test(brief)) throw new Error('NEGATED_GOAL: The brief explicitly says not to engineer the system.');
 
-  const hasSortIntent = /\b(sort|sorts|sorter|sorting|separate|separates|separating|route|routes|routing|classify|classifies|divert|diverts)\b/.test(text);
-  const hasSupportedObject = /\b(box|boxes|package|packages|parcel|parcels|item|items|product|products)\b/.test(text);
-  if (!hasSortIntent || !hasSupportedObject) throw new Error('UNSUPPORTED_GOAL: This lab currently engineers conveyor-based package sorters. Try “Sort red and blue boxes at 20 boxes/min using at most 7 components.”');
-  if (/\b(?:do\s+not|don['’]?t|dont|never|not)\s+(?:\w+\s+){0,3}(?:sort|separate|route|classify|divert)\b/.test(text)) {
-    throw new Error('NEGATED_GOAL: The brief says not to perform the sorting task, so ForgeTwin will not build the opposite of your request.');
-  }
+  const text = brief.toLowerCase();
+  const capabilities = inferCapabilities(text);
+  const values = parseValues(text);
+  const constraints = constraintsFor(text, capabilities, values);
+  const builder = new WorldBuilder();
+  const rootAssemblyId = builder.assembly('engineered world', 'Root assembly for independently composable mechanism modules');
+  builder.setRoot(rootAssemblyId);
+  const selectionContext = { text, capabilities, values };
+  const selectedRules = moduleRules.filter((rule) => rule.matches(selectionContext));
+  const rules: ModuleRule[] = selectedRules.length ? selectedRules : [{ id: 'constructed-motion', matches: () => true, compose: addGenericMotion }];
+  const spacing = rules.length > 1 ? Math.min(4.8, 10 / Math.max(1, rules.length - 1)) : 0;
+  const modules = rules.map((rule, index) => builder.at([(index - (rules.length - 1) / 2) * spacing, 0, 0], () => rule.compose({ builder, text, capabilities, values, rootAssemblyId })));
 
-  const negatedColor = text.match(/\b(?:without|exclude|excluding|omit|omitting)\s+(?:sorting\s+)?(?:any\s+|all\s+|the\s+)?(red|blue)\b|\bnot\s+(?:any\s+|the\s+)?(red|blue)\b/);
-  const excludedColor = negatedColor?.[1] ?? negatedColor?.[2];
-  if (excludedColor) throw new Error(`UNSUPPORTED_COLOR: The validated fixture requires both red and blue routes; “${excludedColor}” was explicitly excluded.`);
-  const namedUnsupported = unsupportedColors.filter((color) => new RegExp(`\\b${color}\\b`).test(text));
-  if (namedUnsupported.length) throw new Error(`UNSUPPORTED_COLOR: I understood ${namedUnsupported.join(' and ')}, but this validated fixture currently supports red and blue routes only.`);
-  const hasRed = /\bred\b/.test(text);
-  const hasBlue = /\bblue\b/.test(text);
-  if (hasRed !== hasBlue) throw new Error(`MISSING_SECOND_COLOR: Add the ${hasRed ? 'blue' : 'red'} route so the two-lane sorter has a complete goal.`);
+  const handled = new Set(modules.flatMap((module) => module.handles));
+  if (capabilities.includes('rotate') && !handled.has('rotate')) {
+    modules.push(builder.at([modules.length ? Math.max(4.8, spacing) * modules.length / 2 : 0, 0, 0], () => addGenericMotion({ builder, text, capabilities, values, rootAssemblyId })));
+  }
+  const requested = requestedPrimitiveCounts(text);
+  const missing = [...requested.entries()].map(([kind, count]) => [kind, Math.max(0, count - builder.components.filter((item) => item.primitive === kind).length)] as [PrimitiveKind, number]).filter(([, count]) => count > 0);
+  if (missing.length) modules.push(builder.at([Math.max(4.8, spacing || 4.8) * modules.length / 2, 0, 0], () => addRequestedPrimitiveBodies({ builder, text, capabilities, values, rootAssemblyId }, missing, modules[0].mountId)));
+  for (let index = 1; index < modules.length; index += 1) builder.connect(modules[0].mountId, modules[index].mountId, 'mechanical', 'module_interface');
+  const transmission = modules.find((module) => module.id === 'rotary-transmission');
+  const drivenModule = modules.find((module) => ['cable-suspension', 'span-members'].includes(module.id) && module.driveId);
+  if (transmission?.outputId && drivenModule?.driveId) builder.connect(transmission.outputId, drivenModule.driveId, 'power', 'compound_drive_output');
 
-  if (new RegExp(`\\b(?:at least|minimum(?: of)?|min(?:imum)?(?: of)?|(?<!no )more than|greater than|over)\\s+${numberToken}\\s+(?:components?|parts?)\\b`).test(text)
-    || new RegExp(`\\b${numberToken}\\s*\\+\\s*(?:components?|parts?)\\b`).test(text)
-    || new RegExp(`\\b${numberToken}\\s+(?:components?|parts?)\\s*(?:minimum|min(?:imum)?|or more)\\b`).test(text)) {
-    throw new Error('UNSUPPORTED_COMPARATOR: Component count must be a maximum budget, such as “at most 7 components.”');
-  }
-  if (new RegExp(`\\b(?:less than|fewer than|under|below)\\s+${numberToken}\\s+(?:components?|parts?)\\b`).test(text)) {
-    throw new Error('UNSUPPORTED_COMPARATOR: Use an inclusive component budget such as “at most 7 components” so the design limit is exact.');
-  }
-  const upperComparator = '(?:at most|no more than|maximum(?: of)?|max(?:imum)?(?: of)?|less than|fewer than|under|below|up to)';
-  const throughputUnit = '(?:boxes?|packages?|parcels?|items?)?\\s*(?:per\\s+minute|\\/\\s*min(?:ute)?|bpm)';
-  if (new RegExp(`\\b${upperComparator}\\s+${numberToken}\\s*${throughputUnit}\\b`).test(text)
-    || new RegExp(`\\bthroughput(?:\\s+(?:of|at|target(?:\\s+of)?))?\\s+${upperComparator}\\s+${numberToken}\\b`).test(text)
-    || new RegExp(`\\b${numberToken}\\s*${throughputUnit}\\s*(?:maximum|max|or less)\\b`).test(text)) {
-    throw new Error('UNSUPPORTED_COMPARATOR: Throughput must be a minimum target, such as “at least 20 boxes per minute.”');
-  }
-  if (/\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:boxes?|packages?|parcels?|items?)?\s*(?:per\s+minute|\/\s*min(?:ute)?|bpm)\b/.test(text)) {
-    throw new Error('AMBIGUOUS_GOAL: Use one minimum throughput target instead of a range.');
-  }
-  if (/\b(?:as fast as possible|maximum throughput|maximize throughput)\b/.test(text)) {
-    throw new Error('VAGUE_GOAL: Replace “as fast as possible” with a numeric boxes-per-minute target.');
-  }
-  if (new RegExp(`\\b${upperComparator}\\s+${numberToken}\\s*(?:%|percent)\\s*(?:sorting\\s*)?(?:accuracy|accurate)\\b`).test(text)
-    || new RegExp(`\\b(?:accuracy|accurate(?:ly)?)\\s*(?:of|at|target(?:\\s+of)?)?\\s*${upperComparator}\\s+${numberToken}\\s*(?:%|percent)(?!\\w)`).test(text)
-    || new RegExp(`\\b${numberToken}\\s*(?:%|percent)\\s*(?:sorting\\s*)?(?:accuracy|accurate)?\\s*(?:maximum|max|or less)\\b`).test(text)) {
-    throw new Error('UNSUPPORTED_COMPARATOR: Accuracy must be a minimum target, such as “at least 95% accuracy.”');
-  }
-  if (/\d+(?:\.\d+)?\s*(?:-|to)\s*\d+(?:\.\d+)?\s*(?:%|percent)(?!\w)/.test(text)) {
-    throw new Error('AMBIGUOUS_GOAL: Use one minimum accuracy target instead of a range.');
-  }
-
-  const throughputValues = collectNumbers(text, [
-    /(\d+(?:\.\d+)?)\s*\+?\s*(?:boxes?|packages?|parcels?|items?)\s*(?:per\s+minute|\/\s*min(?:ute)?|\/min)\b/g,
-    /(\d+(?:\.\d+)?)\s*\+?\s*bpm\b/g,
-    /\bthroughput(?:\s+(?:of|at|target(?:\s+of)?))?\s+(\d+(?:\.\d+)?)\b/g,
-  ]);
-  const accuracyValues = collectNumbers(text, [
-    /(\d+(?:\.\d+)?)\s*(?:%|percent)\s*(?:sorting\s*)?(?:accuracy|accurate)\b/g,
-    /\b(?:accuracy|accurate(?:ly)?)\s*(?:of|at|>=|at least|minimum(?: of)?|min(?:imum)?(?: of)?)?\s*(\d+(?:\.\d+)?)\s*(?:%|percent)(?!\w)/g,
-  ]);
-  const componentValues = collectNumbers(text, [
-    new RegExp(`\\b(?:no more than|at most|max(?:imum)?(?: of)?|limit(?:ed)? to|within|using(?: no more than)?)\\s+(${numberToken})\\s+(?:components?|parts?)\\b`, 'g'),
-    new RegExp(`\\b(${numberToken})[- ]component\\s+limit\\b`, 'g'),
-    new RegExp(`\\b(${numberToken})\\s+(?:components?|parts?)\\s*(?:max(?:imum)?|limit)\\b`, 'g'),
-  ]);
-
-  const assumptions: string[] = [];
-  const throughputBpm = oneValue(throughputValues, 'throughput') ?? 20;
-  const minAccuracyPct = oneValue(accuracyValues, 'accuracy') ?? 95;
-  const maxComponents = oneValue(componentValues, 'component-budget') ?? 7;
-  if (!throughputValues.length) assumptions.push('20 boxes/min minimum');
-  if (!accuracyValues.length) assumptions.push('95% minimum accuracy');
-  if (!componentValues.length) assumptions.push('7-component maximum');
-  if (!hasRed && !hasBlue) assumptions.push('red + blue routes');
-
-  assertRange(throughputBpm, 'Throughput', SORTER_LIMITS.minThroughputBpm, SORTER_LIMITS.maxThroughputBpm, ' boxes/min');
-  assertRange(minAccuracyPct, 'Accuracy', SORTER_LIMITS.minAccuracyPct, SORTER_LIMITS.maxAccuracyPct, '%');
-  assertRange(maxComponents, 'Component budget', 3, SORTER_LIMITS.maxComponents, ' components');
-  if (!Number.isInteger(maxComponents)) throw new Error('INVALID_GOAL: Component budget must be a whole number.');
-  if (maxComponents < SORTER_LIMITS.minComponents) throw new Error(`INFEASIBLE_GOAL: The verified two-lane sorter needs ${SORTER_LIMITS.minComponents} components: a conveyor, sensor, diverter, two ramps, and two bins.`);
-
-  const motorSpeed = Number(Math.min(2.25, Math.max(1.8, 2 + (throughputBpm - 20) * 0.0125)).toFixed(2));
-  const initialDelayMs = Math.round((2 / motorSpeed) * 1000 + 40);
+  const explicitBudget = values.maxComponents;
+  if (explicitBudget !== undefined && explicitBudget < builder.components.length) throw new Error(`INFEASIBLE_GOAL: The composed primitive graph needs at least ${builder.components.length} physical bodies; increase the component budget.`);
+  const maxComponents = explicitBudget ?? Math.min(80, Math.max(builder.components.length + 8, 24));
+  const assumptions = constraints.filter((constraint) => constraint.source === 'inferred').map((constraint) => `Inferred target: ${constraint.label} ${symbol(constraint.operator)} ${constraint.target}${constraint.unit}`);
+  assumptions.push('Deterministic concept model; the agent may revise any unlocked primitive, joint, material, device, or controller.');
+  const { name, domain } = identity(text, capabilities);
+  const editable = modules.find((module) => module.editableId)?.editableId ?? builder.components[0]?.id ?? '';
+  const goal = {
+    machineName: name,
+    domain,
+    brief,
+    summary: `Compose ${modules.map((module) => module.id).join(' + ')} from ${builder.components.length} low-level bodies, ${builder.joints.length} joints, and ${builder.controls.length} control loops.`,
+    capabilities,
+    constraints,
+    maxComponents,
+    assumptions,
+    disclaimer: 'Concept-level rigid-body model. Reduced-order structural, flow, transmission, and control measurements require domain validation before fabrication.',
+    simulationModel: 'Composable multi-body Rapier world with graph-derived engineering measurements',
+    editableComponentId: editable,
+    editableLabel: builder.components.find((component) => component.id === editable)?.role ?? 'selected primitive',
+  };
 
   return {
     brief,
-    goal: { throughputBpm, minAccuracyPct, maxComponents, colors: ['red', 'blue'] },
-    componentIds: demoComponentIds,
-    motorSpeed,
-    initialDelayMs,
-    actuatorHoldMs: 520,
+    goal,
+    world: { ...worldDefaults, duration: Math.min(12, Math.max(6, Math.min(values.durationS, 12))), bounds: modules.length > 1 ? [22, 10, 14] : [...worldDefaults.bounds] },
+    assemblies: builder.assemblies,
+    components: builder.components,
+    connections: builder.connections,
+    joints: builder.joints,
+    motors: builder.motors,
+    sensors: builder.sensors,
+    actuators: builder.actuators,
+    controls: builder.controls,
     assumptions,
   };
 }

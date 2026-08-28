@@ -1,44 +1,56 @@
-import { componentCatalog } from './forge-data';
-import type { Actor, DesignSnapshot, ForgeState, ForgeToolName, MachineComponent, SimulationRun, ToolResult, Vec3 } from './forge-types';
-
-const mutationTools = new Set<ForgeToolName>(['set_design_goal', 'add_component', 'move_component', 'rotate_component', 'connect_components', 'attach_sensor', 'attach_actuator', 'create_control_rule', 'set_motor_speed', 'set_actuator_timing', 'restore_revision']);
+import { catalogFor, componentMass, materialFor, materials, primitiveCatalog } from './forge-data';
+import type {
+  Actor, Assembly, BodyType, Capability, ControlMode, DesignGoal, DesignSnapshot,
+  ForgeState, ForgeToolName, GoalConstraint, JointType, MachineComponent,
+  OptimizationAction, PrimitiveKind, SensorType, SimulationRun, ToolResult, Vec3,
+} from './forge-types';
 
 const clone = <T,>(value: T): T => structuredClone(value);
-const componentIdFor = (catalogId: string) => ({ conveyor: 'conveyor-main', 'color-sensor': 'sensor-color', 'servo-diverter': 'diverter-servo' }[catalogId] ?? catalogId);
 const now = () => new Date().toISOString();
+const mutationTools = new Set<ForgeToolName>([
+  'set_design_goal', 'create_assembly', 'create_component', 'set_dimensions', 'set_material', 'set_mass',
+  'move_component', 'rotate_component', 'connect_components', 'create_joint', 'add_motor', 'add_sensor',
+  'add_actuator', 'set_control_logic', 'optimize_design', 'remove_component', 'remove_joint', 'restore_revision',
+]);
 
-function hashDesign(state: Pick<ForgeState, 'goal' | 'components' | 'connections' | 'sensorAttachments' | 'actuatorAttachments' | 'controlRules' | 'motorSpeed' | 'actuatorDelayMs' | 'actuatorHoldMs'>) {
-  const goal = state.goal ? { throughputBpm: state.goal.throughputBpm, minAccuracyPct: state.goal.minAccuracyPct, maxComponents: state.goal.maxComponents, colors: state.goal.colors } : null;
-  const payload = JSON.stringify({ goal, components: state.components.map(({ id, catalogId, position, rotation, humanLocked }) => ({ id, catalogId, position, rotation, humanLocked })), connections: state.connections, sensorAttachments: state.sensorAttachments, actuatorAttachments: state.actuatorAttachments, controlRules: state.controlRules, motorSpeed: state.motorSpeed, actuatorDelayMs: state.actuatorDelayMs, actuatorHoldMs: state.actuatorHoldMs });
-  let hash = 2166136261;
-  for (let index = 0; index < payload.length; index += 1) hash = Math.imul(hash ^ payload.charCodeAt(index), 16777619);
-  return `design-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+function stablePayload(state: ForgeState) {
+  return {
+    world: state.world,
+    goal: state.goal,
+    assemblies: state.assemblies,
+    components: state.components.map((component) => {
+      const physicalState: Partial<MachineComponent> = { ...component };
+      delete physicalState.lastModifiedBy;
+      return physicalState;
+    }),
+    connections: state.connections,
+    joints: state.joints,
+    motors: state.motors,
+    sensors: state.sensors,
+    actuators: state.actuators,
+    controls: state.controls,
+  };
 }
 
-function activity(state: ForgeState, tool: ForgeToolName | 'human_drag' | 'checkpoint', detail: string, actor: Actor, outcome: 'success' | 'failed' | 'running' | 'read' = 'success') {
+export function computeDesignHash(state: ForgeState) {
+  const payload = JSON.stringify(stablePayload(state));
+  let hash = 2166136261;
+  for (let index = 0; index < payload.length; index += 1) hash = Math.imul(hash ^ payload.charCodeAt(index), 16777619);
+  return `world-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function addActivity(state: ForgeState, tool: ForgeToolName | 'human_drag' | 'checkpoint', detail: string, actor: Actor, outcome: 'success' | 'failed' | 'running' | 'read' = 'success') {
   const seq = state.activitySeq + 1;
-  return { ...state, activitySeq: seq, activity: [{ id: `activity-${seq}`, seq, tool, detail, actor, outcome, at: now() }, ...state.activity].slice(0, 80) };
+  return { ...state, activitySeq: seq, activity: [{ id: `activity-${seq}`, seq, tool, detail, actor, outcome, at: now() }, ...state.activity].slice(0, 140) };
 }
 
 function snapshot(state: ForgeState, label: string, actor: Actor): DesignSnapshot {
   return {
-    id: `revision-${state.revision}`,
-    revision: state.revision,
-    designRevision: state.designRevision,
-    label,
-    actor,
-    at: now(),
-    designHash: state.designHash,
-    components: clone(state.components),
-    connections: clone(state.connections),
-    sensorAttachments: clone(state.sensorAttachments),
-    actuatorAttachments: clone(state.actuatorAttachments),
-    controlRules: clone(state.controlRules),
-    goal: clone(state.goal),
-    motorSpeed: state.motorSpeed,
-    actuatorDelayMs: state.actuatorDelayMs,
-    actuatorHoldMs: state.actuatorHoldMs,
-    metrics: state.runs.at(-1)?.metrics ?? null,
+    id: `revision-${state.revision}`, revision: state.revision, designRevision: state.designRevision,
+    label, actor, at: now(), designHash: state.designHash, goal: clone(state.goal), world: clone(state.world),
+    assemblies: clone(state.assemblies), components: clone(state.components), connections: clone(state.connections),
+    joints: clone(state.joints), motors: clone(state.motors), sensors: clone(state.sensors), actuators: clone(state.actuators),
+    controls: clone(state.controls), optimizationLevel: state.optimizationLevel, metrics: state.runs.at(-1)?.metrics ?? null,
   };
 }
 
@@ -48,35 +60,212 @@ function success(state: ForgeState, message: string, data?: unknown): ToolResult
 
 function assertGuard(state: ForgeState, input: Record<string, unknown>) {
   if (input.expected_workspace_nonce !== state.workspaceNonce) throw new Error('WRONG_WORKSPACE: inspect the active workspace and retry with its nonce.');
-  if (input.expected_revision !== state.revision) throw new Error(`STALE_REVISION: expected revision ${state.revision}. Inspect shared state before retrying.`);
+  if (input.expected_revision !== state.revision) throw new Error(`STALE_REVISION: expected revision ${state.revision}. Inspect the shared world before retrying.`);
 }
 
 function designMutation(state: ForgeState, tool: ForgeToolName, label: string, actor: Actor, detail: string) {
   let next: ForgeState = { ...state, revision: state.revision + 1, designRevision: state.designRevision + 1, phase: state.components.length ? 'ready' : 'building', replayRunId: null };
-  next.designHash = hashDesign(next);
-  next = activity(next, tool, detail, actor);
-  next.revisions = [...next.revisions, snapshot(next, label, actor)].slice(-30);
+  next.designHash = computeDesignHash(next);
+  next = addActivity(next, tool, detail, actor);
+  next.revisions = [...next.revisions, snapshot(next, label, actor)].slice(-60);
   return next;
 }
 
-function boundedPosition(value: unknown): Vec3 {
-  if (!Array.isArray(value) || value.length !== 3 || value.some((item) => typeof item !== 'number' || !Number.isFinite(item))) throw new Error('INVALID_INPUT: position must contain three finite numbers.');
-  const position = value as Vec3;
-  if (position[0] < -5 || position[0] > 5 || position[1] < 0 || position[1] > 3 || position[2] < -3 || position[2] > 3) throw new Error('CONSTRAINT_VIOLATION: position is outside the engineering workspace.');
-  return position.map((item) => Number(item.toFixed(2))) as Vec3;
+function idValue(value: unknown, label = 'id') {
+  const id = String(value ?? '');
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(id)) throw new Error(`INVALID_INPUT: ${label} must be lowercase kebab-case.`);
+  return id;
 }
 
-function boundedRotation(value: unknown): Vec3 {
-  if (!Array.isArray(value) || value.length !== 3 || value.some((item) => typeof item !== 'number' || !Number.isFinite(item))) throw new Error('INVALID_INPUT: rotation must contain three finite numbers.');
-  const rotation = value as Vec3;
-  if (rotation.some((item) => Math.abs(item) > Math.PI * 2)) throw new Error('CONSTRAINT_VIOLATION: rotation exceeds the bounded Euler range.');
-  return rotation.map((item) => Number(item.toFixed(4))) as Vec3;
+function vector(value: unknown, label: string, range: [number, number]): Vec3 {
+  if (!Array.isArray(value) || value.length !== 3 || value.some((item) => typeof item !== 'number' || !Number.isFinite(item))) throw new Error(`INVALID_INPUT: ${label} must contain three finite numbers.`);
+  if (value.some((item) => item < range[0] || item > range[1])) throw new Error(`CONSTRAINT_VIOLATION: ${label} is outside the world envelope.`);
+  return value.map((item) => Number(item.toFixed(4))) as Vec3;
 }
 
-function findComponent(state: ForgeState, id: unknown) {
-  const component = state.components.find((item) => item.id === id);
-  if (!component) throw new Error('INVALID_INPUT: component was not found in the active design.');
-  return component;
+function position(value: unknown, state: ForgeState) {
+  const bound = Math.max(...state.world.bounds);
+  return vector(value, 'position', [-bound, bound]);
+}
+
+function rotation(value: unknown) { return vector(value, 'rotation', [-Math.PI * 2, Math.PI * 2]); }
+
+function dimensions(value: unknown) {
+  const result = vector(value, 'dimensions', [.02, 30]);
+  if (result.some((item) => item <= 0)) throw new Error('INVALID_INPUT: dimensions must be positive.');
+  return result;
+}
+
+function component(state: ForgeState, value: unknown) {
+  const found = state.components.find((item) => item.id === value);
+  if (!found) throw new Error(`INVALID_INPUT: component “${String(value)}” was not found.`);
+  return found;
+}
+
+function assembly(state: ForgeState, value: unknown) {
+  const found = state.assemblies.find((item) => item.id === value);
+  if (!found) throw new Error(`INVALID_INPUT: assembly “${String(value)}” was not found.`);
+  return found;
+}
+
+function joint(state: ForgeState, value: unknown) {
+  const found = state.joints.find((item) => item.id === value);
+  if (!found) throw new Error(`INVALID_INPUT: joint “${String(value)}” was not found.`);
+  return found;
+}
+
+function runFor(state: ForgeState, value: unknown) {
+  const found = value === undefined ? state.runs.at(-1) : state.runs.find((item) => item.id === value);
+  if (!found) throw new Error('INVALID_PHASE: run the simulation before inspecting evidence.');
+  return found;
+}
+
+function lockField(state: ForgeState, target: MachineComponent, field: 'position' | 'rotation' | 'dimensions' | 'material' | 'mass', actor: Actor) {
+  if (target.humanLockedFields.includes(field) && actor !== 'Human') throw new Error(`LOCKED_BY_HUMAN: preserve the human-authored ${field} and redesign around it.`);
+  target.lastModifiedBy = actor;
+  if (actor === 'Human' && !target.humanLockedFields.includes(field)) {
+    target.humanLockedFields.push(field);
+    const existing = state.humanConstraints.find((item) => item.componentId === target.id);
+    if (existing) {
+      if (!existing.fields.includes(field)) existing.fields.push(field);
+      existing.changedAtRevision = state.revision + 1;
+    } else state.humanConstraints.push({ componentId: target.id, fields: [field], lockedForAgent: true, changedAtRevision: state.revision + 1 });
+  }
+}
+
+function asGoal(input: Record<string, unknown>): DesignGoal {
+  const brief = String(input.brief ?? '').trim();
+  if (brief.length < 12 || brief.length > 500) throw new Error('INVALID_INPUT: brief must be 12–500 characters.');
+  const machineName = String(input.machine_name ?? '').trim();
+  const domain = String(input.domain ?? 'General mechanical engineering').trim();
+  if (machineName.length < 3 || machineName.length > 80) throw new Error('INVALID_INPUT: machine_name must be 3–80 characters.');
+  const capabilities = Array.isArray(input.capabilities) ? input.capabilities.map(String) as Capability[] : [];
+  if (!capabilities.length) throw new Error('INVALID_INPUT: at least one engineering capability is required.');
+  const allowedCapabilities = new Set<Capability>(['structure', 'transport', 'classify', 'lift', 'suspend', 'mobile', 'manipulate', 'transmit', 'stabilize', 'track', 'buffer', 'contain', 'rotate', 'measure']);
+  if (capabilities.some((item) => !allowedCapabilities.has(item))) throw new Error('INVALID_INPUT: unknown capability.');
+  const constraints = clone(input.constraints) as GoalConstraint[];
+  if (!Array.isArray(constraints) || !constraints.length || constraints.some((item) => !item || !['min', 'max', 'exact'].includes(item.operator) || !Number.isFinite(item.target))) throw new Error('INVALID_INPUT: provide typed measurable constraints.');
+  const maxComponents = Number(input.max_components);
+  if (!Number.isInteger(maxComponents) || maxComponents < 1 || maxComponents > 80) throw new Error('CONSTRAINT_VIOLATION: max_components must be 1–80.');
+  return {
+    machineName, domain, brief,
+    summary: String(input.summary ?? `Compose ${capabilities.join(', ')} behavior from physical primitives.`).slice(0, 240),
+    capabilities, constraints, maxComponents,
+    assumptions: Array.isArray(input.assumptions) ? input.assumptions.map(String).slice(0, 16) : [],
+    disclaimer: String(input.disclaimer ?? 'Concept-level rigid-body model; validate safety-critical designs before fabrication.').slice(0, 240),
+    simulationModel: String(input.simulation_model ?? 'Generic multi-body Rapier world').slice(0, 160),
+    editableComponentId: String(input.editable_component_id ?? ''),
+    editableLabel: String(input.editable_label ?? 'selected primitive').slice(0, 80),
+  };
+}
+
+function failedFactor(reading: SimulationRun['metrics']['measures'][number]) {
+  if (reading.operator === 'min') return Math.max(1.08, reading.target / Math.max(Math.abs(reading.value), .001) * 1.08);
+  if (reading.operator === 'max') return Math.max(1.08, Math.abs(reading.value) / Math.max(Math.abs(reading.target), .001) * 1.08);
+  return Math.max(1.08, Math.abs(reading.target) / Math.max(Math.abs(reading.value), .001));
+}
+
+function optimizationActions(state: ForgeState, run: SimulationRun) {
+  const actions: OptimizationAction[] = [];
+  const failed = run.metrics.measures.filter((reading) => reading.status === 'fail' && reading.metric !== 'component_count');
+  const metrics = new Set(failed.map((reading) => reading.metric));
+  const factorFor = (...keys: string[]) => Math.min(4, Math.max(1.12, ...failed.filter((item) => keys.includes(item.metric)).map(failedFactor)));
+  const controlMetrics = ['placement_error', 'platform_tilt', 'tracking_error', 'response_time', 'sorting_accuracy', 'control_error', 'peak_acceleration', 'collisions'];
+
+  if (failed.some((reading) => controlMetrics.includes(reading.metric))) for (const control of state.controls) {
+    const before = control.kp;
+    control.kp = Number(Math.min(1.65, Math.max(.95, control.kp * factorFor(...controlMetrics))).toFixed(3));
+    if (control.kp !== before) actions.push({ targetId: control.id, field: 'kp', before, after: control.kp, reason: 'Increase closed-loop authority from the measured tracking error.' });
+    const sensor = state.sensors.find((item) => item.id === control.sensorIds[0]);
+    const sensorBody = sensor ? state.components.find((item) => item.id === sensor.componentId) : undefined;
+    if (sensorBody && control.calibrationX !== sensorBody.position[0]) {
+      const calibrationBefore = control.calibrationX;
+      control.calibrationX = sensorBody.position[0];
+      actions.push({ targetId: control.id, field: 'calibrationX', before: calibrationBefore, after: control.calibrationX, reason: 'Retune the control datum around the human-authored sensor position.' });
+    }
+    if (metrics.has('peak_acceleration')) {
+      const beforeKd = control.kd;
+      control.kd = Number(Math.min(.9, Math.max(.22, control.kd * factorFor('peak_acceleration') * 1.35)).toFixed(3));
+      if (control.kd !== beforeKd) actions.push({ targetId: control.id, field: 'kd', before: beforeKd, after: control.kd, reason: 'Add damping from the measured acceleration overshoot.' });
+    }
+  }
+
+  if (failed.some((reading) => ['payload_capacity', 'joint_margin'].includes(reading.metric))) for (const actuator of state.actuators) {
+    const before = actuator.maxForce;
+    actuator.maxForce = Number((actuator.maxForce * factorFor('payload_capacity', 'joint_margin')).toFixed(1));
+    if (actuator.maxForce !== before) actions.push({ targetId: actuator.id, field: 'maxForce', before, after: actuator.maxForce, reason: 'Restore actuation margin under the measured payload.' });
+  }
+
+  if (failed.some((reading) => ['payload_capacity', 'output_torque', 'joint_margin', 'traction_margin'].includes(reading.metric))) for (const motor of state.motors) {
+    const before = motor.maxTorque;
+    motor.maxTorque = Number((motor.maxTorque * factorFor('payload_capacity', 'output_torque', 'joint_margin', 'traction_margin')).toFixed(1));
+    if (motor.maxTorque !== before) actions.push({ targetId: motor.id, field: 'maxTorque', before, after: motor.maxTorque, reason: 'Raise the measured drive-torque reserve.' });
+  }
+
+  if (failed.some((reading) => ['throughput', 'course_time', 'flow_rate'].includes(reading.metric))) for (const motor of state.motors) {
+    const before = motor.maxRpm;
+    motor.maxRpm = Number(Math.min(2400, motor.maxRpm * factorFor('throughput', 'course_time', 'flow_rate')).toFixed(1));
+    if (motor.maxRpm !== before) actions.push({ targetId: motor.id, field: 'maxRpm', before, after: motor.maxRpm, reason: 'Increase cycle speed from measured throughput or travel time.' });
+  }
+
+  if (metrics.has('peak_acceleration')) for (const actuator of state.actuators) {
+    const before = actuator.maxSpeed;
+    actuator.maxSpeed = Number(Math.max(.08, actuator.maxSpeed / factorFor('peak_acceleration')).toFixed(3));
+    if (actuator.maxSpeed !== before) actions.push({ targetId: actuator.id, field: 'maxSpeed', before, after: actuator.maxSpeed, reason: 'Reduce commanded speed to remain inside the acceleration envelope.' });
+  } else if (metrics.has('response_time')) for (const actuator of state.actuators) {
+    const before = actuator.maxSpeed;
+    actuator.maxSpeed = Number(Math.min(8, actuator.maxSpeed * factorFor('response_time')).toFixed(3));
+    if (actuator.maxSpeed !== before) actions.push({ targetId: actuator.id, field: 'maxSpeed', before, after: actuator.maxSpeed, reason: 'Increase actuator slew rate from measured response time.' });
+  }
+
+  for (const item of state.components) {
+    if (item.primitive === 'spring' && failed.some((reading) => ['platform_tilt', 'stability_margin'].includes(reading.metric))) {
+      const before = Number(item.parameters.stiffness ?? 18000);
+      item.parameters.stiffness = Number((before * factorFor('platform_tilt', 'stability_margin')).toFixed(0));
+      item.parameters.damping = Number((Number(item.parameters.damping ?? 2200) * Math.sqrt(factorFor('platform_tilt'))).toFixed(0));
+      actions.push({ targetId: item.id, field: 'stiffness', before, after: item.parameters.stiffness as number, reason: 'Reduce measured chassis or platform oscillation.' });
+    }
+    if (item.primitive === 'counterweight' && metrics.has('stability_margin') && !item.humanLockedFields.includes('mass')) {
+      const before = item.mass;
+      item.mass = Number((item.mass * factorFor('stability_margin')).toFixed(1));
+      actions.push({ targetId: item.id, field: 'mass', before, after: item.mass, reason: 'Increase the support margin derived from center of mass.' });
+    }
+    if (['beam', 'plate'].includes(item.primitive) && failed.some((reading) => ['deflection', 'safety_factor', 'load_capacity'].includes(reading.metric)) && !item.humanLockedFields.includes('dimensions')) {
+      const before = item.dimensions[1];
+      const stiffnessFactor = metrics.has('deflection') ? Math.cbrt(factorFor('deflection')) : Math.sqrt(factorFor('safety_factor', 'load_capacity'));
+      item.dimensions[1] = Number(Math.min(4, item.dimensions[1] * Math.max(1.14, stiffnessFactor)).toFixed(3));
+      item.mass = componentMass(item.primitive, item.dimensions, item.materialId);
+      actions.push({ targetId: item.id, field: 'section depth', before, after: item.dimensions[1], reason: 'Reduce graph-derived member deflection under the design load.' });
+    }
+    if (item.primitive === 'gear' && metrics.has('transmission_efficiency')) {
+      const before = Number(item.parameters.mesh_efficiency ?? .85);
+      item.parameters.mesh_efficiency = Math.max(.9, Math.min(.97, failed.find((reading) => reading.metric === 'transmission_efficiency')!.target / 100 + .025));
+      actions.push({ targetId: item.id, field: 'mesh_efficiency', before, after: item.parameters.mesh_efficiency as number, reason: 'Select a lower-loss mesh specification from the measured transmission loss.' });
+    }
+    if (item.primitive === 'ramp' && metrics.has('drop_height') && !item.humanLockedFields.includes('position')) {
+      const conveyor = state.components.find((componentItem) => componentItem.primitive === 'conveyor');
+      if (conveyor) {
+        const before = item.position[1];
+        item.position[1] = Number((conveyor.position[1] - Math.min(.08, item.dimensions[1] / 2)).toFixed(3));
+        actions.push({ targetId: item.id, field: 'position.y', before, after: item.position[1], reason: 'Align the transfer surfaces to reduce the measured drop.' });
+      }
+    }
+  }
+
+  if (metrics.has('assembly_integrity') && state.components.length > 1) {
+    const connected = new Set<string>([state.components[0].id]);
+    for (const edge of [...state.connections.filter((item) => item.type === 'mechanical').map((item) => [item.sourceId, item.targetId]), ...state.joints.map((item) => [item.componentA, item.componentB])]) {
+      if (connected.has(edge[0])) connected.add(edge[1]);
+      if (connected.has(edge[1])) connected.add(edge[0]);
+    }
+    for (const item of state.components.filter((componentItem) => !connected.has(componentItem.id))) {
+      const id = `repair-connection-${state.connections.length + 1}`;
+      state.connections.push({ id, sourceId: state.components[0].id, targetId: item.id, type: 'mechanical', channel: 'optimization_repair' });
+      connected.add(item.id);
+      actions.push({ targetId: id, field: 'mechanical connection', before: 'disconnected', after: 'connected', reason: 'Repair the disconnected assembly graph revealed by the integrity measurement.' });
+    }
+  }
+  return actions;
 }
 
 export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: Record<string, unknown>, actor: Actor): { state: ForgeState; result: ToolResult } {
@@ -84,178 +273,309 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   if (mutationTools.has(name)) assertGuard(state, input);
 
   if (name === 'inspect_workspace') {
-    const sinceRevision = typeof input.since_revision === 'number' ? input.since_revision : null;
-    state = activity(state, name, `Inspected revision ${state.revision}; ${state.components.length} components and ${state.humanConstraints.length} human constraint${state.humanConstraints.length === 1 ? '' : 's'} visible.`, actor, 'read');
-    return { state, result: success(state, 'Workspace inspected.', { phase: state.phase, goal: state.goal, components: state.components, connections: state.connections, sensor_attachments: state.sensorAttachments, actuator_attachments: state.actuatorAttachments, control_rules: state.controlRules, motor_speed: state.motorSpeed, actuator_delay_ms: state.actuatorDelayMs, actuator_hold_ms: state.actuatorHoldMs, latest_run: state.runs.at(-1) ? { id: state.runs.at(-1)!.id, status: state.runs.at(-1)!.status, metrics: state.runs.at(-1)!.metrics } : null, human_constraints: state.humanConstraints, changes_since_revision: sinceRevision === null ? [] : state.revisions.filter((item) => item.revision > sinceRevision).map((item) => ({ revision: item.revision, label: item.label, actor: item.actor })) }) };
+    const since = typeof input.since_revision === 'number' ? input.since_revision : null;
+    state = addActivity(state, name, `Inspected ${state.components.length} bodies, ${state.joints.length} joints, and ${state.controls.length} controllers.`, actor, 'read');
+    return { state, result: success(state, 'World inspected.', { phase: state.phase, world: state.world, goal: state.goal, assemblies: state.assemblies, components: state.components, connections: state.connections, joints: state.joints, motors: state.motors, sensors: state.sensors, actuators: state.actuators, controls: state.controls, human_constraints: state.humanConstraints, latest_run: state.runs.at(-1) ?? null, changes_since_revision: since === null ? [] : state.revisions.filter((item) => item.revision > since).map((item) => ({ revision: item.revision, label: item.label, actor: item.actor })) }) };
   }
-  if (name === 'inspect_component_catalog') {
-    state = activity(state, name, `Inspected ${componentCatalog.length} validated catalog components.`, actor, 'read');
-    return { state, result: success(state, 'Component catalog inspected.', { catalog_version: '2026.08', components: componentCatalog }) };
+  if (name === 'inspect_primitive_catalog') {
+    const query = String(input.query ?? '').toLowerCase();
+    const items = query ? primitiveCatalog.filter((item) => `${item.name} ${item.family} ${item.capabilities.join(' ')}`.toLowerCase().includes(query)) : primitiveCatalog;
+    state = addActivity(state, name, `Inspected ${items.length} reusable primitives and ${materials.length} materials.`, actor, 'read');
+    return { state, result: success(state, 'Primitive catalog inspected.', { architecture: 'world-first-v3', primitives: items, materials, note: 'Semantic machines are assemblies created from these lower-level bodies; no complete machine templates are stored.' }) };
   }
   if (name === 'inspect_telemetry') {
-    const run = state.runs.find((item) => item.id === input.run_id) ?? state.runs.at(-1);
-    if (!run) throw new Error('INVALID_PHASE: run the simulation before inspecting telemetry.');
-    state = activity(state, name, `Measured ${run.sensorToDiverterMs} ms sensor-to-diverter travel; recommended ${run.recommendedDelayMs} ms command delay.`, actor, 'read');
-    return { state, result: success(state, 'Telemetry inspected.', { run_id: run.id, sensor_to_diverter_ms: run.sensorToDiverterMs, servo_settle_ms: 125, recommended_delay_ms: run.recommendedDelayMs, metrics: run.metrics, samples: run.telemetry.slice(0, 80) }) };
+    const run = runFor(state, input.run_id);
+    state = addActivity(state, name, `Read ${run.telemetry.length} samples and objective ${run.objective.toFixed(3)}.`, actor, 'read');
+    return { state, result: success(state, 'Telemetry inspected.', { run_id: run.id, metrics: run.metrics, diagnosis: run.diagnosis, physics: run.physics, samples: run.telemetry.slice(0, 120) }) };
   }
-  if (name === 'get_failure_events') {
-    const run = state.runs.find((item) => item.id === input.run_id) ?? state.runs.at(-1);
-    if (!run) throw new Error('INVALID_PHASE: no simulation run exists.');
-    state = activity(state, name, `Found ${run.failures.length} measured failure event${run.failures.length === 1 ? '' : 's'}.`, actor, 'read');
-    return { state, result: success(state, 'Failure events inspected.', run.failures.slice(0, 30)) };
+  if (name === 'inspect_failure') {
+    const run = runFor(state, input.run_id);
+    state = addActivity(state, name, `Inspected ${run.failures.length} causal failure${run.failures.length === 1 ? '' : 's'}.`, actor, 'read');
+    return { state, result: success(state, 'Failure evidence inspected.', { failures: run.failures, collisions: run.collisions, recommendations: run.diagnosis.recommendations }) };
   }
-  if (name === 'inspect_collisions') {
-    const run = state.runs.find((item) => item.id === input.run_id) ?? state.runs.at(-1);
-    if (!run) throw new Error('INVALID_PHASE: no simulation run exists.');
-    state = activity(state, name, `Inspected ${run.collisions.length} harmful collision${run.collisions.length === 1 ? '' : 's'} from Rapier body poses.`, actor, 'read');
-    return { state, result: success(state, 'Collisions inspected.', run.collisions.slice(0, 30)) };
+  if (name === 'measure_constraint') {
+    const run = runFor(state, input.run_id);
+    const metric = String(input.metric ?? '');
+    const reading = run.metrics.measures.find((item) => item.metric === metric);
+    if (!reading) throw new Error(`INVALID_INPUT: metric “${metric}” is not present in this run.`);
+    state = addActivity(state, name, `Measured ${reading.label}: ${reading.value}${reading.unit} from ${reading.provenance}.`, actor, 'read');
+    return { state, result: success(state, 'Constraint measured.', reading) };
   }
   if (name === 'compare_designs') {
     const a = state.revisions.find((item) => item.revision === input.revision_a) ?? state.revisions.at(0);
     const b = state.revisions.find((item) => item.revision === input.revision_b) ?? state.revisions.at(-1);
-    if (!a || !b) throw new Error('INVALID_INPUT: two saved design revisions are required.');
-    const componentMoves = b.components.flatMap((component) => {
-      const before = a.components.find((item) => item.id === component.id);
-      return before && JSON.stringify(before.position) !== JSON.stringify(component.position) ? [{ id: component.id, from: before.position, to: component.position, actor: component.lastModifiedBy }] : [];
-    });
-    state = activity(state, name, `Compared revision ${a.revision} with ${b.revision}.`, actor, 'read');
-    return { state, result: success(state, 'Designs compared.', { from: a, to: b, changes: { component_delta: b.components.length - a.components.length, timing_delta_ms: b.actuatorDelayMs - a.actuatorDelayMs, motor_speed_delta: b.motorSpeed - a.motorSpeed, component_moves: componentMoves } }) };
+    if (!a || !b) throw new Error('INVALID_INPUT: two saved revisions are required.');
+    state = addActivity(state, name, `Compared revision ${a.revision} with ${b.revision}.`, actor, 'read');
+    return { state, result: success(state, 'Designs compared.', { from: a, to: b, changes: { component_delta: b.components.length - a.components.length, joint_delta: b.joints.length - a.joints.length, mass_delta: Number((b.components.reduce((sum, item) => sum + item.mass, 0) - a.components.reduce((sum, item) => sum + item.mass, 0)).toFixed(2)), optimization_delta: b.optimizationLevel - a.optimizationLevel } }) };
   }
 
   if (name === 'set_design_goal') {
-    const throughputBpm = Number(input.throughput_bpm);
-    const minAccuracyPct = Number(input.min_accuracy_pct);
-    const maxComponents = Number(input.max_components);
-    if (!Number.isFinite(throughputBpm) || throughputBpm < 5 || throughputBpm > 40) throw new Error('CONSTRAINT_VIOLATION: throughput must be 5–40 boxes/min for this validated cell.');
-    if (!Number.isFinite(minAccuracyPct) || minAccuracyPct < 50 || minAccuracyPct > 100) throw new Error('CONSTRAINT_VIOLATION: accuracy must be 50–100%.');
-    if (!Number.isInteger(maxComponents) || maxComponents < 7 || maxComponents > 12) throw new Error('CONSTRAINT_VIOLATION: the two-lane sorter requires a 7–12 component budget.');
-    const brief = typeof input.brief === 'string' && input.brief.trim() ? input.brief.trim().slice(0, 500) : undefined;
-    state.goal = { throughputBpm, minAccuracyPct, maxComponents, colors: ['red', 'blue'], brief };
+    state.goal = asGoal(input);
+    if (input.world && typeof input.world === 'object') {
+      const requested = input.world as Record<string, unknown>;
+      const allowed = new Set(['gravity', 'duration', 'bounds', 'environment']);
+      if (Object.keys(requested).some((key) => !allowed.has(key))) throw new Error('INVALID_INPUT: world only accepts gravity, duration, bounds, and environment. Fixed-step rate and seed are immutable.');
+      const gravity = requested.gravity === undefined ? state.world.gravity : vector(requested.gravity, 'world.gravity', [-30, 30]);
+      const bounds = requested.bounds === undefined ? state.world.bounds : vector(requested.bounds, 'world.bounds', [.1, 60]);
+      const duration = requested.duration === undefined ? state.world.duration : Number(requested.duration);
+      if (!Number.isFinite(duration) || duration < 1 || duration > 30) throw new Error('INVALID_INPUT: world.duration must be between 1 and 30 seconds.');
+      const environment = requested.environment === undefined ? state.world.environment : String(requested.environment).slice(0, 80);
+      state.world = { gravity, bounds, duration, environment, timestepHz: 60, seed: 424242 };
+    }
     state.phase = 'building';
-    state = designMutation(state, name, 'Design goal set', actor, `Target locked: ≥${throughputBpm} boxes/min, ≥${minAccuracyPct}% accuracy, ≤${maxComponents} components.`);
+    state.optimizationLevel = 0;
+    state = designMutation(state, name, 'Design goal decomposed', actor, `${state.goal.machineName}: ${state.goal.capabilities.join(', ')}; ${state.goal.constraints.length} measured constraints.`);
     return { state, result: success(state, 'Design goal set.', state.goal) };
   }
-  if (name === 'add_component') {
-    const catalogId = String(input.catalog_id ?? '');
-    const item = componentCatalog.find((candidate) => candidate.catalogId === catalogId);
-    if (!item) throw new Error('INVALID_INPUT: catalog component does not exist.');
-    if (!state.goal) throw new Error('INVALID_PHASE: set the design goal before adding components.');
-    if (state.components.length >= state.goal.maxComponents) throw new Error('CONSTRAINT_VIOLATION: the component limit has been reached.');
-    if (state.components.filter((component) => component.catalogId === catalogId).length >= item.quantityLimit) throw new Error('CONSTRAINT_VIOLATION: catalog quantity limit reached.');
-    const position = input.position ? boundedPosition(input.position) : item.defaultPosition;
-    const component: MachineComponent = { id: componentIdFor(catalogId), catalogId, name: item.name, kind: item.kind, position, rotation: item.defaultRotation, color: item.color, parameters: {}, lastModifiedBy: actor, humanLocked: false };
-    state.components.push(component);
-    state = designMutation(state, name, `${item.name} added`, actor, `Placed ${item.name} at [${position.join(', ')}].`);
-    return { state, result: success(state, `${item.name} added.`, component) };
+  if (name === 'create_assembly') {
+    const id = idValue(input.assembly_id, 'assembly_id');
+    if (state.assemblies.some((item) => item.id === id)) throw new Error('CONSTRAINT_VIOLATION: assembly_id already exists.');
+    if (input.parent_id) assembly(state, input.parent_id);
+    const value: Assembly = { id, name: String(input.name ?? id).slice(0, 80), purpose: String(input.purpose ?? 'Mechanical subsystem').slice(0, 160), parentId: input.parent_id ? String(input.parent_id) : undefined, componentIds: [] };
+    state.assemblies.push(value);
+    state = designMutation(state, name, `${value.name} assembly created`, actor, `Created empty assembly “${value.name}”.`);
+    return { state, result: success(state, 'Assembly created.', value) };
+  }
+  if (name === 'create_component') {
+    if (!state.goal) throw new Error('INVALID_PHASE: set a design goal before creating bodies.');
+    if (state.components.length >= state.goal.maxComponents) throw new Error('CONSTRAINT_VIOLATION: component budget reached.');
+    const id = idValue(input.component_id, 'component_id');
+    if (state.components.some((item) => item.id === id)) throw new Error('CONSTRAINT_VIOLATION: component_id already exists.');
+    const primitive = String(input.primitive ?? '') as PrimitiveKind;
+    const catalog = catalogFor(primitive);
+    const targetAssembly = assembly(state, input.assembly_id);
+    const size = dimensions(input.dimensions ?? catalog.defaultDimensions);
+    const materialId = String(input.material_id ?? catalog.defaultMaterial);
+    const material = materialFor(materialId);
+    if (material.id !== materialId) throw new Error('INVALID_INPUT: material_id is not in the material library.');
+    const bodyType = String(input.body_type ?? catalog.defaultBodyType) as BodyType;
+    if (!['fixed', 'dynamic', 'kinematic'].includes(bodyType)) throw new Error('INVALID_INPUT: body_type must be fixed, dynamic, or kinematic.');
+    const explicitMass = input.mass === undefined ? undefined : Number(input.mass);
+    if (explicitMass !== undefined && (!Number.isFinite(explicitMass) || explicitMass <= 0 || explicitMass > 100000)) throw new Error('INVALID_INPUT: mass must be a positive finite value below 100000 kg.');
+    const value: MachineComponent = {
+      id, primitive, name: catalog.name, assemblyId: targetAssembly.id, role: String(input.role ?? catalog.name).slice(0, 80), shape: catalog.shape,
+      position: position(input.position ?? [0, .5, 0], state), rotation: rotation(input.rotation ?? [0, 0, 0]), dimensions: size,
+      materialId, mass: explicitMass ?? componentMass(primitive, size, materialId), bodyType, color: String(input.color ?? material.color ?? catalog.color).slice(0, 20),
+      parameters: input.parameters && typeof input.parameters === 'object' ? clone(input.parameters as Record<string, number | string | boolean>) : {}, lastModifiedBy: actor, humanLockedFields: [],
+    };
+    state.components.push(value); targetAssembly.componentIds.push(id);
+    state = designMutation(state, name, `${value.role} created`, actor, `Created ${primitive} “${id}” with ${value.materialId}, ${value.mass} kg, and ${value.dimensions.join(' × ')} m dimensions.`);
+    return { state, result: success(state, 'Component created.', value) };
+  }
+  if (name === 'set_dimensions') {
+    const target = component(state, input.component_id); lockField(state, target, 'dimensions', actor);
+    target.dimensions = dimensions(input.dimensions);
+    if (!target.humanLockedFields.includes('mass')) target.mass = componentMass(target.primitive, target.dimensions, target.materialId);
+    state = designMutation(state, name, `${target.role} resized`, actor, `Set ${target.id} dimensions to ${target.dimensions.join(' × ')} m.`);
+    return { state, result: success(state, 'Dimensions updated.', target) };
+  }
+  if (name === 'set_material') {
+    const target = component(state, input.component_id); lockField(state, target, 'material', actor);
+    const materialId = String(input.material_id ?? ''); const material = materialFor(materialId);
+    if (material.id !== materialId) throw new Error('INVALID_INPUT: unknown material.');
+    target.materialId = materialId; target.color = material.color;
+    if (!target.humanLockedFields.includes('mass')) target.mass = componentMass(target.primitive, target.dimensions, materialId);
+    state = designMutation(state, name, `${target.role} material changed`, actor, `Set ${target.id} to ${material.name}; mass recalculated to ${target.mass} kg.`);
+    return { state, result: success(state, 'Material updated.', target) };
+  }
+  if (name === 'set_mass') {
+    const target = component(state, input.component_id); lockField(state, target, 'mass', actor);
+    const mass = Number(input.mass);
+    if (!Number.isFinite(mass) || mass <= 0 || mass > 100000) throw new Error('INVALID_INPUT: mass must be positive and below 100000 kg.');
+    target.mass = Number(mass.toFixed(3));
+    state = designMutation(state, name, `${target.role} mass changed`, actor, `Set ${target.id} mass to ${target.mass} kg.`);
+    return { state, result: success(state, 'Mass updated.', target) };
   }
   if (name === 'move_component') {
-    const component = findComponent(state, input.component_id);
-    if (component.humanLocked && actor !== 'Human') throw new Error('LOCKED_BY_HUMAN: preserve the human-positioned component and retune around it.');
-    component.position = boundedPosition(input.position);
-    component.lastModifiedBy = actor;
-    if (actor === 'Human') {
-      component.humanLocked = true;
-      state.humanConstraints = [...state.humanConstraints.filter((item) => item.componentId !== component.id), { componentId: component.id, fields: ['position'], lockedForAgent: true, changedAtRevision: state.revision + 1 }];
-    }
-    state = designMutation(state, name, `${component.name} moved`, actor, `${actor === 'Human' ? 'Human moved and locked' : 'Moved'} ${component.name} to x ${component.position[0].toFixed(2)} m.`);
-    if (actor === 'Human') state = activity(state, 'human_drag', `Manual change detected at revision ${state.revision}; sensor position preserved for agent retuning.`, actor);
-    return { state, result: success(state, `${component.name} moved.`, { component, human_constraint: component.humanLocked }) };
+    const target = component(state, input.component_id); lockField(state, target, 'position', actor);
+    target.position = position(input.position, state);
+    state = designMutation(state, name, `${target.role} moved`, actor, `${actor === 'Human' ? 'Human locked' : 'Moved'} ${target.id} at [${target.position.join(', ')}].`);
+    if (actor === 'Human') state = addActivity(state, 'human_drag', `Shared geometry changed at revision ${state.revision}; the optimizer must preserve it.`, actor);
+    return { state, result: success(state, 'Component moved.', target) };
   }
   if (name === 'rotate_component') {
-    const component = findComponent(state, input.component_id);
-    if (component.humanLocked && actor !== 'Human') throw new Error('LOCKED_BY_HUMAN: preserve the human transform.');
-    component.rotation = boundedRotation(input.rotation);
-    component.lastModifiedBy = actor;
-    state = designMutation(state, name, `${component.name} rotated`, actor, `Rotated ${component.name}.`);
-    return { state, result: success(state, `${component.name} rotated.`, component) };
+    const target = component(state, input.component_id); lockField(state, target, 'rotation', actor);
+    target.rotation = rotation(input.rotation);
+    state = designMutation(state, name, `${target.role} rotated`, actor, `${actor === 'Human' ? 'Human locked' : 'Rotated'} ${target.id}.`);
+    return { state, result: success(state, 'Component rotated.', target) };
   }
   if (name === 'connect_components') {
-    const source = findComponent(state, input.source_id);
-    const target = findComponent(state, input.target_id);
-    const sourceCatalog = componentCatalog.find((item) => item.catalogId === source.catalogId)!;
-    const targetCatalog = componentCatalog.find((item) => item.catalogId === target.catalogId)!;
-    const sourcePort = sourceCatalog.ports.find((item) => item.id === input.source_port && item.direction === 'output');
-    const targetPort = targetCatalog.ports.find((item) => item.id === input.target_port && item.direction === 'input');
-    if (!sourcePort || !targetPort || sourcePort.type !== targetPort.type) throw new Error('INVALID_TOPOLOGY: ports are missing or incompatible.');
-    if (state.connections.some((item) => item.sourceId === source.id && item.targetId === target.id && item.sourcePort === sourcePort.id)) throw new Error('CONSTRAINT_VIOLATION: connection already exists.');
-    state.connections.push({ id: `connection-${state.connections.length + 1}`, sourceId: source.id, sourcePort: sourcePort.id, targetId: target.id, targetPort: targetPort.id, type: sourcePort.type });
-    state = designMutation(state, name, 'Control connection created', actor, `Connected ${source.name} → ${target.name} (${sourcePort.type}).`);
-    return { state, result: success(state, 'Components connected.', state.connections.at(-1)) };
+    const source = component(state, input.source_id); const target = component(state, input.target_id);
+    if (source.id === target.id) throw new Error('INVALID_TOPOLOGY: a component cannot connect to itself.');
+    const type = String(input.connection_type ?? 'mechanical') as 'mechanical' | 'power' | 'signal';
+    if (!['mechanical', 'power', 'signal'].includes(type)) throw new Error('INVALID_INPUT: unsupported connection_type.');
+    if (state.connections.some((item) => item.sourceId === source.id && item.targetId === target.id && item.type === type)) throw new Error('CONSTRAINT_VIOLATION: connection already exists.');
+    const value = { id: idValue(input.connection_id ?? `connection-${state.connections.length + 1}`, 'connection_id'), sourceId: source.id, targetId: target.id, type, channel: String(input.channel ?? type).slice(0, 48) };
+    if (state.connections.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: connection_id already exists.');
+    state.connections.push(value);
+    state = designMutation(state, name, 'Component connection created', actor, `Connected ${source.id} → ${target.id} by ${type}.`);
+    return { state, result: success(state, 'Components connected.', value) };
   }
-  if (name === 'attach_sensor') {
-    const sensor = findComponent(state, input.sensor_id);
-    if (sensor.kind !== 'color_sensor' && sensor.kind !== 'proximity_sensor') throw new Error('INVALID_INPUT: target is not a sensor.');
-    state.sensorAttachments = [...state.sensorAttachments.filter((item) => item.sensorId !== sensor.id), { sensorId: sensor.id, channel: input.channel === 'presence' ? 'presence' : 'color', targetZone: String(input.target_zone ?? 'conveyor-main'), range: Math.min(2, Math.max(0.1, Number(input.range ?? 1.4))) }];
-    state = designMutation(state, name, 'Sensor attached', actor, `${sensor.name} now observes the conveyor decision lane.`);
-    return { state, result: success(state, 'Sensor attached.', state.sensorAttachments.at(-1)) };
+  if (name === 'create_joint') {
+    const a = component(state, input.component_a); const b = component(state, input.component_b);
+    if (a.id === b.id) throw new Error('INVALID_TOPOLOGY: a joint needs two different bodies.');
+    const id = idValue(input.joint_id, 'joint_id');
+    if (state.joints.some((item) => item.id === id)) throw new Error('CONSTRAINT_VIOLATION: joint_id already exists.');
+    const type = String(input.joint_type ?? '') as JointType;
+    if (!['fixed', 'revolute', 'prismatic', 'spherical', 'spring', 'rope', 'gear', 'belt'].includes(type)) throw new Error('INVALID_INPUT: unsupported joint_type.');
+    const rawAxis = vector(input.axis ?? [0, 1, 0], 'axis', [-1, 1]);
+    const axisLength = Math.hypot(...rawAxis);
+    if (axisLength < .5) throw new Error('INVALID_INPUT: joint axis must be non-zero.');
+    const axis = rawAxis.map((value) => Number((value / axisLength).toFixed(5))) as Vec3;
+    const limits = input.limits === undefined ? undefined : vector([...(input.limits as number[]), 0].slice(0, 3), 'limits', [-100, 100]).slice(0, 2) as [number, number];
+    if (limits && limits[0] > limits[1]) throw new Error('INVALID_INPUT: joint limits are reversed.');
+    const ratio = input.ratio === undefined ? undefined : Number(input.ratio);
+    if ((type === 'gear' || type === 'belt') && (!ratio || !Number.isFinite(ratio) || ratio <= 0)) throw new Error('INVALID_INPUT: gear and belt joints require a positive ratio.');
+    const stiffness = input.stiffness === undefined ? undefined : Number(input.stiffness);
+    const damping = input.damping === undefined ? undefined : Number(input.damping);
+    if ((stiffness !== undefined && (!Number.isFinite(stiffness) || stiffness < 0)) || (damping !== undefined && (!Number.isFinite(damping) || damping < 0))) throw new Error('INVALID_INPUT: stiffness and damping must be finite and non-negative.');
+    const value = { id, type, componentA: a.id, componentB: b.id, anchorA: vector(input.anchor_a ?? [0, 0, 0], 'anchor_a', [-30, 30]), anchorB: vector(input.anchor_b ?? [0, 0, 0], 'anchor_b', [-30, 30]), axis, limits, ratio, stiffness, damping };
+    state.joints.push(value);
+    state = designMutation(state, name, `${type} joint created`, actor, `Joined ${a.id} ↔ ${b.id} with ${type} joint “${id}”.`);
+    return { state, result: success(state, 'Joint created.', value) };
   }
-  if (name === 'attach_actuator') {
-    const actuator = findComponent(state, input.actuator_id);
-    if (actuator.kind !== 'servo_diverter') throw new Error('INVALID_INPUT: target is not a compatible actuator.');
-    state.actuatorAttachments = [...state.actuatorAttachments.filter((item) => item.actuatorId !== actuator.id), { actuatorId: actuator.id, targetId: String(input.target_id ?? actuator.id), axis: input.axis === 'x' || input.axis === 'z' ? input.axis : 'y', travelDegrees: Math.min(60, Math.max(10, Number(input.travel_degrees ?? 32))) }];
-    state = designMutation(state, name, 'Actuator attached', actor, 'Bound servo diverter to a constrained ±32° rotary path.');
-    return { state, result: success(state, 'Actuator attached.', state.actuatorAttachments.at(-1)) };
+  if (name === 'add_motor') {
+    const target = component(state, input.component_id); const jointId = input.joint_id ? joint(state, input.joint_id).id : undefined;
+    if (target.primitive !== 'motor') throw new Error('INVALID_INPUT: add_motor targets a motor primitive.');
+    const value = { id: idValue(input.motor_id, 'motor_id'), componentId: target.id, jointId, maxTorque: Number(input.max_torque), maxRpm: Number(input.max_rpm), direction: Number(input.direction ?? 1) };
+    if (state.motors.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: motor_id already exists.');
+    if (![value.maxTorque, value.maxRpm, value.direction].every(Number.isFinite) || value.maxTorque <= 0 || value.maxRpm <= 0) throw new Error('INVALID_INPUT: motor torque and rpm must be positive finite values.');
+    state.motors.push(value);
+    state = designMutation(state, name, 'Motor drive added', actor, `Motor ${value.id}: ${value.maxTorque} N·m at ${value.maxRpm} rpm.`);
+    return { state, result: success(state, 'Motor added.', value) };
   }
-  if (name === 'create_control_rule') {
-    const sensor = findComponent(state, input.sensor_id);
-    const actuator = findComponent(state, input.actuator_id);
-    const condition = input.condition === 'blue' ? 'blue' : 'red';
-    state.controlRules = [...state.controlRules.filter((item) => item.condition !== condition), { id: `rule-${condition}`, sensorId: sensor.id, condition, actuatorId: actuator.id, targetAngle: condition === 'red' ? -32 : 32, priority: Number(input.priority ?? 1) }];
-    state = designMutation(state, name, `${condition} route rule created`, actor, `${condition} signal routes the diverter to ${condition === 'red' ? '−32°' : '+32°'}.`);
-    return { state, result: success(state, 'Control rule created.', state.controlRules.at(-1)) };
+  if (name === 'add_sensor') {
+    const target = component(state, input.component_id); if (!['sensor', 'camera'].includes(target.primitive)) throw new Error('INVALID_INPUT: add_sensor targets a sensor or camera primitive.');
+    if (input.target_id) component(state, input.target_id);
+    const type = String(input.sensor_type ?? 'position') as SensorType;
+    const allowed: SensorType[] = ['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence'];
+    if (!allowed.includes(type)) throw new Error('INVALID_INPUT: unsupported sensor_type.');
+    const value = { id: idValue(input.sensor_id, 'sensor_id'), componentId: target.id, type, channel: String(input.channel ?? type).slice(0, 48), targetId: input.target_id ? String(input.target_id) : undefined, range: Number(input.range ?? 4) };
+    if (state.sensors.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: sensor_id already exists.');
+    if (!Number.isFinite(value.range) || value.range <= 0 || value.range > 100) throw new Error('INVALID_INPUT: sensor range must be 0–100 m.');
+    state.sensors.push(value);
+    state = designMutation(state, name, 'Sensor channel added', actor, `${value.id} measures ${value.channel}${value.targetId ? ` on ${value.targetId}` : ''}.`);
+    return { state, result: success(state, 'Sensor added.', value) };
   }
-  if (name === 'set_motor_speed') {
-    findComponent(state, input.component_id);
-    const speed = Number(input.speed_mps);
-    if (!Number.isFinite(speed) || speed < 0.3 || speed > 3) throw new Error('CONSTRAINT_VIOLATION: belt speed must be 0.3–3.0 m/s.');
-    state.motorSpeed = Number(speed.toFixed(2));
-    state = designMutation(state, name, 'Conveyor speed tuned', actor, `Set belt velocity to ${state.motorSpeed.toFixed(2)} m/s.`);
-    return { state, result: success(state, 'Motor speed set.', { speed_mps: state.motorSpeed }) };
+  if (name === 'add_actuator') {
+    const target = component(state, input.component_id); const targetJoint = joint(state, input.joint_id);
+    if (!['motor', 'servo', 'piston'].includes(target.primitive)) throw new Error('INVALID_INPUT: actuator body must be motor, servo, or piston.');
+    const value = { id: idValue(input.actuator_id, 'actuator_id'), componentId: target.id, jointId: targetJoint.id, type: String(input.actuator_type ?? 'servo') as 'rotary-motor' | 'servo' | 'linear' | 'piston' | 'winch', maxForce: Number(input.max_force), maxSpeed: Number(input.max_speed), travel: Number(input.travel) };
+    if (state.actuators.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: actuator_id already exists.');
+    if (![value.maxForce, value.maxSpeed, value.travel].every(Number.isFinite) || value.maxForce <= 0 || value.maxSpeed <= 0 || value.travel <= 0) throw new Error('INVALID_INPUT: actuator limits must be positive finite values.');
+    state.actuators.push(value);
+    state = designMutation(state, name, 'Actuator added', actor, `${value.id} drives ${targetJoint.id} with ${value.maxForce} N limit.`);
+    return { state, result: success(state, 'Actuator added.', value) };
   }
-  if (name === 'set_actuator_timing') {
-    findComponent(state, input.actuator_id);
-    const delay = Number(input.delay_ms);
-    const hold = Number(input.hold_ms ?? state.actuatorHoldMs);
-    if (!Number.isFinite(delay) || delay < 120 || delay > 2200 || !Number.isFinite(hold) || hold < 300 || hold > 1400) throw new Error('CONSTRAINT_VIOLATION: actuator timing is outside the catalog-safe envelope.');
-    state.actuatorDelayMs = Math.round(delay);
-    state.actuatorHoldMs = Math.round(hold);
-    state = designMutation(state, name, 'Actuator timing retuned', actor, `Set diverter delay to ${state.actuatorDelayMs} ms; sensor position unchanged.`);
-    return { state, result: success(state, 'Actuator timing set.', { delay_ms: state.actuatorDelayMs, hold_ms: state.actuatorHoldMs }) };
+  if (name === 'set_control_logic') {
+    const sensorIds = Array.isArray(input.sensor_ids) ? input.sensor_ids.map(String) : [];
+    const actuatorIds = Array.isArray(input.actuator_ids) ? input.actuator_ids.map(String) : [];
+    sensorIds.forEach((id) => { if (!state.sensors.some((item) => item.id === id)) throw new Error(`INVALID_INPUT: sensor “${id}” was not found.`); });
+    actuatorIds.forEach((id) => { if (!state.actuators.some((item) => item.id === id)) throw new Error(`INVALID_INPUT: actuator “${id}” was not found.`); });
+    const mode = String(input.mode ?? 'pid') as ControlMode;
+    if (!['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized'].includes(mode)) throw new Error('INVALID_INPUT: unsupported control mode.');
+    const firstSensor = state.sensors.find((item) => item.id === sensorIds[0]);
+    const sensorBody = firstSensor ? state.components.find((item) => item.id === firstSensor.componentId) : undefined;
+    const value = { id: idValue(input.control_id, 'control_id'), name: String(input.name ?? 'Controller').slice(0, 80), mode, sensorIds, actuatorIds, expression: String(input.expression ?? 'hold measured state at setpoint').slice(0, 180), setpoint: Number(input.setpoint ?? 0), kp: Number(input.kp ?? .55), ki: Number(input.ki ?? .02), kd: Number(input.kd ?? .08), calibrationX: Number(input.calibration_x ?? sensorBody?.position[0] ?? 0) };
+    if (state.controls.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: control_id already exists.');
+    if (![value.setpoint, value.kp, value.ki, value.kd, value.calibrationX].every(Number.isFinite)) throw new Error('INVALID_INPUT: control values must be finite.');
+    state.controls.push(value);
+    state = designMutation(state, name, 'Control logic added', actor, `${value.mode} controller “${value.id}” connects ${sensorIds.length} sensor${sensorIds.length === 1 ? '' : 's'} to ${actuatorIds.length} actuator${actuatorIds.length === 1 ? '' : 's'}.`);
+    return { state, result: success(state, 'Control logic set.', value) };
+  }
+  if (name === 'optimize_design') {
+    const latest = runFor(state, input.run_id);
+    if (latest.status === 'passed') throw new Error('INVALID_PHASE: the latest design already satisfies every measured constraint.');
+    if (latest.designHash !== state.designHash || latest.designRevision !== state.designRevision) throw new Error('STALE_RUN: the world changed after this run. Simulate the current design before optimizing it.');
+    const actions = optimizationActions(state, latest);
+    if (!actions.length) throw new Error('NO_CAUSAL_REDESIGN: no unlocked physical, control, or topology field can address the measured failure.');
+    state.optimizationLevel += 1;
+    state = designMutation(state, name, `Optimization pass ${state.optimizationLevel}`, actor, `Applied ${actions.length} bounded physical and control changes from failure evidence; human locks preserved.`);
+    return { state, result: success(state, 'Design optimized.', { actions, objective_before: latest.objective, human_constraints_preserved: state.humanConstraints }) };
+  }
+  if (name === 'remove_joint') {
+    const target = joint(state, input.joint_id);
+    const removedActuators = new Set(state.actuators.filter((item) => item.jointId === target.id).map((item) => item.id));
+    state.joints = state.joints.filter((item) => item.id !== target.id);
+    state.motors = state.motors.filter((item) => item.jointId !== target.id);
+    state.actuators = state.actuators.filter((item) => item.jointId !== target.id);
+    state.controls = state.controls.map((item) => ({ ...item, actuatorIds: item.actuatorIds.filter((id) => !removedActuators.has(id)) })).filter((item) => item.sensorIds.length || item.actuatorIds.length);
+    state = designMutation(state, name, `${target.type} joint removed`, actor, `Removed ${target.id} and dependent drives.`);
+    return { state, result: success(state, 'Joint removed.') };
+  }
+  if (name === 'remove_component') {
+    const target = component(state, input.component_id);
+    if (target.humanLockedFields.length && actor !== 'Human') throw new Error('LOCKED_BY_HUMAN: the component contains human-authored fields.');
+    const attachedJoints = state.joints.filter((item) => item.componentA === target.id || item.componentB === target.id).map((item) => item.id);
+    const removedSensors = new Set(state.sensors.filter((item) => item.componentId === target.id || item.targetId === target.id).map((item) => item.id));
+    const removedActuators = new Set(state.actuators.filter((item) => item.componentId === target.id || attachedJoints.includes(item.jointId)).map((item) => item.id));
+    state.components = state.components.filter((item) => item.id !== target.id);
+    state.assemblies.forEach((item) => { item.componentIds = item.componentIds.filter((id) => id !== target.id); });
+    state.joints = state.joints.filter((item) => !attachedJoints.includes(item.id));
+    state.connections = state.connections.filter((item) => item.sourceId !== target.id && item.targetId !== target.id);
+    state.motors = state.motors.filter((item) => item.componentId !== target.id && (!item.jointId || !attachedJoints.includes(item.jointId)));
+    state.sensors = state.sensors.filter((item) => item.componentId !== target.id && item.targetId !== target.id);
+    state.actuators = state.actuators.filter((item) => item.componentId !== target.id && !attachedJoints.includes(item.jointId));
+    state.controls = state.controls.map((item) => ({ ...item, sensorIds: item.sensorIds.filter((id) => !removedSensors.has(id)), actuatorIds: item.actuatorIds.filter((id) => !removedActuators.has(id)) })).filter((item) => item.sensorIds.length || item.actuatorIds.length);
+    state.humanConstraints = state.humanConstraints.filter((item) => item.componentId !== target.id);
+    state = designMutation(state, name, `${target.role} removed`, actor, `Removed ${target.id} and dependent graph edges.`);
+    return { state, result: success(state, 'Component removed.') };
   }
   if (name === 'restore_revision') {
-    const restored = state.revisions.find((item) => item.revision === input.revision);
-    if (!restored) throw new Error('INVALID_INPUT: revision was not found.');
-    const humanLocked = state.components.filter((item) => item.humanLocked);
-    state = { ...state, goal: clone(restored.goal), components: clone(restored.components), connections: clone(restored.connections), sensorAttachments: clone(restored.sensorAttachments), actuatorAttachments: clone(restored.actuatorAttachments), controlRules: clone(restored.controlRules), motorSpeed: restored.motorSpeed, actuatorDelayMs: restored.actuatorDelayMs, actuatorHoldMs: restored.actuatorHoldMs };
-    for (const locked of humanLocked) {
-      const index = state.components.findIndex((item) => item.id === locked.id);
-      if (index >= 0) state.components[index] = clone(locked);
+    const source = state.revisions.find((item) => item.revision === input.revision);
+    if (!source) throw new Error('INVALID_INPUT: revision was not found.');
+    const currentLocks = new Map(state.components.filter((item) => item.humanLockedFields.length).map((item) => [item.id, clone(item)]));
+    const currentConstraints = clone(state.humanConstraints);
+    state.goal = clone(source.goal); state.world = clone(source.world); state.assemblies = clone(source.assemblies); state.components = clone(source.components); state.connections = clone(source.connections); state.joints = clone(source.joints); state.motors = clone(source.motors); state.sensors = clone(source.sensors); state.actuators = clone(source.actuators); state.controls = clone(source.controls); state.optimizationLevel = source.optimizationLevel;
+    for (const [id, locked] of currentLocks) {
+      let restored = state.components.find((item) => item.id === id);
+      if (!restored) {
+        const originalAssemblyId = current.components.find((item) => item.id === id)?.assemblyId;
+        let targetAssembly = state.assemblies.find((item) => item.id === originalAssemblyId) ?? state.assemblies[0];
+        if (!targetAssembly) {
+          targetAssembly = { id: 'restored-human-assembly', name: 'Restored human assembly', purpose: 'Retains a human-authored body across history restore.', componentIds: [] };
+          state.assemblies.push(targetAssembly);
+        }
+        restored = { ...clone(locked), assemblyId: targetAssembly.id };
+        state.components.push(restored);
+        if (!targetAssembly.componentIds.includes(id)) targetAssembly.componentIds.push(id);
+      }
+      for (const field of locked.humanLockedFields) {
+        if (field === 'position') restored.position = clone(locked.position);
+        if (field === 'rotation') restored.rotation = clone(locked.rotation);
+        if (field === 'dimensions') { restored.dimensions = clone(locked.dimensions); restored.mass = locked.mass; }
+        if (field === 'material') { restored.materialId = locked.materialId; restored.color = locked.color; restored.mass = locked.mass; }
+        if (field === 'mass') restored.mass = locked.mass;
+      }
+      restored.humanLockedFields = clone(locked.humanLockedFields); restored.lastModifiedBy = 'Human';
     }
-    state = designMutation(state, name, `Restored revision ${restored.revision}`, actor, `Restored design while preserving ${humanLocked.length} human-locked transform${humanLocked.length === 1 ? '' : 's'}.`);
-    return { state, result: success(state, 'Revision restored as a new head.', { restored_revision: restored.revision, preserved_human_constraints: humanLocked.map((item) => item.id) }) };
+    state.humanConstraints = currentConstraints.filter((item) => currentLocks.has(item.componentId)).map((item) => ({ ...item, fields: clone(currentLocks.get(item.componentId)!.humanLockedFields) }));
+    state = designMutation(state, name, `Revision ${source.revision} restored`, actor, `Created a new head from revision ${source.revision}; current human locks were preserved.`);
+    return { state, result: success(state, 'Revision restored.') };
   }
+  if (name === 'run_simulation') throw new Error('INVALID_PHASE: run_simulation is asynchronous and must use the physics runner.');
   throw new Error(`INVALID_INPUT: unsupported tool ${name}.`);
 }
 
-export function markSimulationRunning(current: ForgeState, actor: Actor) {
-  return activity({ ...current, phase: 'simulating' }, 'run_simulation', 'Rapier world running at a fixed 60 Hz timestep with seed 424242.', actor, 'running');
+export function markSimulationRunning(state: ForgeState, actor: Actor) {
+  if (!state.goal || !state.components.length) throw new Error('INVALID_DESIGN: create a goal and physical bodies before running physics.');
+  return addActivity({ ...state, phase: 'simulating' }, 'run_simulation', `Running ${state.components.length} Rapier bodies and ${state.joints.length} joint definitions at ${state.world.timestepHz} Hz.`, actor, 'running');
 }
 
-export function commitSimulation(current: ForgeState, run: SimulationRun, actor: Actor) {
-  if (run.designHash !== current.designHash || run.designRevision !== current.designRevision) throw new Error('STALE_SIMULATION: the design changed while physics was running.');
-  let state: ForgeState = { ...current, revision: current.revision + 1, phase: run.status, runs: [...current.runs, run].slice(-8), replayRunId: run.id, replayMode: run.status === 'failed' ? 'failure' : 'normal' };
-  state = activity(state, 'run_simulation', `${run.status === 'passed' ? 'Goal passed' : 'Trial failed'}: ${run.metrics.throughput} boxes/min, ${run.metrics.accuracy}% accuracy, ${run.metrics.collisions} collisions, ${run.metrics.jams} jams.`, actor);
-  const latestRevision = state.revisions.at(-1);
-  if (latestRevision) latestRevision.metrics = clone(run.metrics);
-  return { state, result: success(state, `Simulation ${run.status}.`, { run_id: run.id, status: run.status, metrics: run.metrics, failures: run.failures, physics: run.physics }) };
+export function commitSimulation(state: ForgeState, run: SimulationRun, actor: Actor): { state: ForgeState; result: ToolResult } {
+  if (run.designHash !== state.designHash || run.designRevision !== state.designRevision) throw new Error('STALE_RUN: simulation evidence does not match the current shared world.');
+  let next: ForgeState = { ...state, phase: run.status === 'passed' ? 'passed' : 'failed', runs: [...state.runs, run].slice(-20), replayRunId: run.id, replayMode: run.status === 'failed' ? 'failure' : 'normal' };
+  next = addActivity(next, 'run_simulation', `${run.status === 'passed' ? 'Passed' : 'Failed'} with objective ${run.objective.toFixed(3)}; ${run.metrics.measures.filter((item) => item.status === 'pass').length}/${run.metrics.measures.length} constraints pass.`, actor, run.status === 'passed' ? 'success' : 'failed');
+  return { state: next, result: success(next, `Simulation ${run.status}.`, run) };
 }
 
-export function createCheckpoint(current: ForgeState, label: string) {
-  const state = activity({ ...current, revision: current.revision + 1 }, 'checkpoint', label, 'UI');
-  state.revisions = [...state.revisions, snapshot(state, label, 'UI')].slice(-30);
-  return state;
+export function createCheckpoint(state: ForgeState, label: string) {
+  let next: ForgeState = { ...state, revision: state.revision + 1 };
+  next = addActivity(next, 'checkpoint', label, 'UI');
+  next.revisions = [...next.revisions, snapshot(next, label, 'UI')].slice(-60);
+  return next;
 }
 
-export function toggleUi(current: ForgeState, patch: Partial<Pick<ForgeState, 'screen' | 'xray' | 'selectedComponentId' | 'replayRunId' | 'replayMode' | 'compareOpen' | 'catalogOpen'>>) {
-  return { ...current, ...patch };
+export function toggleUi(state: ForgeState, patch: Partial<Pick<ForgeState, 'screen' | 'selectedComponentId' | 'xray' | 'replayRunId' | 'replayMode' | 'compareOpen' | 'catalogOpen'>>) {
+  return { ...state, ...patch };
 }

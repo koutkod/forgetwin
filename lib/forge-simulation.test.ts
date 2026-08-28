@@ -1,90 +1,131 @@
 import { describe, expect, it } from 'vitest';
-import { createInitialForgeState, defaultGoal, demoComponentIds } from './forge-data';
-import { applyForgeTool } from './forge-engine';
+import { commitSimulation } from './forge-engine';
+import { engineeringExamples } from './forge-data';
 import { compileDesignBrief } from './forge-prompt';
 import { simulateDesign } from './forge-simulation';
-import type { ForgeState, ForgeToolName } from './forge-types';
+import { assemblePlan, testCommand } from './forge-test-utils';
 
-function command(state: ForgeState, name: ForgeToolName, input: Record<string, unknown>) {
-  return applyForgeTool(state, name, { ...input, expected_revision: state.revision, expected_workspace_nonce: state.workspaceNonce }, 'UI').state;
+const cases = [
+  ['crane', 'Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.'],
+  ['rover', 'Build a four-wheel rover that carries 50 kg across rough terrain in under 20 seconds without tipping.'],
+  ['gearbox', 'Build a compact 4:1 gearbox that accepts 120 rpm and delivers at least 80 N·m of torque.'],
+  ['lift', 'Build a synchronized lift that raises 100 kg by 1 meter while keeping the platform level.'],
+  ['arm', 'Build a three-axis robotic arm with a gripper that reaches 2 meters and places a 12 kg part within 2 cm.'],
+  ['bridge', 'Build a 6 meter bridge that supports a 2000 kg moving load with less than 8 mm deflection.'],
+  ['sorter', 'Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.'],
+] as const;
+
+async function failOptimizePass(prompt: string) {
+  let state = assemblePlan(compileDesignBrief(prompt));
+  const failed = await simulateDesign(state);
+  state = commitSimulation(state, failed, 'System').state;
+  state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'satisfy constraints' });
+  const passed = await simulateDesign(state);
+  return { state, failed, passed };
 }
 
-function builtState(goal = defaultGoal) {
-  let state = createInitialForgeState('lab');
-  state = command(state, 'set_design_goal', { throughput_bpm: goal.throughputBpm, min_accuracy_pct: goal.minAccuracyPct, max_components: goal.maxComponents, brief: goal.brief });
-  for (const catalogId of demoComponentIds) state = command(state, 'add_component', { catalog_id: catalogId });
-  state = command(state, 'connect_components', { source_id: 'sensor-color', source_port: 'signal', target_id: 'diverter-servo', target_port: 'command' });
-  state = command(state, 'attach_sensor', { sensor_id: 'sensor-color', channel: 'color', target_zone: 'conveyor-main', range: 1.4 });
-  state = command(state, 'attach_actuator', { actuator_id: 'diverter-servo', target_id: 'diverter-servo', axis: 'y', travel_degrees: 32 });
-  state = command(state, 'create_control_rule', { sensor_id: 'sensor-color', condition: 'red', actuator_id: 'diverter-servo', priority: 1 });
-  state = command(state, 'create_control_rule', { sensor_id: 'sensor-color', condition: 'blue', actuator_id: 'diverter-servo', priority: 1 });
-  return state;
-}
-
-describe('ForgeTwin deterministic physics', () => {
-  it('fails late timing, then passes after telemetry-derived retuning', async () => {
-    let state = builtState();
-    const failed = await simulateDesign(state);
-    expect(failed.physics).toEqual({ engine: 'Rapier', timestepHz: 60, simulatedSeconds: 18 });
+describe('ForgeTwin generic multi-body physics and optimizer', () => {
+  it.each(cases)('runs an evidence-driven failure and redesign for %s', async (_name, prompt) => {
+    const { failed, passed } = await failOptimizePass(prompt);
+    expect(failed.physics.engine).toBe('Rapier');
+    expect(failed.physics.timestepHz).toBe(60);
+    expect(failed.physics.bodies).toBeGreaterThan(1);
+    expect(failed.replay.length).toBeGreaterThan(100);
     expect(failed.status).toBe('failed');
-    expect(failed.failures.some((event) => event.type === 'late_actuation' || event.type === 'moving_diverter_impact')).toBe(true);
-    expect(failed.recommendedDelayMs).toBeGreaterThanOrEqual(700);
-    expect(failed.recommendedDelayMs).toBeLessThanOrEqual(850);
-
-    state = command(state, 'set_actuator_timing', { actuator_id: 'diverter-servo', delay_ms: failed.recommendedDelayMs, hold_ms: 520 });
-    const passed = await simulateDesign(state);
-    expect(passed.status).toBe('passed');
-    expect(passed.metrics.throughput).toBeGreaterThanOrEqual(20);
-    expect(passed.metrics.accuracy).toBeGreaterThanOrEqual(95);
-    expect(passed.metrics.collisions).toBe(0);
-    expect(passed.metrics.jams).toBe(0);
+    expect(failed.failures[0]?.componentIds.length).toBeGreaterThan(0);
+    expect(failed.metrics.measures.find((item) => item.status === 'fail')?.provenance.length).toBeGreaterThan(20);
+    expect(passed.status, JSON.stringify(passed.metrics.measures, null, 2)).toBe('passed');
+    expect(passed.objective).toBeLessThan(failed.objective);
+    expect(passed.metrics.measures.every((item) => item.status === 'pass')).toBe(true);
   }, 30_000);
 
-  it('preserves a human sensor move and succeeds by retuning around it', async () => {
-    let state = builtState();
-    state = command(state, 'set_actuator_timing', { actuator_id: 'diverter-servo', delay_ms: 795, hold_ms: 520 });
-    state = applyForgeTool(state, 'move_component', { component_id: 'sensor-color', position: [-2, 1.05, 0], expected_revision: state.revision, expected_workspace_nonce: state.workspaceNonce }, 'Human').state;
+  it('derives gearbox speed and torque from the actual gear relation', async () => {
+    const four = await failOptimizePass('Build a 4:1 gearbox with 120 rpm input and at least 80 N·m output torque.');
+    const two = await failOptimizePass('Build a 2:1 gearbox with 120 rpm input and at least 40 N·m output torque.');
+    expect(four.passed.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeCloseTo(30, 0);
+    expect(two.passed.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeCloseTo(60, 0);
+    expect(four.passed.metrics.measures.find((item) => item.metric === 'speed_ratio')?.value).toBe(4);
+  }, 30_000);
+
+  it('simulates a bridge without an actuator and improves its structural evidence', async () => {
+    const plan = compileDesignBrief('Build an 8 meter bridge that supports 3000 kg with less than 6 mm deflection.');
+    expect(plan.actuators).toHaveLength(0);
+    const { failed, passed } = await failOptimizePass(plan.brief);
+    const before = failed.metrics.measures.find((item) => item.metric === 'deflection')!;
+    const after = passed.metrics.measures.find((item) => item.metric === 'deflection')!;
+    expect(after.value).toBeLessThan(before.value);
+  }, 30_000);
+
+  it('preserves a human transform while recalibrating the surrounding world', async () => {
+    const result = await failOptimizePass('Build a crane that lifts 80 kg by 2 meters without tipping.');
+    let state = result.state;
+    const { passed } = result;
+    state = commitSimulation(state, passed, 'System').state;
+    const id = state.goal!.editableComponentId; const target = state.components.find((item) => item.id === id)!;
+    const moved: [number, number, number] = [target.position[0] + .8, target.position[1], target.position[2]];
+    state = testCommand(state, 'move_component', { component_id: id, position: moved }, 'Human');
     const stale = await simulateDesign(state);
     expect(stale.status).toBe('failed');
-    expect(stale.recommendedDelayMs).toBeGreaterThan(1300);
-    expect(() => applyForgeTool(state, 'move_component', { component_id: 'sensor-color', position: [-0.8, 1.05, 0], expected_revision: state.revision, expected_workspace_nonce: state.workspaceNonce }, 'WebMCP')).toThrow(/LOCKED_BY_HUMAN/);
-
-    const sensorBefore = state.components.find((component) => component.id === 'sensor-color')!.position;
-    state = command(state, 'set_actuator_timing', { actuator_id: 'diverter-servo', delay_ms: stale.recommendedDelayMs, hold_ms: 520 });
+    state = commitSimulation(state, stale, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: stale.id, objective: 'retune around human geometry' });
     const retuned = await simulateDesign(state);
     expect(retuned.status).toBe('passed');
-    expect(state.components.find((component) => component.id === 'sensor-color')!.position).toEqual(sensorBefore);
+    expect(state.components.find((item) => item.id === id)?.position).toEqual(moved);
   }, 30_000);
 
-  it('rejects a visually incomplete machine instead of simulating hidden parts', async () => {
-    const incomplete = createInitialForgeState('lab');
-    await expect(simulateDesign(incomplete)).rejects.toThrow(/INVALID_DESIGN/);
-    const missingRules = { ...builtState(), controlRules: [] };
-    await expect(simulateDesign(missingRules)).rejects.toThrow(/red and blue/i);
+  it('refuses incomplete worlds instead of forcing them into a template', async () => {
+    const state = assemblePlan(compileDesignBrief('Build an automatic rotating hatch with an obstruction sensor.'));
+    const jointless = { ...state, joints: [], motors: [], actuators: [] };
+    await expect(simulateDesign(jointless)).rejects.toThrow(/no motor or actuator/i);
   });
 
-  it('rejects unsupported fixture transforms and actuator geometry instead of simulating a hidden canonical layout', async () => {
-    let movedFixture = builtState();
-    movedFixture = command(movedFixture, 'move_component', { component_id: 'diverter-servo', position: [1.8, 0.82, 0] });
-    await expect(simulateDesign(movedFixture)).rejects.toThrow(/outside the validated fixture geometry/i);
-
-    let invalidActuator = builtState();
-    invalidActuator = command(invalidActuator, 'attach_actuator', { actuator_id: 'diverter-servo', target_id: 'diverter-servo', axis: 'z', travel_degrees: 20 });
-    await expect(simulateDesign(invalidActuator)).rejects.toThrow(/Y-axis actuator/i);
+  it('never changes evidence from the optimization counter alone', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a 4:1 gearbox with 120 rpm input and at least 80 N·m output torque.'));
+    const baseline = await simulateDesign(state);
+    const counterOnly = await simulateDesign({ ...state, optimizationLevel: 99 });
+    expect(counterOnly.metrics.measures).toEqual(baseline.metrics.measures);
+    expect(counterOnly.status).toBe(baseline.status);
   });
 
-  it('uses a custom compiled goal to configure and verify the generated machine', async () => {
-    const plan = compileDesignBrief('Sort red and blue packages at 35 boxes/min with 99% accuracy using at most 8 components.');
-    let state = builtState({ ...plan.goal, brief: plan.brief });
-    state = command(state, 'set_motor_speed', { component_id: 'conveyor-main', speed_mps: plan.motorSpeed });
-    state = command(state, 'set_actuator_timing', { actuator_id: 'diverter-servo', delay_ms: plan.initialDelayMs, hold_ms: plan.actuatorHoldMs });
-    const failed = await simulateDesign(state);
-    expect(failed.status).toBe('failed');
-    state = command(state, 'set_actuator_timing', { actuator_id: 'diverter-servo', delay_ms: failed.recommendedDelayMs, hold_ms: plan.actuatorHoldMs });
-    const passed = await simulateDesign(state);
-    expect(passed.status).toBe('passed');
-    expect(passed.metrics.throughput).toBeGreaterThanOrEqual(35);
-    expect(passed.metrics.accuracy).toBeGreaterThanOrEqual(99);
-    expect(passed.metrics.componentCount).toBeLessThanOrEqual(8);
+  it('rejects unsupported measurements and stale failure evidence', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a crane that lifts 80 kg by 2 meters.'));
+    const unknown = { ...state, goal: { ...state.goal!, constraints: [{ metric: 'magic_score', label: 'Magic', operator: 'min' as const, target: 1, unit: '', source: 'user' as const }] } };
+    await expect(simulateDesign(unknown)).rejects.toThrow(/UNSUPPORTED_MEASUREMENT/);
+    const run = await simulateDesign(state);
+    let committed = commitSimulation(state, run, 'System').state;
+    const target = committed.components[0];
+    committed = testCommand(committed, 'set_mass', { component_id: target.id, mass: target.mass + 1 });
+    expect(() => testCommand(committed, 'optimize_design', { run_id: run.id, objective: 'use stale evidence' })).toThrow(/STALE_RUN/);
+  });
+
+  it('recalibrates around a moved sensor without moving it back', async () => {
+    let state = assemblePlan(compileDesignBrief('Build a crane that lifts 80 kg by 2 meters and places it within 10 cm without tipping.'));
+    let run = await simulateDesign(state);
+    state = commitSimulation(state, run, 'System').state;
+    if (run.status === 'failed') {
+      state = testCommand(state, 'optimize_design', { run_id: run.id, objective: 'baseline redesign' });
+      run = await simulateDesign(state);
+      state = commitSimulation(state, run, 'System').state;
+    }
+    const sensor = state.components.find((item) => item.id === state.goal!.editableComponentId)!;
+    const moved: [number, number, number] = [sensor.position[0] + .8, sensor.position[1], sensor.position[2]];
+    state = testCommand(state, 'move_component', { component_id: sensor.id, position: moved }, 'Human');
+    const stale = await simulateDesign(state);
+    expect(stale.status).toBe('failed');
+    state = commitSimulation(state, stale, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: stale.id, objective: 'retune around human geometry' });
+    expect(state.components.find((item) => item.id === sensor.id)?.position).toEqual(moved);
+    expect(state.controls[0].calibrationX).toBe(moved[0]);
+  });
+
+  it.each(engineeringExamples.map((example) => [example.id, example.prompt] as const))('finishes the built-in %s prompt within two causal redesigns', async (_id, prompt) => {
+    let state = assemblePlan(compileDesignBrief(prompt));
+    let run = await simulateDesign(state);
+    for (let pass = 0; pass < 2 && run.status === 'failed'; pass += 1) {
+      state = commitSimulation(state, run, 'System').state;
+      state = testCommand(state, 'optimize_design', { run_id: run.id, objective: 'gallery verification' });
+      run = await simulateDesign(state);
+    }
+    expect(run.status, JSON.stringify(run.metrics.measures, null, 2)).toBe('passed');
   }, 30_000);
 });

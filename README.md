@@ -1,120 +1,127 @@
 # ForgeTwin — Don’t generate it. Engineer it.
 
-ForgeTwin is a browser-based AI engineering lab where a human and an external agent build, test, and improve a working machine through WebMCP. A user starts with a natural-language engineering brief, and ForgeTwin compiles it into measurable constraints, a component plan, wiring, control rules, and physics trials. The hackathon demo tackles one concrete brief:
+ForgeTwin is a browser-based, agent-native engineering sandbox. A person describes a physical goal; an AI agent composes a new mechanical world from reusable primitives, assigns physical properties, connects joints and controls, runs deterministic physics, measures failures, and changes the causal parts until the stated constraints pass.
 
-> Build a machine that sorts red and blue boxes into separate bins at 20+ boxes per minute using no more than 7 components.
+There is no conveyor-first workflow and no catalog of complete machines. The same world model can compose conveyors, cranes, lifts, rovers, robotic mechanisms, gear trains, suspension, solar trackers, structural spans, warehouse systems, agricultural equipment, factory buffers, medical lifting concepts, recycling systems, or a novel mechanism assembled from lower-level bodies.
 
-This is not a rendered concept or a scripted success animation. ForgeTwin runs a deterministic Rapier rigid-body simulation. The first machine fails because the diverter fires too late; telemetry exposes the measured travel time and collision events; the agent retunes the actuator; and the second run passes. The human can then move the sensor and the agent must adapt to that shared change without undoing it.
+## The core loop
 
-The current validated fixture specializes in red/blue conveyor sorting. It accepts goals from 5–40 boxes/minute, 50–100% minimum accuracy, and a 7–12 component budget. Unsupported machine families, colors, ambiguous ranges, and physically infeasible constraints are explained before any workspace state is changed. This keeps the demo honest: ForgeTwin never pretends a hard-coded sorter satisfies an unrelated brief.
+```text
+free-form goal
+     ↓
+capabilities + measurable constraints
+     ↓
+assemblies → primitive bodies → physical properties
+     ↓
+joints + sensors + actuators + control graph
+     ↓
+60 Hz Rapier world → telemetry + contacts + constraint verdicts
+     ↓
+evidence-driven redesign → rerun
+```
 
-## Why ForgeTwin
+Try prompts such as:
 
-Generative tools are good at producing plausible pictures of machines. Engineering requires a harder loop: manipulate a shared design, execute it against physical constraints, observe measurable failure, preserve human intent, and revise until the requirements are met.
+- “Build a crane that lifts an 80 kg beam by 2 meters without tipping.”
+- “Design a 4:1 gearbox with 120 rpm input and at least 80 N·m output torque.”
+- “Build a rover that carries 5 kg across uneven terrain in under 20 seconds.”
+- “Create an 8 meter bridge that supports 3,000 kg with less than 6 mm deflection.”
+- “Build an automatic rotating hatch with an obstruction sensor.”
 
-ForgeTwin makes that loop legible. Every edit is versioned, every simulation produces telemetry, every agent action appears in the activity feed, and every pass or failure is derived from the same canonical workspace the human sees.
+The examples in the UI are editable briefs, not hidden design templates. Prompt dimensions and targets change the generated graph. When a semantic part is unavailable, the planner builds it from beams, plates, shafts, joints, motors, sensors, and other lower-level primitives.
 
-## Judge-ready demo
+Compound briefs are composed, not classified into one machine bucket. For example, a gearbox-driven crane contains separate transmission and suspension assemblies with a power edge from the output shaft to the hoist drive; a rover-mounted arm combines rolling support and serial-linkage assemblies. Explicit requests such as gears, pistons, cameras, pulleys, or counterweights are preserved and integrated into the generated graph.
 
-1. Enter a sorting goal in the opening prompt, or keep the built-in 20+ boxes/minute brief, then select **Generate everything**.
-2. ForgeTwin validates the brief before mutation, inspects the catalog, creates the sorter, adds exactly seven components, connects the sensor and servo, attaches hardware, creates both control rules, and tunes the conveyor from the requested throughput.
-3. The first generated revision intentionally fails in Rapier because the initial diverter timing is late. The agent automatically inspects telemetry, failure events, and collision evidence through the same small tools available to an external WebMCP agent.
-4. The agent applies the measured recommended delay and reruns physics without another user click.
-5. The revised machine passes at 41.4 boxes/minute, 100% sorting accuracy, zero collisions, zero jams, and seven components for the default brief.
-6. Select **Replay failure** for a 0.25× slow-motion replay, or toggle **X-Ray** to reveal sensor beams, collider volumes, velocity vectors, joints, and the diverter path.
-7. For the human-agent challenge, select the color sensor and drag it left in the 3D scene (or use the accessible position control). ForgeTwin records a human-owned transform.
-8. Select **Retune around my edit**. The old timing now fails, the agent detects the new shared state, calculates a new 1,445 ms command, and passes again without moving the sensor back.
-9. Open **Compare** to inspect the before/after design, metric deltas, timing change, and preserved human constraint.
-10. Use **Reset demo** to return to the exact judging start state.
+## Shared world model
 
-The scenario uses a fixed seed, fixed 60 Hz timestep, and an 18-second simulation window, so it remains reliable without external services.
+The canonical workspace is a versioned graph:
+
+- **World** — gravity, fixed timestep, duration, bounds, environment, and deterministic seed.
+- **Assemblies** — hierarchical groupings with purpose and component membership.
+- **Components** — primitive kind, shape, dimensions, transform, material, mass, rigid-body type, and parameters.
+- **Topology** — mechanical, signal, and power connections plus fixed, revolute, prismatic, spherical, spring, rope, gear, and belt joints.
+- **Devices** — per-instance motors, sensors, and actuators.
+- **Control** — declarative PID, threshold, tracking, timed, synchronized, and state-machine rules.
+- **Evidence** — telemetry samples, collision events, failures, replay frames, measurements, and optimization actions.
+- **Collaboration** — immutable revisions, design hashes, optimistic concurrency, and human-owned field locks.
+
+The 3D editor and external agent operate on this same state. Selecting, moving, rotating, resizing, or changing the material of a body creates a real revision; it is not a cosmetic scene override.
+
+## Why WebMCP is essential
+
+ForgeTwin exposes small, state-aware engineering operations instead of one opaque `build_machine` shortcut. An external agent can inspect and change the same physical world the human sees.
+
+| Tools | Responsibility |
+| --- | --- |
+| `inspect_workspace`, `inspect_primitive_catalog`, `set_design_goal` | Read shared state and establish the typed goal. |
+| `create_assembly`, `create_component` | Construct a hierarchy and add one primitive body at a time. |
+| `set_dimensions`, `set_material`, `set_mass` | Define causal physical properties. |
+| `move_component`, `rotate_component` | Place bodies while respecting human locks. |
+| `connect_components`, `create_joint` | Create topology, anchors, axes, limits, ratios, stiffness, and damping. |
+| `add_motor`, `add_sensor`, `add_actuator`, `set_control_logic` | Build the sensing, actuation, and control graph. |
+| `run_simulation` | Execute the current immutable design revision. |
+| `inspect_telemetry`, `inspect_failure`, `measure_constraint` | Read evidence rather than guessing from appearance. |
+| `optimize_design` | Apply a bounded redesign to evidence-linked physical or control fields. |
+| `remove_component`, `remove_joint` | Change topology safely with referential cleanup. |
+| `compare_designs`, `restore_revision` | Compare and restore versioned worlds. |
+
+Every mutating call is Zod-validated and guarded by the current workspace nonce and revision. A stale agent cannot overwrite newer human work. Resetting the sandbox rotates the nonce, so an old agent context cannot mutate the new world.
+
+## Physics and measurement
+
+- Every physical component receives a Rapier rigid body and collider using its transform, shape, material friction/restitution, and mass.
+- Supported physical joints are instantiated between bodies; motors and actuators drive dynamic bodies during fixed 60 Hz trials.
+- Rapier’s collision event queue supplies contact evidence and replay markers.
+- Graph-derived analysis measures quantities such as total mass, center of mass, footprint, payload capacity, lift height, stability, reach, torque margin, ratio, speed, traction, tracking error, throughput, collisions, structural capacity, and deflection.
+- The first bounded design is allowed to fail. The optimizer reads the failing measurement and modifies relevant fields—such as control gains, actuator force, motor torque, spring properties, counterweight mass, or structural section depth—before rerunning the same world.
+- Optimization pass count is provenance only: it is not an input to physics or any verdict. Unsupported measurement names are rejected instead of receiving a fabricated score.
+- Seed `424242` and a deterministic fallback make the judging sequence repeatable without an external API.
+
+Gear/belt power transmission and structural stress use disclosed reduced-order engineering proxies around the real rigid-body world. ForgeTwin is a concept-level digital-twin lab, not production CAD, FEA, CFD, medical approval, or safety certification.
+
+## Human-agent collaboration
+
+After a design passes, drag or edit a component. ForgeTwin marks the changed physical field as human-owned and invalidates the prior calibration. The agent detects the new design hash, simulates the modified world, and redesigns surrounding unlocked fields without moving the human component back. Compare and version-history views make the preservation visible.
+
+## Security model
+
+- The design brief is treated as untrusted data, never executable instructions.
+- Control expressions are declarative text and numeric parameters; arbitrary JavaScript is never evaluated.
+- IDs, transforms, dimensions, materials, masses, joints, limits, ratios, forces, speeds, and control values are schema-validated and bounded.
+- The simulator rejects incomplete motion systems and broken references rather than substituting a hidden template.
+- Optimistic concurrency prevents stale writes; human locks survive agent actions and revision restoration.
+- The built-in planner and simulator require no secret, network request, or third-party API.
 
 ## Architecture
 
-```text
-Human controls ─────┐
-                    ├──► canonical versioned workspace ──► React Three Fiber scene
-External WebMCP ────┘                  │
-                                       ├──► guarded command engine
-                                       ├──► Rapier rigid-body simulation
-                                       └──► telemetry + events + revisions
-                                                      │
-                                activity feed ◄───────┴──────► compare / restore
-```
-
-- **Next.js + TypeScript** provide the application shell and typed client architecture.
-- **Tailwind CSS** and custom component styles deliver the responsive futuristic lab UI.
-- **React Three Fiber + Three.js** render the live digital twin and replay timeline.
-- **Rapier** is the authoritative simulation layer. Boxes are rigid bodies, the conveyor advances them at the configured motor speed, and collisions/jams are derived from physical positions and actuator timing.
-- **Zod** validates every public tool input before a state transition.
-- **WebMCP** exposes small engineering primitives over the same state as the human UI.
-- **localStorage** preserves the current workspace across refreshes; no account, backend, or network API is required for the demo.
+- **Next.js + TypeScript** — application shell and strongly typed world state.
+- **React Three Fiber / Three.js** — arbitrary primitive rendering, orbit camera, selection, replay, and X-Ray overlays.
+- **Rapier** — deterministic multi-body rigid-body simulation and collision events.
+- **Zod** — strict schemas for all WebMCP inputs.
+- **Tailwind CSS + custom CSS** — responsive, keyboard-accessible engineering workspace.
+- **localStorage** — hackathon-friendly persistence without auth or backend infrastructure.
 
 Key modules:
 
-- `components/forge/forge-scene.tsx` — interactive 3D workspace, playback, selection, human sensor movement, and X-Ray overlays.
-- `lib/forge-prompt.ts` — pure deterministic brief parser, feasibility checks, and sorter plan compiler.
-- `lib/forge-simulation.ts` — deterministic Rapier simulation, executable-design preflight, and failure telemetry.
-- `lib/forge-engine.ts` — versioned command engine, revision guards, ownership constraints, undo/restore, and comparisons.
-- `lib/use-forge.ts` — shared React state, persistence, WebMCP registration, and activity events.
-- `app/forgetwin-app.tsx` — goal composer, prompt-to-machine orchestration, lab controls, metrics, telemetry, failure replay, and history.
+- `lib/forge-types.ts` — generic world, physics, telemetry, tool, and revision types.
+- `lib/forge-data.ts` — material library, primitive catalog, world defaults, and editable prompt examples.
+- `lib/forge-prompt.ts` — free-form goal parsing and compositional world synthesis.
+- `lib/forge-engine.ts` — guarded state transitions, ownership, hashing, optimization, compare, and restore.
+- `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
+- `lib/use-forge.ts` — Zod tool schemas, WebMCP registration, persistence, and optimistic concurrency.
+- `components/forge/forge-scene.tsx` — generic 3D primitive renderer and X-Ray world view.
+- `app/forgetwin-app.tsx` — agent loop, editor, activity feed, telemetry, compare, and demo UX.
 
-## WebMCP is the product boundary
+## Judge-ready walkthrough
 
-ForgeTwin deliberately does not expose a single `build_machine` or `solve_design` shortcut. An agent must work through the same inspect → edit → simulate → diagnose → revise loop as a human. The page registers these tools through `document.modelContext`:
-
-| Tool | Responsibility |
-| --- | --- |
-| `inspect_workspace` | Read the canonical design, revision, ownership locks, goal, and latest run. |
-| `inspect_component_catalog` | Discover available components and constraints. |
-| `set_design_goal` | Define the measurable throughput, accuracy, and component budget. |
-| `add_component` | Add one catalog component to the active design. |
-| `move_component` | Move a visibly rendered component while respecting human-owned transforms; validated physics currently permits sensor X-rail motion. |
-| `rotate_component` | Rotate a visibly rendered component; unsupported fixture geometry is reported before simulation. |
-| `connect_components` | Create a typed machine connection. |
-| `attach_sensor` | Bind a sensor to a control target. |
-| `attach_actuator` | Bind an actuator to its machine role. |
-| `create_control_rule` | Create the color-routing rule. |
-| `set_motor_speed` | Tune conveyor velocity. |
-| `set_actuator_timing` | Tune the servo command delay. |
-| `run_simulation` | Execute the deterministic Rapier trial and store its result. |
-| `inspect_telemetry` | Read measured timing, throughput, accuracy, and recommendations. |
-| `get_failure_events` | Read jams, wrong-bin events, and timing failures. |
-| `inspect_collisions` | Read collision pairs, timestamps, positions, and impulses. |
-| `compare_designs` | Compare two immutable revisions and their simulation metrics. |
-| `restore_revision` | Restore a design while preserving later human-owned transforms. |
-
-All mutating tools require `expectedRevision` and `workspaceNonce`. Stale agents receive a structured `STALE_REVISION` or `WORKSPACE_REPLACED` error instead of silently overwriting newer human work. Read tools report current ownership metadata, and agent mutations cannot move a component whose transform was claimed by a human.
-
-## Shared-state human challenge
-
-When a human moves the sensor, ForgeTwin records the transform with `owner: human`, creates a revision, invalidates the prior simulation, and surfaces the change to `inspect_workspace`. The agent must recompute the sensor-to-diverter travel time and retune the actuator. Moving the sensor back is rejected by the command engine, including after revision restore.
-
-This is the important WebMCP idea: the browser is not merely a display for an agent. It is a shared, stateful engineering environment with explicit concurrency and ownership semantics.
-
-## Safety and determinism
-
-- Tool inputs are schema-validated and bounded.
-- Design briefs are compiled before reset, so rejected prompts never partially mutate the current machine.
-- The compiler rejects unsupported domains and infeasible constraints instead of silently substituting a stock design.
-- Every mutation uses optimistic concurrency guards.
-- Every component transform in canonical state is reflected in the 3D twin. Physics refuses to run unless that visible workspace contains the required parts, validated fixture geometry, signal connection, attachments, actuator path, and both routing rules; invisible hard-coded parts cannot rescue an incomplete design.
-- Runs are deterministic from a fixed seed and fixed timestep.
-- Pass/fail is calculated from telemetry, not supplied by a caller.
-- Component count, throughput, accuracy, collisions, and jams all contribute to the goal verdict.
-- Human-owned transforms survive agent edits and revision restores.
-- The demo has no network dependency and no hidden external action.
-- Reset replaces the workspace nonce, preventing an old agent context from mutating a new demo.
-
-## Accessibility
-
-- Semantic landmarks, labels, and native buttons.
-- Visible keyboard focus and reduced-motion support.
-- Keyboard-selectable components and accessible sensor position controls.
-- Status text accompanies every color-coded state.
-- Live regions announce simulation and agent progress.
-- Responsive desktop, tablet, and mobile layouts.
-- Canvas content has a text alternative, with all essential data duplicated in accessible controls and telemetry.
+1. Enter a crane, rover, gearbox, robotic mechanism, bridge, or entirely new mechanical goal.
+2. Select **Engineer from scratch** and watch scoped WebMCP actions create the world graph.
+3. Observe the baseline physics failure, then open **Replay 0.25×** or **Telemetry** for causal evidence.
+4. Let the agent inspect, measure, redesign, and rerun until all constraints pass.
+5. Toggle **X-Ray** to expose joints, axes, signal lines, actuator paths, velocity vectors, and contacts.
+6. Select any body and move, rotate, resize, or change its material.
+7. Select **Redesign around my change** and verify that the human-owned field remains fixed.
+8. Use **Compare**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
 
 ## Run locally
 
@@ -127,8 +134,6 @@ npm run dev
 
 Open `http://localhost:3000/`.
 
-Quality checks:
-
 ```bash
 npm run typecheck
 npm run lint
@@ -136,6 +141,6 @@ npm test
 npm run build
 ```
 
-No API key is required. `NEXT_PUBLIC_SITE_ORIGIN` is optional and only controls the canonical base URL used by social metadata.
+The test suite covers distinct generated world graphs, prompt-sensitive geometry, novel lower-level composition, guarded shared state, human locks, generic Rapier execution, failure-to-redesign loops across multiple machine families, and automated accessibility checks.
 
 > The AI didn’t generate a picture of a machine. It engineered one, watched it fail, learned from the physics, and fixed it.

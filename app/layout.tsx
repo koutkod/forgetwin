@@ -8,12 +8,12 @@ const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin']
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_ORIGIN ?? 'https://forgetwin.ingdesir.chatgpt.site'),
   title: 'ForgeTwin — Don’t generate it. Engineer it.',
-  description: 'A browser-based AI engineering lab where humans and agents build, simulate, diagnose, and improve working machines together.',
+  description: 'A world-first AI engineering sandbox where humans and agents compose, simulate, diagnose, and redesign physical systems together.',
   openGraph: {
     title: 'ForgeTwin — Don’t generate it. Engineer it.',
-    description: 'AI agents build working machines, watch real physics fail, inspect telemetry, and engineer the fix.',
+    description: 'AI agents compose new machines from reusable primitives, watch physics fail, inspect telemetry, and redesign the causal parts.',
     type: 'website',
-    images: [{ url: '/og.png', width: 1672, height: 941, alt: 'ForgeTwin AI engineering lab with a color-sorting conveyor and sensor beams.' }],
+    images: [{ url: '/og.png', width: 1672, height: 941, alt: 'ForgeTwin AI engineering lab with a live 3D machine and engineering telemetry.' }],
   },
   twitter: {
     card: 'summary_large_image',
