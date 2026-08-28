@@ -4,7 +4,8 @@ import { ContactShadows, Grid, Line, OrbitControls } from '@react-three/drei';
 import { Canvas, type ThreeEvent } from '@react-three/fiber';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { MathUtils, Plane, Vector3 } from 'three';
-import type { ForgeState, ReplayBox, ReplayFrame } from '../../lib/forge-types';
+import { componentCatalog } from '../../lib/forge-data';
+import type { ForgeState, MachineComponent, ReplayBox, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
 type Props = {
   state: ForgeState;
@@ -13,9 +14,9 @@ type Props = {
   onSelect: (id: string) => void;
 };
 
-function Belt({ xray }: { xray: boolean }) {
+function Belt({ xray, position, rotation }: { xray: boolean; position: Vec3; rotation: Vec3 }) {
   return (
-    <group position={[-0.45, 0, 0]}>
+    <group position={position} rotation={rotation}>
       <mesh position={[0, 0.36, 0]} castShadow receiveShadow onClick={(event) => event.stopPropagation()}>
         <boxGeometry args={[8.2, 0.28, 1.55]} />
         <meshStandardMaterial color="#172129" metalness={0.72} roughness={0.34} wireframe={xray} />
@@ -41,12 +42,12 @@ function Package({ box, xray }: { box: ReplayBox; xray: boolean }) {
   </group>;
 }
 
-function Sensor({ x, xray, disabled, humanLocked, onMove, onSelect }: { x: number; xray: boolean; disabled: boolean; humanLocked: boolean; onMove: (x: number) => void; onSelect: () => void }) {
+function Sensor({ position, rotation, xray, disabled, humanLocked, onMove, onSelect }: { position: Vec3; rotation: Vec3; xray: boolean; disabled: boolean; humanLocked: boolean; onMove: (x: number) => void; onSelect: () => void }) {
   const [dragging, setDragging] = useState(false);
-  const [draftX, setDraftX] = useState(x);
+  const [draftX, setDraftX] = useState(position[0]);
   const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -1.05), []);
   const intersection = useMemo(() => new Vector3(), []);
-  const displayedX = dragging ? draftX : x;
+  const displayedX = dragging ? draftX : position[0];
   const move = (event: ThreeEvent<PointerEvent>) => {
     if (!dragging || disabled) return;
     event.stopPropagation();
@@ -58,13 +59,13 @@ function Sensor({ x, xray, disabled, humanLocked, onMove, onSelect }: { x: numbe
     setDragging(false);
     onMove(draftX);
   };
-  return <group position={[displayedX, 0, 0]} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
+  return <group position={[displayedX, position[1], position[2]]} rotation={rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
     <mesh position={[0, 0.98, -0.91]} castShadow><boxGeometry args={[0.17, 1.04, 0.17]} /><meshStandardMaterial color={humanLocked ? '#f4bd62' : '#8997a2'} metalness={0.82} /></mesh>
     <mesh position={[0, 0.98, 0.91]} castShadow><boxGeometry args={[0.17, 1.04, 0.17]} /><meshStandardMaterial color={humanLocked ? '#f4bd62' : '#8997a2'} metalness={0.82} /></mesh>
     <mesh
       position={[0, 1.46, 0]}
       castShadow
-      onPointerDown={(event) => { if (disabled) return; event.stopPropagation(); setDragging(true); setDraftX(x); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }}
+      onPointerDown={(event) => { if (disabled) return; event.stopPropagation(); setDragging(true); setDraftX(position[0]); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }}
       onPointerMove={move}
       onPointerUp={end}
       onPointerCancel={end}
@@ -77,8 +78,8 @@ function Sensor({ x, xray, disabled, humanLocked, onMove, onSelect }: { x: numbe
   </group>;
 }
 
-function Diverter({ angle, xray, onSelect }: { angle: number; xray: boolean; onSelect: () => void }) {
-  return <group position={[1.2, 0.8, 0]} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
+function Diverter({ angle, xray, position, rotation, onSelect }: { angle: number; xray: boolean; position: Vec3; rotation: Vec3; onSelect: () => void }) {
+  return <group position={position} rotation={rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
     <group rotation={[0, angle, 0]}>
       <mesh castShadow><boxGeometry args={[1.35, 0.18, 0.16]} /><meshStandardMaterial color="#ffb14d" emissive="#6c3b0b" emissiveIntensity={0.46} metalness={0.7} /></mesh>
       {xray && <mesh><boxGeometry args={[1.4, 0.22, 0.2]} /><meshBasicMaterial color="#ffb14d" wireframe transparent opacity={0.7} /></mesh>}
@@ -88,23 +89,52 @@ function Diverter({ angle, xray, onSelect }: { angle: number; xray: boolean; onS
   </group>;
 }
 
-function Ramp({ color, z, rotationY }: { color: string; z: number; rotationY: number }) {
-  return <group position={[2.9, 0.42, z]} rotation={[0, rotationY, 0]}>
+function Ramp({ color, position, rotation }: { color: string; position: Vec3; rotation: Vec3 }) {
+  return <group position={position} rotation={rotation}>
     <mesh castShadow receiveShadow><boxGeometry args={[2.1, 0.13, 0.85]} /><meshStandardMaterial color={color} metalness={0.4} roughness={0.48} /></mesh>
-    <mesh position={[0, 0.2, Math.sign(z) * 0.4]}><boxGeometry args={[2.08, 0.42, 0.07]} /><meshStandardMaterial color="#52616b" metalness={0.72} /></mesh>
+    <mesh position={[0, 0.2, Math.sign(position[2]) * 0.4]}><boxGeometry args={[2.08, 0.42, 0.07]} /><meshStandardMaterial color="#52616b" metalness={0.72} /></mesh>
   </group>;
 }
 
-function Bin({ color, z, label }: { color: string; z: number; label: string }) {
-  return <group position={[4.12, 0.42, z]}>
+function Bin({ color, position, rotation, label }: { color: string; position: Vec3; rotation: Vec3; label: string }) {
+  return <group position={position} rotation={rotation}>
     <mesh castShadow><boxGeometry args={[1.25, 0.82, 1.28]} /><meshStandardMaterial color={color} metalness={0.26} roughness={0.56} /></mesh>
     <mesh position={[-0.4, 0.43, 0]} rotation={[0, 0, -0.25]}><boxGeometry args={[1.08, 0.07, 1.16]} /><meshStandardMaterial color={label === 'RED' ? '#e84a55' : '#3483ed'} /></mesh>
   </group>;
 }
 
+const renderDefaults: Record<string, { position: Vec3; rotation: Vec3 }> = {
+  'conveyor-main': { position: [-0.45, 0, 0], rotation: [0, 0, 0] },
+  'sensor-color': { position: [-0.8, 0, 0], rotation: [0, 0, 0] },
+  'diverter-servo': { position: [1.2, 0.8, 0], rotation: [0, 0, 0] },
+  'ramp-red': { position: [2.9, 0.42, -1.03], rotation: [0, -0.16, 0] },
+  'ramp-blue': { position: [2.9, 0.42, 1.03], rotation: [0, 0.16, 0] },
+  'bin-red': { position: [4.12, 0.42, -1.78], rotation: [0, 0, 0] },
+  'bin-blue': { position: [4.12, 0.42, 1.78], rotation: [0, 0, 0] },
+};
+
+function renderTransform(component: MachineComponent | undefined, id: string) {
+  const fallback = renderDefaults[id];
+  if (!component) return fallback;
+  const catalog = componentCatalog.find((item) => item.catalogId === component.catalogId);
+  if (!catalog) return fallback;
+  return {
+    position: fallback.position.map((value, axis) => value + component.position[axis] - catalog.defaultPosition[axis]) as Vec3,
+    rotation: fallback.rotation.map((value, axis) => value + component.rotation[axis] - catalog.defaultRotation[axis]) as Vec3,
+  };
+}
+
 function Machine({ state, preview, frame, onSensorMove, onSelect }: Props & { frame: ReplayFrame | null }) {
   const has = (id: string) => preview || state.components.some((item) => item.id === id);
-  const sensor = state.components.find((item) => item.id === 'sensor-color');
+  const component = (id: string) => state.components.find((item) => item.id === id);
+  const sensor = component('sensor-color');
+  const beltTransform = renderTransform(component('conveyor-main'), 'conveyor-main');
+  const sensorTransform = renderTransform(sensor, 'sensor-color');
+  const diverterTransform = renderTransform(component('diverter-servo'), 'diverter-servo');
+  const redRampTransform = renderTransform(component('ramp-red'), 'ramp-red');
+  const blueRampTransform = renderTransform(component('ramp-blue'), 'ramp-blue');
+  const redBinTransform = renderTransform(component('bin-red'), 'bin-red');
+  const blueBinTransform = renderTransform(component('bin-blue'), 'bin-blue');
   const previewBoxes: ReplayBox[] = [
     { id: 'preview-red', color: 'red', position: [-2.8, .79, -.18], rotation: [0, 0, 0, 1], velocity: [2, 0, 0], state: 'moving' },
     { id: 'preview-blue', color: 'blue', position: [-1.7, .79, .18], rotation: [0, 0, 0, 1], velocity: [2, 0, 0], state: 'moving' },
@@ -117,16 +147,16 @@ function Machine({ state, preview, frame, onSensorMove, onSelect }: Props & { fr
     <directionalLight position={[5, 8, 4]} intensity={2.8} color="#d9f7ff" castShadow />
     <pointLight position={[-3, 3, -2]} intensity={25} color="#2bd9ff" distance={9} />
     <pointLight position={[3, 2, 3]} intensity={19} color="#ff9c45" distance={8} />
-    {has('conveyor-main') && <Belt xray={state.xray} />}
-    {has('sensor-color') && <Sensor x={sensor?.position[0] ?? -0.8} xray={state.xray} disabled={state.phase === 'simulating'} humanLocked={humanLocked} onMove={onSensorMove} onSelect={() => onSelect('sensor-color')} />}
-    {has('diverter-servo') && <Diverter angle={angle} xray={state.xray} onSelect={() => onSelect('diverter-servo')} />}
-    {has('ramp-red') && <Ramp color="#70252b" z={-1.03} rotationY={-0.16} />}
-    {has('ramp-blue') && <Ramp color="#173f78" z={1.03} rotationY={0.16} />}
-    {has('bin-red') && <Bin color="#8a262e" z={-1.78} label="RED" />}
-    {has('bin-blue') && <Bin color="#1c4c96" z={1.78} label="BLUE" />}
+    {has('conveyor-main') && <Belt xray={state.xray} {...beltTransform} />}
+    {has('sensor-color') && <Sensor {...sensorTransform} xray={state.xray} disabled={state.phase === 'simulating'} humanLocked={humanLocked} onMove={onSensorMove} onSelect={() => onSelect('sensor-color')} />}
+    {has('diverter-servo') && <Diverter angle={angle} xray={state.xray} {...diverterTransform} onSelect={() => onSelect('diverter-servo')} />}
+    {has('ramp-red') && <Ramp color="#70252b" {...redRampTransform} />}
+    {has('ramp-blue') && <Ramp color="#173f78" {...blueRampTransform} />}
+    {has('bin-red') && <Bin color="#8a262e" {...redBinTransform} label="RED" />}
+    {has('bin-blue') && <Bin color="#1c4c96" {...blueBinTransform} label="BLUE" />}
     {boxes.map((box) => <Package key={box.id} box={box} xray={state.xray} />)}
     {frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[0.13, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={0.9} /></mesh>)}
-    {state.xray && has('sensor-color') && has('diverter-servo') && <Line points={[[sensor?.position[0] ?? -0.8, 1.42, 0], [1.2, .82, 0]]} color="#66e5ff" dashed dashScale={3} transparent opacity={0.48} />}
+    {state.xray && has('sensor-color') && has('diverter-servo') && <Line points={[[sensorTransform.position[0], sensorTransform.position[1] + 1.42, sensorTransform.position[2]], [diverterTransform.position[0], diverterTransform.position[1] + .02, diverterTransform.position[2]]]} color="#66e5ff" dashed dashScale={3} transparent opacity={0.48} />}
     <mesh position={[0, -0.16, 0]} receiveShadow><boxGeometry args={[13, 0.2, 8]} /><meshStandardMaterial color="#0a0e12" roughness={0.82} /></mesh>
     <Grid position={[0, -0.05, 0]} args={[15, 10]} cellColor="#21313a" sectionColor="#315363" fadeDistance={14} fadeStrength={1.45} />
     <ContactShadows position={[0, -0.04, 0]} opacity={0.58} scale={13} blur={2.4} far={5} />
@@ -156,11 +186,11 @@ export function ForgeScene(props: Props) {
   const { state } = props;
   const { run, frame, index } = useReplay(state);
   return <div className="canvas-wrap">
-    <Canvas aria-label="Interactive 3D color-sorting machine. Drag the cyan color sensor left or right along its rail." role="img" shadows dpr={[1, 1.55]} camera={{ position: [7.4, 5.15, 8.6], fov: 39 }} gl={{ antialias: true }} onPointerMissed={() => props.onSelect('')}>
+    <Canvas aria-label="Interactive 3D color-sorting machine. Drag the cyan color sensor left or right along its rail." role="img" shadows="basic" dpr={[1, 1.55]} camera={{ position: [7.4, 5.15, 8.6], fov: 39 }} gl={{ antialias: true }} onPointerMissed={() => props.onSelect('')}>
       <color attach="background" args={['#080c10']} />
       <fog attach="fog" args={['#080c10', 9, 17]} />
       <Suspense fallback={null}><Machine {...props} frame={frame} /></Suspense>
     </Canvas>
-    <div className="sr-only" aria-live="polite">{run ? `${run.status} simulation replay at ${frame?.time ?? 0} seconds, frame ${index + 1} of ${run.replay.length}` : 'Machine scene ready'}</div>
+    <div className="sr-only">{run ? `${run.status} simulation replay available, frame ${index + 1} of ${run.replay.length}` : 'Machine scene ready'}</div>
   </div>;
 }

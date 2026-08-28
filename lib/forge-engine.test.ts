@@ -15,6 +15,20 @@ function builtState() {
 }
 
 describe('ForgeTwin shared command engine', () => {
+  it('validates sorter goals even when the engine is called outside the Zod hook', () => {
+    const state = createInitialForgeState('lab');
+    expect(() => command(state, 'set_design_goal', { throughput_bpm: 80, min_accuracy_pct: 95, max_components: 7 })).toThrow(/5–40/);
+    expect(() => command(state, 'set_design_goal', { throughput_bpm: 20, min_accuracy_pct: 101, max_components: 7 })).toThrow(/50–100/);
+    expect(() => command(state, 'set_design_goal', { throughput_bpm: 20, min_accuracy_pct: 95, max_components: 6 })).toThrow(/7–12/);
+  });
+
+  it('keeps equivalent compiled designs stable even when their source briefs differ', () => {
+    const initial = createInitialForgeState('lab');
+    const first = command(initial, 'set_design_goal', { throughput_bpm: 20, min_accuracy_pct: 95, max_components: 7, brief: 'Sort red and blue boxes at 20 boxes/min.' });
+    const second = command(createInitialForgeState('lab'), 'set_design_goal', { throughput_bpm: 20, min_accuracy_pct: 95, max_components: 7, brief: 'Build the standard two-color sorter.' });
+    expect(first.designHash).toBe(second.designHash);
+  });
+
   it('enforces optimistic concurrency and the component limit', () => {
     const state = builtState();
     expect(state.components).toHaveLength(7);

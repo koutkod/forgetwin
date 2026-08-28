@@ -15,7 +15,7 @@ export const componentCatalog: ComponentCatalogItem[] = [
 
 export const demoComponentIds = ['conveyor', 'color-sensor', 'servo-diverter', 'ramp-red', 'ramp-blue', 'bin-red', 'bin-blue'] as const;
 
-export const defaultGoal = { throughputBpm: 20, minAccuracyPct: 95, maxComponents: 7, colors: ['red', 'blue'] as Array<'red' | 'blue'> };
+export const defaultGoal = { throughputBpm: 20, minAccuracyPct: 95, maxComponents: 7, colors: ['red', 'blue'] as Array<'red' | 'blue'>, brief: 'Sort red and blue boxes at 20+ boxes/min using no more than 7 components.' };
 
 export function createInitialForgeState(screen: ForgeState['screen'] = 'landing'): ForgeState {
   return {

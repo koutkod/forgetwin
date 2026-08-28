@@ -17,7 +17,7 @@ const guard = { expected_revision: revision, expected_workspace_nonce: nonce };
 const schemas = {
   inspect_workspace: z.object({ since_revision: revision.optional() }).strict(),
   inspect_component_catalog: z.object({ category: z.string().max(30).optional() }).strict(),
-  set_design_goal: z.object({ throughput_bpm: z.number().min(5).max(120), min_accuracy_pct: z.number().min(50).max(100), max_components: z.number().int().min(3).max(12), ...guard }).strict(),
+  set_design_goal: z.object({ throughput_bpm: z.number().min(5).max(40), min_accuracy_pct: z.number().min(50).max(100), max_components: z.number().int().min(7).max(12), brief: z.string().trim().min(12).max(500).optional(), ...guard }).strict(),
   add_component: z.object({ catalog_id: id, position: vec3.optional(), ...guard }).strict(),
   move_component: z.object({ component_id: id, position: vec3, ...guard }).strict(),
   rotate_component: z.object({ component_id: id, rotation: vec3, ...guard }).strict(),
@@ -41,10 +41,10 @@ const mutationNames = new Set<ForgeToolName>(['set_design_goal', 'add_component'
 const descriptions: Record<ForgeToolName, string> = {
   inspect_workspace: 'Read the active machine, revision guards, human-authored constraints, and latest run without changing the design.',
   inspect_component_catalog: 'Inspect allowlisted physical components, ports, quantity limits, and capabilities.',
-  set_design_goal: 'Set measurable throughput, accuracy, and component-count constraints for the active workspace.',
+  set_design_goal: 'Set a validated design brief plus measurable throughput, accuracy, and component-count constraints for the active workspace.',
   add_component: 'Add one validated catalog component at a bounded workspace position.',
-  move_component: 'Move one component. Agent calls cannot override a transform locked by a human edit.',
-  rotate_component: 'Rotate one component using bounded Euler angles while respecting human locks.',
+  move_component: 'Move one rendered component in shared state. Agent calls cannot override a human-locked transform; the validated sorter fixture currently permits only sensor X-rail motion during physics.',
+  rotate_component: 'Rotate one rendered component using bounded Euler angles while respecting human locks. Physics reports fixture transforms that leave the validated sorter envelope.',
   connect_components: 'Connect compatible power, signal, or mechanical ports.',
   attach_sensor: 'Attach a catalog sensor to a controlled observation channel and target zone.',
   attach_actuator: 'Attach a catalog actuator to a bounded rotary path.',
@@ -95,7 +95,11 @@ export function useForge() {
   const commit = useCallback((next: ForgeState) => {
     stateRef.current = next;
     setState(next);
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Storage can be blocked or full. Keep the live shared workspace usable in memory.
+    }
   }, []);
 
   const getSnapshot = useCallback(() => stateRef.current, []);
@@ -135,7 +139,14 @@ export function useForge() {
   const moveSensorAsHuman = useCallback((x: number) => command('move_component', { component_id: 'sensor-color', position: [Math.min(0.2, Math.max(-3.1, Math.round(x * 20) / 20)), 1.05, 0] }, 'Human'), [command]);
   const patchUi = useCallback((patch: Parameters<typeof toggleUi>[1]) => commit(toggleUi(stateRef.current, patch)), [commit]);
   const checkpoint = useCallback((label: string) => commit(createCheckpoint(stateRef.current, label)), [commit]);
-  const reset = useCallback((screen: ForgeState['screen'] = 'lab') => { window.localStorage.removeItem(STORAGE_KEY); commit(createInitialForgeState(screen)); }, [commit]);
+  const reset = useCallback((screen: ForgeState['screen'] = 'lab') => {
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // A blocked storage API should not prevent a deterministic demo reset.
+    }
+    commit(createInitialForgeState(screen));
+  }, [commit]);
 
   return { state, command, runMachine, moveSensorAsHuman, patchUi, checkpoint, reset, getSnapshot };
 }
@@ -148,7 +159,7 @@ function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
   const properties: Record<ForgeToolName, Record<string, unknown>> = {
     inspect_workspace: { since_revision: rev },
     inspect_component_catalog: { category: { type: 'string', maxLength: 30 } },
-    set_design_goal: { throughput_bpm: { type: 'number', minimum: 5, maximum: 120 }, min_accuracy_pct: { type: 'number', minimum: 50, maximum: 100 }, max_components: { type: 'integer', minimum: 3, maximum: 12 }, ...common },
+    set_design_goal: { throughput_bpm: { type: 'number', minimum: 5, maximum: 40 }, min_accuracy_pct: { type: 'number', minimum: 50, maximum: 100 }, max_components: { type: 'integer', minimum: 7, maximum: 12 }, brief: { type: 'string', minLength: 12, maxLength: 500 }, ...common },
     add_component: { catalog_id: ids, position: vector, ...common },
     move_component: { component_id: ids, position: vector, ...common },
     rotate_component: { component_id: ids, rotation: vector, ...common },

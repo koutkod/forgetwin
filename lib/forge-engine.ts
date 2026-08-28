@@ -8,7 +8,8 @@ const componentIdFor = (catalogId: string) => ({ conveyor: 'conveyor-main', 'col
 const now = () => new Date().toISOString();
 
 function hashDesign(state: Pick<ForgeState, 'goal' | 'components' | 'connections' | 'sensorAttachments' | 'actuatorAttachments' | 'controlRules' | 'motorSpeed' | 'actuatorDelayMs' | 'actuatorHoldMs'>) {
-  const payload = JSON.stringify({ goal: state.goal, components: state.components.map(({ id, catalogId, position, rotation, humanLocked }) => ({ id, catalogId, position, rotation, humanLocked })), connections: state.connections, sensorAttachments: state.sensorAttachments, actuatorAttachments: state.actuatorAttachments, controlRules: state.controlRules, motorSpeed: state.motorSpeed, actuatorDelayMs: state.actuatorDelayMs, actuatorHoldMs: state.actuatorHoldMs });
+  const goal = state.goal ? { throughputBpm: state.goal.throughputBpm, minAccuracyPct: state.goal.minAccuracyPct, maxComponents: state.goal.maxComponents, colors: state.goal.colors } : null;
+  const payload = JSON.stringify({ goal, components: state.components.map(({ id, catalogId, position, rotation, humanLocked }) => ({ id, catalogId, position, rotation, humanLocked })), connections: state.connections, sensorAttachments: state.sensorAttachments, actuatorAttachments: state.actuatorAttachments, controlRules: state.controlRules, motorSpeed: state.motorSpeed, actuatorDelayMs: state.actuatorDelayMs, actuatorHoldMs: state.actuatorHoldMs });
   let hash = 2166136261;
   for (let index = 0; index < payload.length; index += 1) hash = Math.imul(hash ^ payload.charCodeAt(index), 16777619);
   return `design-${(hash >>> 0).toString(16).padStart(8, '0')}`;
@@ -85,7 +86,7 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   if (name === 'inspect_workspace') {
     const sinceRevision = typeof input.since_revision === 'number' ? input.since_revision : null;
     state = activity(state, name, `Inspected revision ${state.revision}; ${state.components.length} components and ${state.humanConstraints.length} human constraint${state.humanConstraints.length === 1 ? '' : 's'} visible.`, actor, 'read');
-    return { state, result: success(state, 'Workspace inspected.', { phase: state.phase, goal: state.goal, components: state.components, motor_speed: state.motorSpeed, actuator_delay_ms: state.actuatorDelayMs, latest_run: state.runs.at(-1) ? { id: state.runs.at(-1)!.id, status: state.runs.at(-1)!.status, metrics: state.runs.at(-1)!.metrics } : null, human_constraints: state.humanConstraints, changes_since_revision: sinceRevision === null ? [] : state.revisions.filter((item) => item.revision > sinceRevision).map((item) => ({ revision: item.revision, label: item.label, actor: item.actor })) }) };
+    return { state, result: success(state, 'Workspace inspected.', { phase: state.phase, goal: state.goal, components: state.components, connections: state.connections, sensor_attachments: state.sensorAttachments, actuator_attachments: state.actuatorAttachments, control_rules: state.controlRules, motor_speed: state.motorSpeed, actuator_delay_ms: state.actuatorDelayMs, actuator_hold_ms: state.actuatorHoldMs, latest_run: state.runs.at(-1) ? { id: state.runs.at(-1)!.id, status: state.runs.at(-1)!.status, metrics: state.runs.at(-1)!.metrics } : null, human_constraints: state.humanConstraints, changes_since_revision: sinceRevision === null ? [] : state.revisions.filter((item) => item.revision > sinceRevision).map((item) => ({ revision: item.revision, label: item.label, actor: item.actor })) }) };
   }
   if (name === 'inspect_component_catalog') {
     state = activity(state, name, `Inspected ${componentCatalog.length} validated catalog components.`, actor, 'read');
@@ -122,9 +123,16 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   }
 
   if (name === 'set_design_goal') {
-    state.goal = { throughputBpm: Number(input.throughput_bpm ?? 20), minAccuracyPct: Number(input.min_accuracy_pct ?? 95), maxComponents: Number(input.max_components ?? 7), colors: ['red', 'blue'] };
+    const throughputBpm = Number(input.throughput_bpm);
+    const minAccuracyPct = Number(input.min_accuracy_pct);
+    const maxComponents = Number(input.max_components);
+    if (!Number.isFinite(throughputBpm) || throughputBpm < 5 || throughputBpm > 40) throw new Error('CONSTRAINT_VIOLATION: throughput must be 5–40 boxes/min for this validated cell.');
+    if (!Number.isFinite(minAccuracyPct) || minAccuracyPct < 50 || minAccuracyPct > 100) throw new Error('CONSTRAINT_VIOLATION: accuracy must be 50–100%.');
+    if (!Number.isInteger(maxComponents) || maxComponents < 7 || maxComponents > 12) throw new Error('CONSTRAINT_VIOLATION: the two-lane sorter requires a 7–12 component budget.');
+    const brief = typeof input.brief === 'string' && input.brief.trim() ? input.brief.trim().slice(0, 500) : undefined;
+    state.goal = { throughputBpm, minAccuracyPct, maxComponents, colors: ['red', 'blue'], brief };
     state.phase = 'building';
-    state = designMutation(state, name, 'Design goal set', actor, 'Target locked: ≥20 boxes/min, ≥95% accuracy, ≤7 components.');
+    state = designMutation(state, name, 'Design goal set', actor, `Target locked: ≥${throughputBpm} boxes/min, ≥${minAccuracyPct}% accuracy, ≤${maxComponents} components.`);
     return { state, result: success(state, 'Design goal set.', state.goal) };
   }
   if (name === 'add_component') {

@@ -84,6 +84,7 @@ export interface DesignGoal {
   minAccuracyPct: number;
   maxComponents: number;
   colors: Array<'red' | 'blue'>;
+  brief?: string;
 }
 
 export interface Metrics {
@@ -158,6 +159,13 @@ export interface SimulationRun {
   replay: ReplayFrame[];
   sensorToDiverterMs: number;
   recommendedDelayMs: number;
+  configuration: {
+    sensorPosition: Vec3;
+    motorSpeed: number;
+    actuatorDelayMs: number;
+    actuatorHoldMs: number;
+    componentCount: number;
+  };
   physics: { engine: 'Rapier'; timestepHz: 60; simulatedSeconds: number };
 }
 

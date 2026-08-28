@@ -1,3 +1,4 @@
+import { componentCatalog } from './forge-data';
 import type { CollisionEvent, FailureEvent, ForgeState, ReplayBox, ReplayFrame, SimulationRun, TelemetrySample, Vec3 } from './forge-types';
 
 const COLORS = ['red', 'blue', 'blue', 'red', 'red', 'blue', 'red', 'blue', 'blue', 'red'] as const;
@@ -9,6 +10,7 @@ const SERVO_TARGET = 0.54;
 const SERVO_SPEED = 4.32;
 const SERVO_SETTLE_MS = 125;
 const SAFETY_LEAD_MS = 80;
+const REQUIRED_CATALOG_IDS = ['conveyor', 'color-sensor', 'servo-diverter', 'ramp-red', 'ramp-blue', 'bin-red', 'bin-blue'] as const;
 
 type BoxRecord = {
   id: string;
@@ -45,7 +47,31 @@ const median = (values: number[]) => {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 };
 
+export function assertRunnableDesign(state: ForgeState) {
+  if (!state.goal) throw new Error('INVALID_DESIGN: Set a measurable design goal before running physics.');
+  const missing = REQUIRED_CATALOG_IDS.filter((catalogId) => !state.components.some((component) => component.catalogId === catalogId));
+  if (missing.length) throw new Error(`INVALID_DESIGN: Add the required ${missing.join(', ')} component${missing.length === 1 ? '' : 's'} before running physics.`);
+  const hasSignalConnection = state.connections.some((connection) => connection.sourceId === 'sensor-color' && connection.sourcePort === 'signal' && connection.targetId === 'diverter-servo' && connection.targetPort === 'command' && connection.type === 'signal');
+  if (!hasSignalConnection) throw new Error('INVALID_DESIGN: Connect the color sensor signal to the servo command port before running physics.');
+  const sensorAttached = state.sensorAttachments.some((attachment) => attachment.sensorId === 'sensor-color' && attachment.channel === 'color' && attachment.targetZone === 'conveyor-main');
+  if (!sensorAttached) throw new Error('INVALID_DESIGN: Attach the color sensor to the conveyor decision lane before running physics.');
+  const actuatorAttachment = state.actuatorAttachments.find((attachment) => attachment.actuatorId === 'diverter-servo' && attachment.targetId === 'diverter-servo');
+  if (!actuatorAttachment) throw new Error('INVALID_DESIGN: Attach the servo actuator to the diverter before running physics.');
+  if (actuatorAttachment.axis !== 'y' || actuatorAttachment.travelDegrees < 30) throw new Error('INVALID_DESIGN: The validated diverter needs a Y-axis actuator with at least 30° of travel.');
+  const rulesReady = (['red', 'blue'] as const).every((color) => state.controlRules.some((rule) => rule.condition === color && rule.sensorId === 'sensor-color' && rule.actuatorId === 'diverter-servo'));
+  if (!rulesReady) throw new Error('INVALID_DESIGN: Create both red and blue sensor-to-diverter control rules before running physics.');
+
+  for (const component of state.components.filter((candidate) => REQUIRED_CATALOG_IDS.includes(candidate.catalogId as typeof REQUIRED_CATALOG_IDS[number]))) {
+    const catalogItem = componentCatalog.find((candidate) => candidate.catalogId === component.catalogId)!;
+    const positionAxes = component.catalogId === 'color-sensor' ? [1, 2] : [0, 1, 2];
+    const positionChanged = positionAxes.some((axis) => Math.abs(component.position[axis] - catalogItem.defaultPosition[axis]) > 0.05);
+    const rotationChanged = component.rotation.some((value, axis) => Math.abs(value - catalogItem.defaultRotation[axis]) > 0.05);
+    if (positionChanged || rotationChanged) throw new Error(`INVALID_DESIGN: ${component.name} is outside the validated fixture geometry. Restore its catalog transform or move only the color sensor along its X rail.`);
+  }
+}
+
 export async function simulateDesign(state: ForgeState): Promise<SimulationRun> {
+  assertRunnableDesign(state);
   const RAPIER = await loadRapier();
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   world.timestep = DT;
@@ -126,7 +152,9 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       if (box.detectedAt === null && position.x >= sensorX) {
         box.detectedAt = time;
         lastSensorPulse = box.color;
-        commands.push({ startsAt: time + state.actuatorDelayMs / 1000, endsAt: time + (state.actuatorDelayMs + state.actuatorHoldMs) / 1000, target: direction * SERVO_TARGET, color: box.color, boxId: box.id });
+        const rule = state.controlRules.find((candidate) => candidate.condition === box.color && candidate.sensorId === 'sensor-color' && candidate.actuatorId === 'diverter-servo')!;
+        const target = clamp(rule.targetAngle * Math.PI / 180, -SERVO_TARGET, SERVO_TARGET);
+        commands.push({ startsAt: time + state.actuatorDelayMs / 1000, endsAt: time + (state.actuatorDelayMs + state.actuatorHoldMs) / 1000, target, color: box.color, boxId: box.id });
       }
 
       if (box.arrivedAt === null && position.x >= DIVERTER_X) {
@@ -233,6 +261,13 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     replay,
     sensorToDiverterMs: travelMs,
     recommendedDelayMs,
+    configuration: {
+      sensorPosition: [...(sensor?.position ?? [-0.8, 1.05, 0])] as Vec3,
+      motorSpeed: state.motorSpeed,
+      actuatorDelayMs: state.actuatorDelayMs,
+      actuatorHoldMs: state.actuatorHoldMs,
+      componentCount,
+    },
     physics: { engine: 'Rapier', timestepHz: 60, simulatedSeconds: DURATION },
   };
 }
