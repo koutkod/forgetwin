@@ -10,8 +10,10 @@ export const CHALLENGE_EXAMPLES = engineeringExamples;
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
 const canonicalizeMechanicalTerms = (value: string) => value
-  .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle');
+  .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle')
+  .replace(/\b(?:go\s*cart|go-cart|gokart)\b/gi, 'go-kart');
 const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text);
+const isRoadVehicleGoal = (text: string) => /\b(?:go-kart|kart|buggy|automobile|car|atv|all-terrain vehicle)\b/.test(text);
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || 'part';
 const numeric = (value: string | undefined, fallback: number) => value ? Number(value.replaceAll(',', '')) : fallback;
 const NUMBER_WORDS: Record<string, number> = {
@@ -119,7 +121,7 @@ function inferCapabilities(text: string): Capability[] {
   if (/sort|separat|route|classif|inspect|reject|color|size|material|grader|recycl/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
   if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient/.test(text)) capabilities.add('lift');
   if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge/.test(text)) capabilities.add('suspend');
-  if (/rover|vehicle|mobile robot|bicycle|corridor|obstacle|\bwheels?\b|\bdrive\b/.test(text)) capabilities.add('mobile');
+  if (/rover|vehicle|mobile robot|bicycle|go-kart|\bkart\b|buggy|automobile|\bcar\b|\batv\b|corridor|obstacle|\bwheels?\b|\bdrive\b/.test(text)) capabilities.add('mobile');
   if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text)) capabilities.add('manipulate');
   if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(text)) capabilities.add('transmit');
   if (/suspension|spring|rough|uneven|tipping|stability|stabiliz|level/.test(text)) capabilities.add('stabilize');
@@ -150,6 +152,9 @@ function identity(text: string, capabilities: Capability[]) {
     [/patient/, 'Smooth patient lifting mechanism', 'Medical equipment'],
     [/elevator|lift|raising/, 'Synchronized lifting mechanism', 'Lifting systems'],
     [/\bbicycle\b/, /solar/.test(text) ? 'Solar electric bicycle' : /electric/.test(text) ? 'Electric bicycle' : 'Parametric bicycle', 'Personal electric mobility'],
+    [/\bgo-kart\b|\bkart\b/, /electric/.test(text) ? 'Electric go-kart' : 'Go-kart', 'Personal electric mobility'],
+    [/\bbuggy\b|\batv\b|all-terrain vehicle/, /electric/.test(text) ? 'Electric off-road buggy' : 'Off-road buggy', 'Vehicle engineering'],
+    [/\b(?:automobile|car)\b/, /electric/.test(text) ? 'Electric road vehicle' : 'Road vehicle', 'Vehicle engineering'],
     [/rover|vehicle|mobile robot/, 'Terrain-capable mobile platform', 'Mobile robotics'],
     [/solar|light source/, 'Single-axis tracking mechanism', 'Renewable energy'],
     [/suspension/, 'Compliant suspension mechanism', 'Vehicle dynamics'],
@@ -176,6 +181,7 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   const brazedPlateExchanger = /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text);
   const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
   const bicycle = isBicycleGoal(text);
+  const roadVehicle = isRoadVehicleGoal(text);
 
   if (brazedPlateExchanger) {
     add('plate_count', 'Corrugated transfer plates', 'min', 12, 'plates');
@@ -219,6 +225,9 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     if (bicycle) {
       add('assembly_integrity', 'Connected bicycle assembly', 'min', 95, '%');
       add('component_count', 'Physical bodies', 'max', 32, '');
+    } else if (roadVehicle) {
+      add('assembly_integrity', 'Connected road-vehicle assembly', 'min', 95, '%');
+      add('component_count', 'Physical bodies', 'max', 40, '');
     }
   }
   if (capabilities.includes('track')) {
@@ -463,6 +472,116 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
   builder.control('traction stability', 'pid', [sensor], [], 'limit wheel torque when tilt or slip rises', values.tiltDeg);
   builder.joint('fixed', imu, chassis); builder.joint('fixed', controller, chassis);
   return { id: 'rolling-support', mountId: chassis, editableId: imu, handles: ['mobile', 'stabilize'] };
+}
+
+function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
+  const { builder, text, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('road vehicle assembly', 'Low-profile tubular chassis, four-wheel running gear, steering, cockpit, electric powertrain, braking, sensing, and lighting assembled from reusable primitives', rootAssemblyId);
+  const electric = /electric|battery|ev\b/.test(text);
+  const offRoad = /buggy|atv|all-terrain|off[- ]road/.test(text);
+  const length = offRoad ? 2.75 : 2.45;
+  const track = offRoad ? 1.55 : 1.38;
+  const wheelbase = offRoad ? 1.82 : 1.7;
+  const wheelDiameter = offRoad ? .72 : .58;
+  const wheelWidth = offRoad ? .28 : .22;
+  const rearX = -wheelbase / 2;
+  const frontX = wheelbase / 2;
+  const wheelY = wheelDiameter / 2 + .08;
+  const railY = .59;
+  const railZ = track * .31;
+  const frameBodies: string[] = [];
+  const addTube = (role: string, start: Vec3, end: Vec3, section = .065) => {
+    const id = builder.member('beam', role, assembly, start, end, section, 'steel', 'fixed', { round_tube: true, road_vehicle_frame: true });
+    frameBodies.push(id);
+    return id;
+  };
+
+  for (const side of [-1, 1]) {
+    const z = side * railZ;
+    addTube(`${side < 0 ? 'left' : 'right'} chassis rail`, [-length / 2, railY, z], [length / 2, railY, z], .07);
+    addTube(`${side < 0 ? 'left' : 'right'} cockpit side rail`, [-.55, .72, z], [.62, .72, z], .055);
+    addTube(`${side < 0 ? 'left' : 'right'} rear motor guard`, [-length / 2, .61, z], [rearX - .1, .91, z], .05);
+  }
+  for (const [role, x] of [['rear bumper crossmember', -length / 2], ['rear chassis crossmember', rearX], ['seat crossmember', -.2], ['front chassis crossmember', frontX], ['front bumper crossmember', length / 2]] as const) {
+    addTube(role, [x, role.includes('bumper') ? .53 : railY, -railZ], [x, role.includes('bumper') ? .53 : railY, railZ], role.includes('bumper') ? .075 : .06);
+  }
+  const floor = builder.component('plate', 'go-kart floor pan', assembly, [.02, .62, 0], [1.55, .055, railZ * 1.62], 'aluminum', 'fixed', { road_vehicle_floor: true }, 4.2);
+  frameBodies.forEach((body, index) => builder.connect(index ? frameBodies[index - 1] : floor, body, 'mechanical', 'welded_tubular_frame'));
+  builder.connect(floor, frameBodies[0], 'mechanical', 'floor_pan_fasteners');
+
+  const centeredRevolute = (supportId: string, rotaryId: string) => {
+    const support = builder.components.find((item) => item.id === supportId)!;
+    const rotary = builder.components.find((item) => item.id === rotaryId)!;
+    const id = builder.joint('revolute', supportId, rotaryId, [0, 0, 1]);
+    const joint = builder.joints.find((item) => item.id === id)!;
+    joint.anchorA = rotary.position.map((value, index) => value - support.position[index]) as Vec3;
+    joint.anchorB = [0, 0, 0];
+    joint.limits = undefined;
+    return id;
+  };
+
+  const wheelSpecs = [
+    { role: 'rear left drive wheel', position: [rearX, wheelY, -track / 2] as Vec3, driven: true },
+    { role: 'rear right drive wheel', position: [rearX, wheelY, track / 2] as Vec3, driven: true },
+    { role: 'front left steering wheel', position: [frontX, wheelY, -track / 2] as Vec3, driven: false },
+    { role: 'front right steering wheel', position: [frontX, wheelY, track / 2] as Vec3, driven: false },
+  ];
+  const wheels: string[] = [];
+  const driveMotors: string[] = [];
+  for (const spec of wheelSpecs) {
+    const mount = builder.component('plate', `${spec.role} spindle`, assembly, [spec.position[0], wheelY, spec.position[2] * .82], [.18, .26, .12], 'steel', 'fixed', { road_vehicle_spindle: true }, .75);
+    const wheel = builder.component('wheel', spec.role, assembly, spec.position, [wheelDiameter, wheelWidth, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, friction: offRoad ? 1.18 : 1.05 }, offRoad ? 5.8 : 4.1);
+    const hub = centeredRevolute(mount, wheel);
+    wheels.push(wheel);
+    builder.connect(mount, floor, 'mechanical', spec.driven ? 'rear_axle_carrier' : 'steering_knuckle');
+    if (spec.driven) {
+      const motor = builder.component('motor', `${spec.role.includes('left') ? 'left' : 'right'} electric traction motor`, assembly, [spec.position[0] + .17, wheelY + .09, spec.position[2] * .69], [.32, .25, .32], 'aluminum', 'kinematic', { road_vehicle_motor: true }, 4.8);
+      builder.motor(motor, hub, Math.max(62, values.payloadKg * 2.6), offRoad ? 190 : 225);
+      builder.connect(motor, wheel, 'power', 'rear_wheel_torque');
+      builder.connect(motor, floor, 'mechanical', 'motor_mount');
+      driveMotors.push(motor);
+    }
+    if (!spec.driven) {
+      const disc = builder.component('gear', `${spec.role.includes('left') ? 'left' : 'right'} front brake disc`, assembly, [spec.position[0], wheelY, spec.position[2] * .84], [.25, .025, .25], 'steel', 'fixed', { road_vehicle_brake: true, teeth: 24 }, .42);
+      builder.connect(disc, mount, 'mechanical', 'brake_caliper_mount');
+    }
+  }
+
+  const seat = builder.component('plate', 'single bucket seat', assembly, [-.3, 1.02, 0], [.62, .72, .62], 'polymer', 'fixed', { road_vehicle_seat: true }, 5.2);
+  builder.connect(seat, floor, 'mechanical', 'seat_rails');
+  const column = addTube('steering column', [.45, .69, 0], [.64, 1.21, 0], .045);
+  const steeringWheel = builder.component('wheel', 'steering wheel', assembly, [.66, 1.25, 0], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true }, .68);
+  builder.rotate(steeringWheel, [0, 0, -.36]);
+  builder.connect(column, steeringWheel, 'mechanical', 'steering_hub');
+  const rack = builder.component('shaft', 'front steering rack', assembly, [frontX - .08, .59, 0], [.07, track * .72, .07], 'steel', 'fixed', { road_vehicle_steering_rack: true }, 2.1);
+  builder.rotate(rack, [Math.PI / 2, 0, 0]);
+  builder.connect(column, rack, 'mechanical', 'steering_pinion');
+  for (const side of [-1, 1]) addTube(`${side < 0 ? 'left' : 'right'} steering tie rod`, [frontX - .08, .59, side * .12], [frontX, wheelY, side * track * .41], .028);
+
+  const battery = builder.component('controller', electric ? 'high-voltage traction battery' : 'starter battery', assembly, [rearX + .12, .82, 0], [.62, .3, .5], 'polymer', 'fixed', { road_vehicle_battery: true }, electric ? 18 : 7);
+  const controller = builder.component('controller', electric ? 'dual-motor inverter controller' : 'powertrain controller', assembly, [-.03, .79, railZ * .75], [.38, .24, .26], 'polymer', 'fixed', { road_vehicle_controller: true }, 1.7);
+  const pedal = builder.component('plate', 'accelerator pedal', assembly, [.49, .76, -.15], [.17, .05, .11], 'aluminum', 'fixed', { road_vehicle_pedal: true }, .22);
+  const brakePedal = builder.component('plate', 'brake pedal', assembly, [.49, .76, .15], [.17, .05, .11], 'steel', 'fixed', { road_vehicle_pedal: true }, .28);
+  builder.rotate(pedal, [0, 0, -.5]); builder.rotate(brakePedal, [0, 0, -.5]);
+  for (const item of [battery, controller, pedal, brakePedal]) builder.connect(item, floor, 'mechanical', 'cockpit_mount');
+  builder.connect(battery, controller, 'power', 'dc_traction_bus');
+  driveMotors.forEach((motor) => builder.connect(controller, motor, 'signal', 'motor_torque_command'));
+
+  const speedPickup = builder.component('sensor', 'rear axle speed sensor', assembly, [rearX + .12, .72, railZ * .72], [.14, .12, .11], 'polymer', 'fixed', { road_vehicle_sensor: true }, .11);
+  const speed = builder.sensor(speedPickup, 'speed', 'vehicle_speed', wheels[0], 5);
+  builder.connect(speedPickup, controller, 'signal', 'wheel_speed_feedback');
+  builder.connect(speedPickup, floor, 'mechanical', 'sensor_bracket');
+  builder.control('electric road-vehicle drive', 'pid', [speed], [], 'blend accelerator demand across both rear motors while limiting wheel slip and overspeed', offRoad ? 25 : 35);
+
+  if (/headlights?|lamp|light\b|night/.test(text)) {
+    for (const side of [-1, 1]) {
+      const light = builder.component('light', `${side < 0 ? 'left' : 'right'} LED headlight`, assembly, [length / 2 + .05, .72, side * railZ * .62], [.27, .18, .18], 'aluminum', 'fixed', { headlight: true, beam_range: 4.2 }, .25);
+      builder.connect(battery, light, 'power', 'lighting_bus');
+      builder.connect(light, frameBodies.at(-1)!, 'mechanical', 'headlight_bracket');
+    }
+  }
+
+  return { id: 'low-profile-road-vehicle', mountId: floor, editableId: steeringWheel, handles: ['mobile', 'measure'] };
 }
 
 function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
@@ -1015,7 +1134,8 @@ const moduleRules: ModuleRule[] = [
   { id: 'brazed-plate-heat-exchanger', matches: ({ text }) => /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text), compose: addBrazedPlateHeatExchanger },
   { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
   { id: 'single-track-vehicle', matches: ({ text }) => isBicycleGoal(text), compose: addSingleTrackVehicle },
-  { id: 'rolling-support', matches: ({ text, capabilities }) => capabilities.includes('mobile') && !isBicycleGoal(text), compose: addRollingSupport },
+  { id: 'low-profile-road-vehicle', matches: ({ text }) => isRoadVehicleGoal(text), compose: addLowProfileRoadVehicle },
+  { id: 'rolling-support', matches: ({ text, capabilities }) => capabilities.includes('mobile') && !isBicycleGoal(text) && !isRoadVehicleGoal(text), compose: addRollingSupport },
   { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },
   { id: 'serial-linkage', matches: ({ capabilities }) => capabilities.includes('manipulate'), compose: addSerialLinkage },
   { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addCableSuspension },
@@ -1045,6 +1165,12 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   builder.setRoot(rootAssemblyId);
   const selectionContext = { text, capabilities, values };
   const selectedRules = moduleRules.filter((rule) => rule.matches(selectionContext));
+  const requested = requestedPrimitiveCounts(text);
+  const explicitGenericMechanism = /hatch|door|gate|latch|lever|crank|flywheel|hinge|pivot|slider|stroke|actuat|\bmotor\b|\bservo\b|\bpiston\b|\bspring\b|\bsensor\b|\bcamera\b/.test(text);
+  if (!selectedRules.length && !requested.size && !explicitGenericMechanism) {
+    const object = identity(text, capabilities).name.replace(/ mechanism$/, '');
+    throw new Error(`UNSUPPORTED_TOPOLOGY: ForgeTwin could not identify a faithful primitive architecture for “${object}”. Name its main structure, moving parts, drive, and required motion instead of receiving an unrelated machine.`);
+  }
   const rules: ModuleRule[] = selectedRules.length ? selectedRules : [{ id: 'constructed-motion', matches: () => true, compose: addGenericMotion }];
   const spacing = rules.length > 1 ? Math.min(4.8, 10 / Math.max(1, rules.length - 1)) : 0;
   const modules = rules.map((rule, index) => builder.at([(index - (rules.length - 1) / 2) * spacing, 0, 0], () => rule.compose({ builder, text, capabilities, values, rootAssemblyId })));
@@ -1053,7 +1179,6 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   if (capabilities.includes('rotate') && !handled.has('rotate')) {
     modules.push(builder.at([modules.length ? Math.max(4.8, spacing) * modules.length / 2 : 0, 0, 0], () => addGenericMotion({ builder, text, capabilities, values, rootAssemblyId })));
   }
-  const requested = requestedPrimitiveCounts(text);
   const missing = [...requested.entries()].map(([kind, count]) => [kind, Math.max(0, count - builder.components.filter((item) => item.primitive === kind).length)] as [PrimitiveKind, number]).filter(([, count]) => count > 0);
   if (missing.length) modules.push(builder.at([Math.max(4.8, spacing || 4.8) * modules.length / 2, 0, 0], () => addRequestedPrimitiveBodies({ builder, text, capabilities, values, rootAssemblyId }, missing, modules[0].mountId)));
   for (let index = 1; index < modules.length; index += 1) builder.connect(modules[0].mountId, modules[index].mountId, 'mechanical', 'module_interface');

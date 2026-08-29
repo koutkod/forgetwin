@@ -101,6 +101,31 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.metrics.collisions).toBe(0);
   }, 30_000);
 
+  it('keeps the electric go-kart assembled while all four road wheels rotate', async () => {
+    const prompt = 'build an electric go kart';
+    let state = assemblePlan(compileDesignBrief(prompt));
+    let run = await simulateDesign(state);
+    for (let pass = 0; pass < 3 && run.status === 'failed'; pass += 1) {
+      state = commitSimulation(state, run, 'System').state;
+      state = testCommand(state, 'optimize_design', { run_id: run.id, objective: 'satisfy the measured electric go-kart constraints without replacing the requested vehicle' });
+      run = await simulateDesign(state);
+    }
+    const wheels = state.components.filter((item) => item.parameters.road_vehicle_wheel);
+    expect(wheels).toHaveLength(4);
+    expect(run.status, JSON.stringify(run.metrics.measures, null, 2)).toBe('passed');
+    expect(run.physics.engine).toBe('Rapier');
+    expect(run.physics.joints).toBeGreaterThanOrEqual(4);
+    for (const wheel of wheels) {
+      const first = run.replay[0].items.find((item) => item.id === wheel.id)!;
+      const middle = run.replay[Math.floor(run.replay.length / 2)].items.find((item) => item.id === wheel.id)!;
+      expect(middle.rotation).not.toEqual(first.rotation);
+      expect(Math.abs(middle.position[0] - wheel.position[0])).toBeLessThan(.03);
+      expect(Math.abs(middle.position[1] - wheel.position[1])).toBeLessThan(.03);
+      expect(Math.abs(middle.position[2] - wheel.position[2])).toBeLessThan(.03);
+    }
+    expect(run.metrics.collisions).toBe(0);
+  }, 30_000);
+
   it('keeps every impeller blade rigidly attached to the centered rotor during replay', async () => {
     const state = assemblePlan(compileDesignBrief('Build an aluminum seven-blade axial impeller for a ventilation duct and animate it at 300 rpm.'));
     // Version 15 and earlier stored the shaft at the midpoint and added a hard

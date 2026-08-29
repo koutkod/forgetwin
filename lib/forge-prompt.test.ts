@@ -108,6 +108,11 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(unknown.components.some((item) => item.primitive === 'conveyor')).toBe(false);
   });
 
+  it('fails honestly when no faithful topology can be inferred instead of showing a random machine', () => {
+    expect(() => compileDesignBrief('Build a completely novel quantum coffee machine.')).toThrow(/could not identify a faithful primitive architecture/i);
+    expect(() => compileDesignBrief('Build a completely novel quantum coffee machine.')).toThrow(/structure, moving parts, drive, and required motion/i);
+  });
+
   it('composes compound systems without keyword false positives', () => {
     const crane = compileDesignBrief('Build a gearbox-driven crane with a 4:1 reduction that lifts 80 kg by 2 meters.');
     expect(crane.components.some((item) => item.primitive === 'gear')).toBe(true);
@@ -149,6 +154,60 @@ describe('ForgeTwin world-first brief compiler', () => {
     const light = illuminated.components.find((item) => item.primitive === 'light');
     expect(light).toMatchObject({ role: 'front LED bicycle headlight', mass: .24 });
     expect(illuminated.connections.some((item) => item.targetId === light?.id && item.channel === 'lighting_bus')).toBe(true);
+  });
+
+  it('builds a recognizable electric go-kart instead of a rover or arbitrary payload cart', () => {
+    const plan = compileDesignBrief('build an electric go kart');
+    expect(plan.goal.machineName).toBe('Electric go-kart');
+    expect(plan.goal.domain).toBe('Personal electric mobility');
+    expect(plan.assemblies.map((item) => item.name)).toEqual(['engineered world', 'road vehicle assembly']);
+    expect(plan.goal.summary).toContain('low-profile-road-vehicle');
+    expect(plan.components.filter((item) => item.parameters?.road_vehicle_wheel)).toHaveLength(4);
+    expect(plan.components.filter((item) => item.parameters?.road_vehicle_frame).length).toBeGreaterThanOrEqual(9);
+    expect(plan.components.some((item) => item.role === 'single bucket seat')).toBe(true);
+    expect(plan.components.some((item) => item.role === 'steering wheel')).toBe(true);
+    expect(plan.components.some((item) => item.role === 'front steering rack')).toBe(true);
+    expect(plan.components.some((item) => item.role === 'high-voltage traction battery')).toBe(true);
+    expect(plan.components.some((item) => item.role === 'dual-motor inverter controller')).toBe(true);
+    expect(plan.components.filter((item) => /electric traction motor/.test(item.role))).toHaveLength(2);
+    expect(plan.components.filter((item) => /front brake disc/.test(item.role))).toHaveLength(2);
+    expect(plan.components.filter((item) => /steering tie rod/.test(item.role))).toHaveLength(2);
+    expect(plan.components.some((item) => item.role === 'mobile payload')).toBe(false);
+    expect(plan.components.some((item) => item.role === 'mobile chassis deck')).toBe(false);
+    expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+    expect(plan.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['course_time', 'traction_margin', 'assembly_integrity', 'component_count']));
+
+    const illuminated = compileDesignBrief('Build an electric go-cart with two LED headlights for night driving.');
+    expect(illuminated.goal.machineName).toBe('Electric go-kart');
+    expect(illuminated.components.filter((item) => item.primitive === 'light')).toHaveLength(2);
+    expect(illuminated.connections.filter((item) => item.channel === 'lighting_bus')).toHaveLength(2);
+  });
+
+  it.each([
+    ['road vehicle', 'Design an electric buggy for rough trails.', 'low-profile-road-vehicle'],
+    ['single-track vehicle', 'Build a pedal bicycle with an electric assist motor.', 'single-track-vehicle'],
+    ['mobile robot', 'Build a four-wheel rover for an obstacle course.', 'rolling-support'],
+    ['lifting system', 'Build a crane that lifts a 100 kg beam.', 'cable-suspension'],
+    ['parallel lift', 'Design a synchronized cargo elevator for 100 kg.', 'parallel-guides'],
+    ['robot mechanism', 'Create a three-axis robotic arm with a gripper.', 'serial-linkage'],
+    ['transmission', 'Build a compact 5:1 reduction gearbox.', 'rotary-transmission'],
+    ['material handling', 'Build a warehouse conveyor that sorts three package sizes.', 'material-flow'],
+    ['recycling line', 'Build a recycling machine that separates cans and bottles.', 'material-flow'],
+    ['agricultural grader', 'Build a tomato sorting line with gentle ramps.', 'material-flow'],
+    ['structural system', 'Build a truss bridge spanning 8 meters.', 'span-members'],
+    ['renewable mechanism', 'Build a solar panel tracker that follows the sun.', 'tracking-axis'],
+    ['fluid mechanism', 'Build a reciprocating water pump with a flywheel.', 'reciprocating-linkage'],
+    ['closed linkage', 'Build a four-bar linkage that rotates 80 degrees.', 'closed-linkage'],
+    ['machined part', 'Build a sealed bearing for a 30 mm shaft.', 'parametric-bearing'],
+    ['rotating part', 'Build a six-blade ventilation impeller.', 'parametric-rotor'],
+    ['thermal assembly', 'Build a brazed plate heat exchanger for an HVAC unit.', 'brazed-plate-heat-exchanger'],
+    ['manufacturing fixture', 'Build an HVAC brazing fixture for two copper pipes.', 'hvac-brazing-fixture'],
+  ])('routes the %s prompt to its requested physical architecture', (_family, prompt, moduleId) => {
+    const plan = compileDesignBrief(prompt);
+    expect(plan.goal.summary).toContain(moduleId);
+    expect(plan.components.length).toBeGreaterThan(1);
+    expect(plan.components.some((item) => item.role === 'mobile payload')).toBe(moduleId === 'rolling-support');
+    if (moduleId !== 'material-flow') expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
   });
 
   it('still builds an active solar tracker only when the prompt asks it to track', () => {
