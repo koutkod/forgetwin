@@ -94,8 +94,64 @@ function Crate({ component, color, xray, selected }: { component: MachineCompone
   </group>;
 }
 
+function FixturePlate({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const holes = [-.34, -.17, 0, .17, .34].flatMap((xFactor) => [-.3, 0, .3].map((zFactor) => [x * xFactor, z * zFactor] as const));
+  return <group>
+    <BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.025} metalness={.84} roughness={.2} />
+    {!xray && holes.map(([holeX, holeZ], index) => <group key={index} position={[holeX, y * .54, holeZ]}><mesh><cylinderGeometry args={[.055, .055, .018, 20]} /><meshStandardMaterial color="#172027" metalness={.75} roughness={.25} /></mesh><mesh position={[0, .012, 0]}><torusGeometry args={[.066, .01, 8, 20]} /><meshStandardMaterial color="#d2dde0" metalness={.95} roughness={.12} /></mesh></group>)}
+    <group position={[0, y * .68, z * .45]}><BoxBody size={[x * .92, .09, .11]} color="#88979d" xray={xray} selected={selected} radius={.018} /></group>
+    <group position={[0, y * .68, -z * .45]}><BoxBody size={[x * .92, .09, .11]} color="#88979d" xray={xray} selected={selected} radius={.018} /></group>
+  </group>;
+}
+
+function HeatExchangerCore({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const finCount = 18;
+  return <group>
+    <BoxBody size={[x, y, z * .58]} color={color} xray={xray} selected={selected} radius={.02} metalness={.8} roughness={.24} />
+    {!xray && Array.from({ length: finCount }, (_, index) => <mesh key={index} position={[0, -y * .44 + index / (finCount - 1) * y * .88, 0]} castShadow><boxGeometry args={[x * .94, .018, z * 1.2]} /><meshStandardMaterial color={index % 2 ? '#c7d1d4' : '#93a2a9'} metalness={.86} roughness={.22} /></mesh>)}
+    {[-1, 1].map((side) => <group key={side} position={[side * x * .48, 0, 0]}><BoxBody size={[.12, y * 1.04, z * .96]} color="#56666e" xray={xray} selected={selected} radius={.018} /></group>)}
+    {!xray && [-.28, 0, .28].map((yFactor) => [-.28, .28].map((xFactor) => <mesh key={`${xFactor}-${yFactor}`} position={[x * xFactor, y * yFactor, z * .39]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[.075, .018, 8, 20]} /><meshStandardMaterial color="#b96f43" metalness={.72} roughness={.26} /></mesh>))}
+  </group>;
+}
+
+function CopperPipe({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const radius = component.dimensions[0] / 2;
+  const length = component.dimensions[1];
+  return <group>
+    <mesh castShadow><cylinderGeometry args={[radius, radius, length, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.24} /></mesh>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .47, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[radius * 1.12, Math.max(.012, radius * .13), 8, 24]} /><StandardMaterial color="#d69162" xray={xray} selected={selected} metalness={.78} roughness={.2} /></mesh>)}
+  </group>;
+}
+
+function FixtureClamp({ component, color, xray, selected, actuatorValue }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number }) {
+  const side = Number(component.parameters.clamp_side ?? 1);
+  const [diameter, length] = component.dimensions;
+  return <group>
+    <mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .62, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>
+    <mesh position={[0, length * (.22 + actuatorValue * .13), 0]}><cylinderGeometry args={[diameter * .24, diameter * .24, length * .58, 18]} /><StandardMaterial color="#dce5e8" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>
+    <group position={[-side * .34, length * .48, 0]}><BoxBody size={[.78, .13, .18]} color="#e3a44a" xray={xray} selected={selected} radius={.025} metalness={.65} roughness={.28} /></group>
+    <group position={[-side * .72, length * .38, 0]}><BoxBody size={[.28, .15, .42]} color="#303d44" xray={xray} selected={selected} radius={.025} /></group>
+  </group>;
+}
+
+function LocatingPin({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <BoxBody size={[x * 1.55, y * .16, z * 1.55]} color="#46545b" xray={xray} selected={selected} radius={.035} />
+    <mesh position={[0, y * .28, 0]} castShadow><cylinderGeometry args={[x * .28, x * .38, y * .55, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.9} roughness={.16} /></mesh>
+    <mesh position={[0, y * .59, 0]}><coneGeometry args={[x * .28, y * .18, 24]} /><StandardMaterial color="#d4dee1" xray={xray} selected={selected} metalness={.95} roughness={.1} /></mesh>
+  </group>;
+}
+
 function ComponentShape({ component, xray, selected, actuatorValue }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
+  if (component.parameters.fixture_plate) return <FixturePlate component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.heat_exchanger_core) return <HeatExchangerCore component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.hvac_pipe) return <CopperPipe component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.fixture_clamp) return <FixtureClamp component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} />;
+  if (component.parameters.locating_pin) return <LocatingPin component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'gear') return <Gear component={{ ...component, color }} xray={xray} selected={selected} />;
   if (component.primitive === 'spring') return <Spring component={{ ...component, color }} xray={xray} selected={selected} />;
   if (component.primitive === 'frame') return <IndustrialFrame component={component} color={color} xray={xray} selected={selected} />;

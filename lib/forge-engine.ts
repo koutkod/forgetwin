@@ -170,7 +170,7 @@ function optimizationActions(state: ForgeState, run: SimulationRun) {
   const failed = run.metrics.measures.filter((reading) => reading.status === 'fail' && reading.metric !== 'component_count');
   const metrics = new Set(failed.map((reading) => reading.metric));
   const factorFor = (...keys: string[]) => Math.min(4, Math.max(1.12, ...failed.filter((item) => keys.includes(item.metric)).map(failedFactor)));
-  const controlMetrics = ['placement_error', 'platform_tilt', 'tracking_error', 'response_time', 'sorting_accuracy', 'control_error', 'peak_acceleration', 'collisions'];
+  const controlMetrics = ['placement_error', 'platform_tilt', 'tracking_error', 'response_time', 'sorting_accuracy', 'control_error', 'peak_acceleration', 'collisions', 'alignment_error'];
 
   if (failed.some((reading) => controlMetrics.includes(reading.metric))) for (const control of state.controls) {
     const before = control.kp;
@@ -190,9 +190,9 @@ function optimizationActions(state: ForgeState, run: SimulationRun) {
     }
   }
 
-  if (failed.some((reading) => ['payload_capacity', 'joint_margin'].includes(reading.metric))) for (const actuator of state.actuators) {
+  if (failed.some((reading) => ['payload_capacity', 'joint_margin', 'clamp_force'].includes(reading.metric))) for (const actuator of state.actuators) {
     const before = actuator.maxForce;
-    actuator.maxForce = Number((actuator.maxForce * factorFor('payload_capacity', 'joint_margin')).toFixed(1));
+    actuator.maxForce = Number((actuator.maxForce * factorFor('payload_capacity', 'joint_margin', 'clamp_force')).toFixed(1));
     if (actuator.maxForce !== before) actions.push({ targetId: actuator.id, field: 'maxForce', before, after: actuator.maxForce, reason: 'Restore actuation margin under the measured payload.' });
   }
 

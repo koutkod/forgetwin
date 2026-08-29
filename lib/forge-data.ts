@@ -3,6 +3,7 @@ import type { ForgeState, MaterialSpec, PrimitiveCatalogItem, PrimitiveKind, Vec
 export const materials: MaterialSpec[] = [
   { id: 'steel', name: 'Structural steel', density: 7850, friction: .62, restitution: .04, strength: 250, color: '#6e7d86' },
   { id: 'aluminum', name: '6061 aluminum', density: 2700, friction: .48, restitution: .08, strength: 155, color: '#a8b5bb' },
+  { id: 'copper', name: 'HVAC copper', density: 8960, friction: .46, restitution: .05, strength: 210, color: '#b96f43' },
   { id: 'rubber', name: 'Industrial rubber', density: 1100, friction: 1.05, restitution: .18, strength: 18, color: '#20282d' },
   { id: 'polymer', name: 'Engineering polymer', density: 1180, friction: .38, restitution: .12, strength: 62, color: '#2d7190' },
   { id: 'composite', name: 'Carbon composite', density: 1600, friction: .42, restitution: .06, strength: 410, color: '#37464e' },
@@ -64,6 +65,7 @@ export const engineeringExamples: EngineeringExample[] = [
   { id: 'warehouse', sector: 'Warehouse', title: 'Adaptive buffer', prompt: 'Build a warehouse buffer that prevents collisions while moving 30 packages per minute.' },
   { id: 'agriculture', sector: 'Agriculture', title: 'Gentle grader', prompt: 'Build a machine that sorts tomatoes by size while keeping drop height below 15 cm.' },
   { id: 'recycling', sector: 'Recycling', title: 'Material separator', prompt: 'Build a recycling machine that separates metal, plastic, and rejected objects into three containers.' },
+  { id: 'hvac-fixture', sector: 'HVAC manufacturing', title: 'Brazing fixture', prompt: 'Build a brazing fixture plate that positions a heat exchanger and two copper pipes within 2 mm before brazing.' },
   { id: 'drawbridge', sector: 'Novel composition', title: 'Counterweighted drawbridge', prompt: 'Build a 4 meter drawbridge that raises in under 15 seconds using a motor, pulley, and counterweight.' },
 ];
 

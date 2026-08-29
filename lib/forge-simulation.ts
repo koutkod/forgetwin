@@ -170,6 +170,8 @@ function source(metric: string) {
     drop_height: 'vertical difference between active transport and transfer surfaces', control_error: 'controller gain and current sensor calibration offset',
     assembly_integrity: 'largest mechanically connected graph component', component_count: 'physical body count in the shared world',
     flow_rate: 'piston swept volume × crank rpm × volumetric efficiency', angular_travel: 'active revolute-joint limit envelope',
+    alignment_error: 'vision and position sensor coverage combined with fixture-controller calibration',
+    clamp_force: 'sum of registered hold-down actuator force limits',
   };
   return sources[metric];
 }
@@ -210,6 +212,8 @@ function rawMetric(metric: string, state: ForgeState, a: ReturnType<typeof world
     component_count: state.components.length,
     flow_rate: a.flowRate,
     angular_travel: a.angularTravel,
+    alignment_error: 18 / Math.max(1, 1 + a.controlQuality * 5 + a.sensorCount * 1.25),
+    clamp_force: a.actuatorForce,
   };
   const value = values[metric];
   if (value === undefined) throw new Error(`UNSUPPORTED_MEASUREMENT: “${metric}” has no registered evaluator.`);
@@ -243,14 +247,14 @@ function objective(measures: MetricReading[]) {
 function recommendations(state: ForgeState, failed: MetricReading[]): OptimizationAction[] {
   const actions: OptimizationAction[] = [];
   const add = (targetId: string, field: string, before: number | string, after: number | string, reason: string) => actions.push({ targetId, field, before, after, reason });
-  if (failed.some((item) => ['payload_capacity', 'output_torque', 'joint_margin', 'traction_margin'].includes(item.metric))) {
+  if (failed.some((item) => ['payload_capacity', 'output_torque', 'joint_margin', 'traction_margin', 'clamp_force'].includes(item.metric))) {
     state.actuators.slice(0, 2).forEach((item) => add(item.id, 'maxForce', item.maxForce, round(item.maxForce * 1.5, 1), 'Increase force from measured load margin.'));
     state.motors.slice(0, 2).forEach((item) => add(item.id, 'maxTorque', item.maxTorque, round(item.maxTorque * 1.5, 1), 'Increase torque from measured drive margin.'));
   }
   if (failed.some((item) => ['throughput', 'course_time', 'flow_rate'].includes(item.metric))) state.motors.slice(0, 2).forEach((item) => add(item.id, 'maxRpm', item.maxRpm, round(item.maxRpm * 1.3, 1), 'Increase cycle speed from measured throughput.'));
   if (failed.some((item) => ['deflection', 'safety_factor', 'load_capacity'].includes(item.metric))) state.components.filter((item) => ['beam', 'plate'].includes(item.primitive)).slice(0, 2).forEach((item) => add(item.id, 'section depth', item.dimensions[1], round(item.dimensions[1] * 1.2, 3), 'Increase section stiffness from structural evidence.'));
   if (failed.some((item) => ['stability_margin', 'platform_tilt'].includes(item.metric))) state.components.filter((item) => ['spring', 'counterweight'].includes(item.primitive)).slice(0, 2).forEach((item) => add(item.id, item.primitive === 'spring' ? 'stiffness' : 'mass', item.primitive === 'spring' ? Number(item.parameters.stiffness ?? 18000) : item.mass, item.primitive === 'spring' ? Number(item.parameters.stiffness ?? 18000) * 1.3 : item.mass * 1.3, 'Increase stability authority from measured motion.'));
-  if (failed.some((item) => ['placement_error', 'tracking_error', 'sorting_accuracy', 'control_error', 'peak_acceleration'].includes(item.metric))) state.controls.slice(0, 2).forEach((item) => add(item.id, 'controller calibration/gain', item.kp, Math.min(1.65, Math.max(.95, item.kp * 1.5)), 'Retune gains and sensor datum from measured error.'));
+  if (failed.some((item) => ['placement_error', 'tracking_error', 'sorting_accuracy', 'control_error', 'peak_acceleration', 'alignment_error'].includes(item.metric))) state.controls.slice(0, 2).forEach((item) => add(item.id, 'controller calibration/gain', item.kp, Math.min(1.65, Math.max(.95, item.kp * 1.5)), 'Retune gains and sensor datum from measured error.'));
   if (failed.some((item) => item.metric === 'transmission_efficiency')) state.components.filter((item) => item.primitive === 'gear').forEach((item) => add(item.id, 'mesh_efficiency', Number(item.parameters.mesh_efficiency ?? .85), .92, 'Specify the lower-loss active mesh.'));
   return actions;
 }

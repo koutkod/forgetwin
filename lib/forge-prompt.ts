@@ -113,11 +113,13 @@ function inferCapabilities(text: string): Capability[] {
   if (/bin|container|collect|recycling|reject|tank|reservoir/.test(text)) capabilities.add('contain');
   if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|pump/.test(text)) capabilities.add('rotate');
   if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text)) capabilities.add('measure');
+  if (/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text)) capabilities.add('measure');
   return [...capabilities];
 }
 
 function identity(text: string, capabilities: Capability[]) {
   const candidates: Array<[RegExp, string, string]> = [
+    [/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/, 'Precision HVAC brazing fixture', 'HVAC manufacturing'],
     [/pump|reciprocat/, 'Reciprocating pump mechanism', 'Fluid power'],
     [/four[- ]bar|linkage/, 'Parametric linkage mechanism', 'Mechanism design'],
     [/drawbridge|folding bridge/, 'Actuated folding span', 'Civil mechanisms'],
@@ -149,6 +151,15 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   const spanSystem = /bridge|truss|structural span/.test(text);
   const reciprocating = /pump|reciprocat/.test(text);
   const linkage = /four[- ]bar|linkage/.test(text);
+  const brazingFixture = /hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text);
+
+  if (brazingFixture) {
+    const toleranceMm = numeric(capture(text, /(\d+(?:\.\d+)?)\s*mm\b/i), 2);
+    add('alignment_error', 'Tube alignment error', 'max', toleranceMm, 'mm');
+    add('clamp_force', 'Available clamp force', 'min', 1200, 'N');
+    add('assembly_integrity', 'Fixture connectivity', 'min', 95, '%');
+    add('component_count', 'Physical bodies', 'max', 24, '');
+  }
 
   if (spanSystem) {
     add('span', 'Clear span', 'min', values.spanM, 'm', 'spanM');
@@ -672,6 +683,49 @@ function addGenericMotion(context: ModuleContext): ModuleResult {
   return { id: 'constructed-motion', mountId: base, editableId: sensorBody, handles: rotary ? ['rotate', 'measure'] : ['measure'] };
 }
 
+function addBrazingFixture(context: ModuleContext): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly('hvac brazing fixture', 'Machined fixture plate, finned heat exchanger workpiece, copper tube locators, clamps, and metrology', rootAssemblyId);
+  const subframe = builder.component('frame', 'welded fixture support frame', assembly, [0, .18, 0], [4.5, .28, 3], 'steel', 'fixed', { fixture_base: true }, 86);
+  const plate = builder.component('plate', 'machined brazing fixture plate', assembly, [0, .43, 0], [4.15, .18, 2.7], 'aluminum', 'fixed', { fixture_plate: true, locating_grid: true }, 64);
+  builder.joint('fixed', subframe, plate);
+
+  const core = builder.component('plate', 'finned heat exchanger core', assembly, [0, 1.3, 0], [2.45, 1.22, .34], 'aluminum', 'dynamic', { heat_exchanger_core: true, payload_kg: 18 }, 18);
+  builder.joint('fixed', plate, core);
+
+  const leftHeader = builder.component('shaft', 'left copper header pipe', assembly, [-1.34, 1.3, 0], [.18, 1.42, .18], 'copper', 'dynamic', { hvac_pipe: true, pipe_role: 'header' }, 3.2);
+  const rightHeader = builder.component('shaft', 'right copper header pipe', assembly, [1.34, 1.3, 0], [.18, 1.42, .18], 'copper', 'dynamic', { hvac_pipe: true, pipe_role: 'header' }, 3.2);
+  builder.joint('fixed', core, leftHeader); builder.joint('fixed', core, rightHeader);
+  const inlet = builder.component('shaft', 'copper inlet tube', assembly, [-1.88, 1.68, 0], [.15, 1.05, .15], 'copper', 'dynamic', { hvac_pipe: true, pipe_role: 'inlet' }, 1.3);
+  const outlet = builder.component('shaft', 'copper outlet tube', assembly, [1.88, .98, 0], [.15, 1.05, .15], 'copper', 'dynamic', { hvac_pipe: true, pipe_role: 'outlet' }, 1.3);
+  builder.rotate(inlet, [0, 0, Math.PI / 2]); builder.rotate(outlet, [0, 0, Math.PI / 2]);
+  builder.joint('fixed', leftHeader, inlet); builder.joint('fixed', rightHeader, outlet);
+
+  for (const [index, position] of ([[-1.62, .73, -.72], [-1.62, .73, .72], [1.62, .73, -.72], [1.62, .73, .72]] as Vec3[]).entries()) {
+    const locator = builder.component('support', `precision locating pin ${index + 1}`, assembly, position, [.28, .52, .28], 'steel', 'fixed', { locating_pin: true }, 1.5);
+    builder.joint('fixed', plate, locator);
+  }
+
+  const actuatorIds: string[] = [];
+  for (const [index, side] of [-1, 1].entries()) {
+    const clamp = builder.component('piston', `${side < 0 ? 'left' : 'right'} pneumatic hold-down clamp`, assembly, [side * 1.72, 1.55, -.88], [.3, .92, .3], 'steel', 'kinematic', { fixture_clamp: true, clamp_side: side }, 5.5);
+    const clampJoint = builder.joint('prismatic', plate, clamp, [0, 1, 0], { limits: [-.22, 0] });
+    actuatorIds.push(builder.actuator(clamp, clampJoint, 'piston', 450, .22, .22));
+    builder.connect(clamp, core, 'mechanical', `hold_down_${index + 1}`);
+  }
+
+  const visionBody = builder.component('camera', 'overhead alignment camera', assembly, [0, 2.55, 1.28], [.38, .3, .38], 'polymer', 'fixed', { fixture_camera: true }, 1.2);
+  builder.rotate(visionBody, [-Math.PI / 2, 0, 0]);
+  const forceBody = builder.component('sensor', 'clamp force transducer', assembly, [0, .68, -.95], [.32, .16, .32], 'polymer', 'fixed', { force_transducer: true }, .4);
+  const vision = builder.sensor(visionBody, 'camera', 'tube_alignment', core, 4);
+  const force = builder.sensor(forceBody, 'force', 'clamp_force', core, 2);
+  const controller = builder.component('controller', 'brazing fixture interlock', assembly, [1.55, .78, 1.08], [.58, .42, .48], 'polymer', 'fixed', { fixture_controller: true }, 3);
+  builder.joint('fixed', visionBody, plate); builder.joint('fixed', forceBody, plate); builder.joint('fixed', controller, plate);
+  builder.connect(visionBody, controller, 'signal', 'alignment_feedback'); builder.connect(forceBody, controller, 'signal', 'clamp_feedback');
+  builder.control('fixture clamp and alignment', 'synchronized', [vision, force], actuatorIds, 'close both clamps only after the heat exchanger and copper tubes are inside the brazing alignment envelope', 2);
+  return { id: 'hvac-brazing-fixture', mountId: plate, editableId: visionBody, handles: ['structure', 'measure'], outputId: core };
+}
+
 const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
   ['beam', /\bbeams?\b/], ['plate', /\bplates?\b/], ['frame', /\bframes?\b/], ['wheel', /\bwheels?\b/],
   ['shaft', /\bshafts?\b/], ['gear', /\bgears?\b/], ['pulley', /\bpulleys?\b/], ['belt', /\bbelts?\b/],
@@ -720,6 +774,7 @@ function addRequestedPrimitiveBodies(context: ModuleContext, missing: Array<[Pri
 }
 
 const moduleRules: ModuleRule[] = [
+  { id: 'hvac-brazing-fixture', matches: ({ text }) => /hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text), compose: addBrazingFixture },
   { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
   { id: 'rolling-support', matches: ({ capabilities }) => capabilities.includes('mobile'), compose: addRollingSupport },
   { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },

@@ -117,4 +117,22 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(linkage.joints.filter((item) => item.type === 'revolute')).toHaveLength(4);
     expect(linkage.joints.some((item) => item.type === 'prismatic' && item.limits?.[1] === .5)).toBe(true);
   });
+
+  it('recognizes HVAC brazing language and composes a readable precision fixture', () => {
+    const short = compileDesignBrief('Build a braze plate for a good HVAC unit.');
+    const detailed = compileDesignBrief('Build a brazing fixture plate that positions a heat exchanger and two copper pipes within 2 mm before brazing.');
+    for (const plan of [short, detailed]) {
+      expect(plan.goal.machineName).toBe('Precision HVAC brazing fixture');
+      expect(plan.goal.domain).toBe('HVAC manufacturing');
+      expect(plan.components.some((item) => item.parameters?.fixture_plate)).toBe(true);
+      expect(plan.components.some((item) => item.parameters?.heat_exchanger_core)).toBe(true);
+      expect(plan.components.filter((item) => item.parameters?.hvac_pipe).length).toBeGreaterThanOrEqual(4);
+      expect(plan.components.filter((item) => item.parameters?.fixture_clamp)).toHaveLength(2);
+      expect(plan.components.filter((item) => item.parameters?.locating_pin)).toHaveLength(4);
+      expect(plan.components.some((item) => item.role === 'constructed base')).toBe(false);
+      expect(plan.components.some((item) => item.role.startsWith('serial link'))).toBe(false);
+      expect(plan.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['alignment_error', 'clamp_force', 'assembly_integrity']));
+    }
+    expect(detailed.goal.constraints.find((item) => item.metric === 'alignment_error')?.target).toBe(2);
+  });
 });
