@@ -725,6 +725,10 @@ function addParametricCadPart(context: ModuleContext): ModuleResult {
     const base = builder.component('frame', 'rotor inspection stand', assembly, [0, .18, 0], [3.2, .3, 2.4], 'steel', 'fixed');
     const support = builder.component('beam', 'rotor bearing pedestal', assembly, [0, 1.35, -.42], [.36, 2.25, .36], 'steel', 'fixed');
     builder.joint('fixed', base, support);
+    if (/\bduct\b/.test(text)) {
+      const shroud = builder.component('frame', 'ventilation duct shroud', assembly, [0, 2.1, -.1], [3.25, 3.25, .22], 'steel', 'fixed', { cad_form: 'rotor_shroud' });
+      builder.joint('fixed', support, shroud);
+    }
     const hub = builder.component('wheel', 'machined rotor hub', assembly, [0, 2.1, 0], [1, .34, 1], 'aluminum', 'dynamic', { cad_form: 'rotor_hub' });
     const shaftJoint = builder.joint('revolute', support, hub, [0, 0, 1], { limits: [-Math.PI, Math.PI] });
     const bladeCount = countBefore(text, 'blade', 6, 2, 12);

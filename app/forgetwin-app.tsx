@@ -546,6 +546,7 @@ function wholeMachineChatExamples(state: ForgeState) {
   if (/crane|boom|counterweight|outrigger/.test(roles)) return ['Widen the crane carrier base by 20%', 'Increase the rear counterweight mass by 25%', 'Lengthen the lifting boom by 15%'];
   if (/road wheel|mobile chassis|suspension/.test(roles)) return ['Widen the wheelbase by 15%', 'Lower the payload deck by 0.2 m', 'Use aluminum for the mobile chassis'];
   if (/robotic|serial link|gripper/.test(roles)) return ['Lengthen the final arm link by 10%', 'Move the vision camera higher 0.3 m', 'Make the gripper 15% wider'];
+  if (/rotor|aerodynamic blade|impeller/.test(roles)) return ['Make every aerodynamic blade 10% longer', 'Use aluminum for every aerodynamic blade', 'Move the rotor speed encoder up 0.2 m'];
   if (/gear|shaft|transmission/.test(roles)) return ['Make the output gear 10% larger', 'Use steel for both shafts', 'Move the speed sensor right 0.2 m'];
   if (/span|bridge|truss/.test(roles)) return ['Deepen the bridge deck by 15%', 'Add another structural support', 'Use steel for the span deck'];
   return ['Make the primary support 15% wider', 'Move the feedback sensor up 0.3 m', 'Add another structural support'];

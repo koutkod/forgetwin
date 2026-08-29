@@ -273,9 +273,17 @@ function ParametricCadPart({ component, color, xray, selected }: { component: Ma
     const radius = Math.max(x, y) / 2;
     return <group><mesh rotation={[Math.PI / 2, 0, 0]} castShadow><cylinderGeometry args={[radius, radius * .82, z, 36]} />{faceMaterial(color)}</mesh><mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .22, radius * .22, z * 1.55, 24]} />{faceMaterial('#26333a')}</mesh>{!xray && Array.from({ length: 6 }, (_, index) => { const angle = index / 6 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .62, Math.sin(angle) * radius * .62, z * .57]}><sphereGeometry args={[radius * .07, 12, 12]} /><meshStandardMaterial color="#d4dde0" metalness={.9} /></mesh>; })}</group>;
   }
+  if (form === 'rotor_shroud') {
+    const radius = Math.max(x, y) / 2;
+    return <group>
+      <mesh castShadow><torusGeometry args={[radius * .84, radius * .08, 18, 64]} />{faceMaterial('#718087')}</mesh>
+      <mesh position={[0, 0, -z * .48]}><torusGeometry args={[radius * .84, radius * .025, 10, 64]} />{faceMaterial('#b7c2c6')}</mesh>
+      {!xray && Array.from({ length: 8 }, (_, index) => { const angle = index / 8 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .84, Math.sin(angle) * radius * .84, z * .46]}><boxGeometry args={[radius * .075, radius * .075, z * .42]} /><meshStandardMaterial color="#344149" metalness={.82} roughness={.22} /></mesh>; })}
+    </group>;
+  }
   if (form === 'aero_blade') {
     return <group>
-      <mesh castShadow scale={[1, 1, .86]} rotation={[0, 0, -.08]}><boxGeometry args={[x, y, z]} /><StandardMaterial color="#9db5be" xray={xray} selected={selected} metalness={.46} roughness={.34} /></mesh>
+      <mesh castShadow scale={[1, 1, .86]} rotation={[0, 0, -.08]}><boxGeometry args={[x, y, z]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.46} roughness={.34} /></mesh>
       <mesh position={[x * .42, y * .1, 0]} scale={[.28, 1.45, 1]}><sphereGeometry args={[Math.max(y, z) * .48, 20, 14]} />{faceMaterial('#829198')}</mesh>
       {!xray && <Line points={[[-x * .45, y * .43, z * .5], [x * .45, y * .22, z * .5]]} color="#d9e2e5" lineWidth={1.2} />}
     </group>;
