@@ -1,13 +1,17 @@
 'use client';
 
 import {
-  Activity, AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Box, Check, ChevronDown,
+  Activity, AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Bot, Box, Check, ChevronDown,
   CircleDot, Clock3, Code2, Cpu, Gauge, GitCompareArrows, History, Layers3, Move3D,
-  MoveHorizontal, Play, Radio, Redo2, RotateCcw, Save, Settings2, Sparkles,
-  TimerReset, Undo2, Waypoints, X, Zap,
+  KeyRound, MoveHorizontal, Play, Radio, Redo2, RotateCcw, Save, Settings2, Sparkles,
+  Square, TimerReset, Undo2, Waypoints, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ForgeScene } from '../components/forge/forge-scene';
+import {
+  getAgentStatus, requestAgentPlan, requestAgentRedesign,
+  type AgentRuntimeMode, type AgentTraceItem,
+} from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
 import { FORGE_TOOL_COUNT, useForge, useForgeWebMCP } from '../lib/use-forge';
@@ -15,7 +19,7 @@ import type {
   EngineeringExample,
 } from '../lib/forge-data';
 import type {
-  ForgeState, ForgeToolName, MachineComponent, MetricReading, Metrics,
+  Actor, ForgeState, ForgeToolName, MachineComponent, MetricReading, Metrics,
   PrimitiveKind, SimulationRun, ToolResult,
 } from '../lib/forge-types';
 
@@ -25,8 +29,8 @@ const constraintSymbol = (operator: 'min' | 'max' | 'exact') => operator === 'mi
 
 export function ForgeTwinApp() {
   const forge = useForge();
-  const { state, command, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot } = forge;
-  const registeredTools = useForgeWebMCP(command, runMachine, getSnapshot);
+  const { state, hydrated, command, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot } = forge;
+  const registeredTools = useForgeWebMCP(command, runMachine, getSnapshot, hydrated);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,22 +39,123 @@ export function ForgeTwinApp() {
   const [goalOpen, setGoalOpen] = useState(false);
   const [goalPrompt, setGoalPrompt] = useState(DEFAULT_DESIGN_PROMPT);
   const [promptError, setPromptError] = useState<string | null>(null);
+  const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeMode>('checking');
+  const [agentModel, setAgentModel] = useState('gpt-5.4-mini');
+  const [agentKey, setAgentKey] = useState('');
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [agentTrace, setAgentTrace] = useState<AgentTraceItem[]>([]);
+  const [agentCancelable, setAgentCancelable] = useState(false);
+  const traceSeq = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3600); return () => window.clearTimeout(timer); }, [toast]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getAgentStatus(controller.signal).then((status) => {
+      setAgentModel(status.model); setAgentRuntime(status.configured ? 'server-model' : 'deterministic');
+    }).catch(() => setAgentRuntime('deterministic'));
+    return () => controller.abort();
+  }, []);
   const must = (result: ToolResult) => { if (!result.ok) throw new Error(result.error.message); return result; };
-  const call = async (name: ForgeToolName, input: Record<string, unknown> = {}, delay = 20) => { const result = must(command(name, input, 'System')); await pause(delay); return result; };
+  const ensureActive = (signal?: AbortSignal) => { if (signal?.aborted) throw new DOMException('Agent run cancelled.', 'AbortError'); };
+  const call = async (name: ForgeToolName, input: Record<string, unknown> = {}, delay = 20, actor: Actor = 'Deterministic', signal?: AbortSignal) => { ensureActive(signal); const result = must(command(name, input, actor)); await pause(delay); ensureActive(signal); return result; };
+  const addTrace = (kind: AgentTraceItem['kind'], title: string, detail: string) => {
+    traceSeq.current += 1;
+    const item: AgentTraceItem = { id: `agent-trace-${traceSeq.current}`, kind, title, detail, at: new Date().toISOString() };
+    setAgentTrace((current) => [...current, item].slice(-30));
+  };
+  const runtimeActor = (): Actor => agentRuntime === 'server-model' || agentRuntime === 'session-model' ? 'ModelAgent' : 'Deterministic';
   const updateGoalPrompt = (prompt: string) => { setGoalPrompt(prompt); setPromptError(null); };
+
+  const redesignRun = async (failed: SimulationRun, prompt: string, requestedActor: Actor, signal?: AbortSignal) => {
+    let actor = requestedActor;
+    let steps: Array<{ tool: 'inspect_telemetry' | 'inspect_failure' | 'measure_constraint' | 'optimize_design' | 'run_simulation'; metric: string; objective: string }> = [
+      { tool: 'inspect_telemetry', metric: '', objective: '' },
+      { tool: 'inspect_failure', metric: '', objective: '' },
+      { tool: 'measure_constraint', metric: failed.metrics.measures.find((item) => item.status === 'fail')?.metric ?? '', objective: '' },
+      { tool: 'optimize_design', metric: '', objective: 'minimize normalized constraint violation while preserving human locks' },
+      { tool: 'run_simulation', metric: '', objective: '' },
+    ];
+    if (requestedActor === 'ModelAgent') {
+      try {
+        const response = await requestAgentRedesign(prompt, {
+          run_id: failed.id,
+          machine_name: getSnapshot().goal?.machineName ?? 'Mechanical system',
+          summary: failed.diagnosis.summary,
+          evidence: `${failed.diagnosis.evidence} ${failed.diagnosis.action}`,
+          failed_metrics: failed.metrics.measures.filter((item) => item.status === 'fail').map((item) => ({ metric: item.metric, label: item.label, value: item.value, target: item.target, unit: item.unit, operator: item.operator })),
+          human_locks: getSnapshot().humanConstraints.map((item) => ({ component_id: item.componentId, fields: item.fields })),
+        }, agentKey || undefined, signal);
+        setAgentModel(response.model);
+        steps = response.result.tool_sequence;
+        if (!steps.some((step) => step.tool === 'optimize_design')) steps = [...steps.filter((step) => step.tool !== 'run_simulation'), { tool: 'optimize_design', metric: '', objective: response.result.objective }, ...steps.filter((step) => step.tool === 'run_simulation')];
+        if (steps.at(-1)?.tool !== 'run_simulation') steps.push({ tool: 'run_simulation', metric: '', objective: '' });
+        addTrace('reasoning', 'Model diagnosed the failed trial', response.result.diagnosis);
+        addTrace('action', 'Model selected the evidence loop', steps.map((step) => step.tool).join(' → '));
+      } catch (caught) {
+        actor = 'Deterministic'; setAgentRuntime('deterministic');
+        addTrace('fallback', 'Model redesign unavailable', `${caught instanceof Error ? caught.message : 'The model request failed.'} Continuing with the bounded local evidence loop.`);
+      }
+    }
+    const failedMetric = failed.metrics.measures.find((item) => item.status === 'fail');
+    for (const step of steps.slice(0, 9)) {
+      ensureActive(signal);
+      if (step.tool === 'run_simulation') { must(await runMachine(actor)); continue; }
+      if (step.tool === 'measure_constraint') {
+        const metric = failed.metrics.measures.some((item) => item.metric === step.metric) ? step.metric : failedMetric?.metric;
+        if (metric) await call(step.tool, { run_id: failed.id, metric }, 35, actor, signal);
+        continue;
+      }
+      if (step.tool === 'optimize_design') await call(step.tool, { run_id: failed.id, objective: step.objective || 'satisfy measured constraints with the smallest bounded redesign' }, 70, actor, signal);
+      else await call(step.tool, { run_id: failed.id }, 40, actor, signal);
+    }
+    return actor;
+  };
 
   const generateFromPrompt = async (prompt: string) => {
     if (busy) return;
+    const requestedPrompt = prompt.trim();
     setGoalPrompt(prompt);
-    let plan;
-    try { plan = compileDesignBrief(prompt); }
-    catch (caught) { setPromptError(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); return; }
+    if (requestedPrompt.length < 12) { setPromptError('Describe a physical goal with at least one requirement.'); return; }
+    const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true);
     setBusy(true); setError(null); setPromptError(null);
+    traceSeq.current += 1;
+    setAgentTrace([{ id: `agent-trace-${traceSeq.current}`, kind: 'goal', title: 'New engineering mission', detail: requestedPrompt, at: new Date().toISOString() }]);
     try {
-      reset('lab'); await pause(40);
-      await call('inspect_primitive_catalog', {}, 45);
+      let actor: Actor = runtimeActor();
+      let planningPrompt = requestedPrompt;
+      let modelAssumptions: string[] = [];
+      let shouldUseModel = actor === 'ModelAgent';
+      if (agentRuntime === 'checking' && !agentKey) {
+        try {
+          const status = await getAgentStatus(controller.signal);
+          setAgentModel(status.model); setAgentRuntime(status.configured ? 'server-model' : 'deterministic');
+          shouldUseModel = status.configured; actor = status.configured ? 'ModelAgent' : 'Deterministic';
+        } catch { setAgentRuntime('deterministic'); actor = 'Deterministic'; shouldUseModel = false; }
+      }
+      if (agentKey) { shouldUseModel = true; actor = 'ModelAgent'; setAgentRuntime('session-model'); }
+      if (shouldUseModel) {
+        addTrace('action', 'Asking the model to plan', 'Interpreting constraints, selecting a composable architecture, and choosing verification metrics.');
+        try {
+          const response = await requestAgentPlan(requestedPrompt, agentKey || undefined, controller.signal);
+          planningPrompt = response.result.normalized_prompt; modelAssumptions = response.result.assumptions;
+          setAgentModel(response.model);
+          addTrace('reasoning', response.result.reasoning_summary, `Architecture: ${response.result.architecture.join(' · ')}. Verify: ${response.result.verification_focus.join(', ')}.`);
+        } catch (caught) {
+          actor = 'Deterministic'; setAgentRuntime('deterministic');
+          addTrace('fallback', 'Switched to the local engineer', `${caught instanceof Error ? caught.message : 'The model request failed.'} The deterministic planner will still build, simulate, and repair the machine.`);
+        }
+      } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
+
+      let plan;
+      try { plan = compileDesignBrief(planningPrompt); }
+      catch (caught) { throw new Error(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
+      plan.brief = requestedPrompt; plan.goal.brief = requestedPrompt;
+      plan.assumptions = [...modelAssumptions, ...plan.assumptions].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
+      addTrace('reasoning', 'World plan compiled', `${plan.assemblies.length} assemblies, ${plan.components.length} bodies, ${plan.joints.length} joints, ${plan.motors.length + plan.actuators.length} drives, and ${plan.controls.length} control loops.`);
+
+      reset('lab'); await pause(40); ensureActive(controller.signal);
+      await call('inspect_primitive_catalog', {}, 45, actor, controller.signal);
       await call('set_design_goal', {
         machine_name: plan.goal.machineName, domain: plan.goal.domain, brief: plan.brief,
         summary: plan.goal.summary, capabilities: plan.goal.capabilities, constraints: plan.goal.constraints,
@@ -58,47 +163,51 @@ export function ForgeTwinApp() {
         disclaimer: plan.goal.disclaimer, simulation_model: plan.goal.simulationModel,
         editable_component_id: plan.goal.editableComponentId, editable_label: plan.goal.editableLabel,
         world: { gravity: plan.world.gravity, duration: plan.world.duration, bounds: plan.world.bounds, environment: plan.world.environment },
-      }, 35);
-      for (const item of plan.assemblies) await call('create_assembly', { assembly_id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId });
+      }, 35, actor, controller.signal);
+      addTrace('action', 'Building the shared world', 'Creating the planned bodies, connections, joints, sensors, actuators, and control channels through guarded tools.');
+      for (const item of plan.assemblies) await call('create_assembly', { assembly_id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId }, 20, actor, controller.signal);
       for (const item of plan.components) await call('create_component', {
         component_id: item.id, primitive: item.primitive, assembly_id: item.assemblyId, role: item.role,
         position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId,
         body_type: item.bodyType, mass: item.mass, color: item.color, parameters: item.parameters,
-      });
+      }, 20, actor, controller.signal);
       const connected = new Set<string>();
       for (const item of plan.connections) {
         connected.add([item.sourceId, item.targetId].sort().join('-'));
-        await call('connect_components', { connection_id: item.id, source_id: item.sourceId, target_id: item.targetId, connection_type: item.type, channel: item.channel });
+        await call('connect_components', { connection_id: item.id, source_id: item.sourceId, target_id: item.targetId, connection_type: item.type, channel: item.channel }, 20, actor, controller.signal);
       }
       for (const [index, item] of plan.joints.entries()) {
         const pair = [item.componentA, item.componentB].sort().join('-');
         if (!connected.has(pair)) {
           connected.add(pair);
-          await call('connect_components', { connection_id: `edge-${index + 1}`, source_id: item.componentA, target_id: item.componentB, connection_type: 'mechanical', channel: item.type });
+          await call('connect_components', { connection_id: `edge-${index + 1}`, source_id: item.componentA, target_id: item.componentB, connection_type: 'mechanical', channel: item.type }, 20, actor, controller.signal);
         }
-        await call('create_joint', { joint_id: item.id, joint_type: item.type, component_a: item.componentA, component_b: item.componentB, anchor_a: item.anchorA, anchor_b: item.anchorB, axis: item.axis, limits: item.limits, ratio: item.ratio, stiffness: item.stiffness, damping: item.damping });
+        await call('create_joint', { joint_id: item.id, joint_type: item.type, component_a: item.componentA, component_b: item.componentB, anchor_a: item.anchorA, anchor_b: item.anchorB, axis: item.axis, limits: item.limits, ratio: item.ratio, stiffness: item.stiffness, damping: item.damping }, 20, actor, controller.signal);
       }
-      for (const item of plan.motors) await call('add_motor', { motor_id: item.id, component_id: item.componentId, joint_id: item.jointId, max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction });
-      for (const item of plan.sensors) await call('add_sensor', { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range });
-      for (const item of plan.actuators) await call('add_actuator', { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel });
-      for (const item of plan.controls) await call('set_control_logic', { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX });
+      for (const item of plan.motors) await call('add_motor', { motor_id: item.id, component_id: item.componentId, joint_id: item.jointId, max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction }, 20, actor, controller.signal);
+      for (const item of plan.sensors) await call('add_sensor', { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range }, 20, actor, controller.signal);
+      for (const item of plan.actuators) await call('add_actuator', { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel }, 20, actor, controller.signal);
+      for (const item of plan.controls) await call('set_control_logic', { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX }, 20, actor, controller.signal);
 
-      must(await runMachine('System'));
+      addTrace('action', 'Running the first physics trial', 'Instantiating the current world in Rapier at 60 Hz and measuring every registered constraint.');
+      must(await runMachine(actor));
+      const firstRun = getSnapshot().runs.at(-1);
+      if (firstRun) addTrace('observation', firstRun.status === 'passed' ? 'Physics accepted the first design' : 'Physics rejected the first design', `${firstRun.diagnosis.summary} Constraint score: ${firstRun.metrics.score}%.`);
       for (let iteration = 0; iteration < 2 && getSnapshot().runs.at(-1)?.status === 'failed'; iteration += 1) {
         const failed = getSnapshot().runs.at(-1)!;
-        setToast(`${failed.diagnosis.summary} — measuring causal fields`);
-        await call('inspect_telemetry', { run_id: failed.id }, 55);
-        await call('inspect_failure', { run_id: failed.id }, 45);
-        const failedMetric = failed.metrics.measures.find((item) => item.status === 'fail');
-        if (failedMetric) await call('measure_constraint', { run_id: failed.id, metric: failedMetric.metric }, 40);
-        await call('optimize_design', { run_id: failed.id, objective: 'minimize normalized constraint violation while preserving human locks' }, 80);
-        must(await runMachine('System'));
+        setToast(`${failed.diagnosis.summary} — agent is inspecting the evidence`);
+        actor = await redesignRun(failed, requestedPrompt, actor, controller.signal);
+        const rerun = getSnapshot().runs.at(-1);
+        if (rerun) addTrace('observation', `Trial ${rerun.id} ${rerun.status}`, `${rerun.metrics.score}% constraint score · objective ${rerun.objective.toFixed(3)}.`);
       }
       const finalRun = getSnapshot().runs.at(-1);
       if (finalRun?.status !== 'passed') throw new Error('The bounded optimizer still misses a target. Open telemetry to inspect the remaining physical constraint.');
+      addTrace('complete', 'Engineering mission complete', `${plan.goal.machineName} passes ${finalRun.metrics.measures.filter((item) => item.status === 'pass').length}/${finalRun.metrics.measures.length} measured constraints with ${plan.components.length} generated bodies.`);
       setToast(`${plan.goal.machineName} engineered from ${plan.components.length} primitives · ${finalRun.metrics.score}% constraints pass`);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'The machine could not be engineered.'); }
-    finally { setBusy(false); }
+    } catch (caught) {
+      if (caught instanceof Error && caught.name === 'AbortError') { addTrace('observation', 'Engineering run stopped', 'The current agent run was cancelled. The last committed world revision is still available.'); setToast('Agent run cancelled'); }
+      else { const message = caught instanceof Error ? caught.message : 'The machine could not be engineered.'; setError(message); addTrace('error', 'Engineering run stopped', message); }
+    } finally { abortRef.current = null; setAgentCancelable(false); setBusy(false); }
   };
 
   const diagnoseAndFix = async () => {
@@ -106,14 +215,11 @@ export function ForgeTwinApp() {
     try {
       const failed = getSnapshot().runs.at(-1);
       if (!failed || failed.status !== 'failed') throw new Error('Run a failing physics trial before optimizing.');
-      await call('inspect_telemetry', { run_id: failed.id }, 60);
-      await call('inspect_failure', { run_id: failed.id }, 50);
-      const metric = failed.metrics.measures.find((item) => item.status === 'fail');
-      if (metric) await call('measure_constraint', { run_id: failed.id, metric: metric.metric });
-      await call('optimize_design', { run_id: failed.id, objective: 'satisfy measured constraints with the smallest bounded redesign' }, 80);
-      must(await runMachine('System'));
+      addTrace('action', 'Redesign requested', 'The agent is reading the failed trial before changing the world.');
+      await redesignRun(failed, goalPrompt, runtimeActor());
       const repaired = getSnapshot().runs.at(-1);
       if (repaired?.status !== 'passed') throw new Error('One or more constraints still fail after the bounded redesign.');
+      addTrace('complete', 'Measured redesign accepted', `${repaired.metrics.score}% constraint score after the agent-selected evidence loop.`);
       setToast('Measured redesign passes every constraint');
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'The redesign could not finish.'); }
     finally { setBusy(false); }
@@ -122,19 +228,18 @@ export function ForgeTwinApp() {
   const retuneHumanEdit = async () => {
     if (busy) return; setBusy(true); setError(null);
     try {
+      let actor = runtimeActor();
       const before = getSnapshot();
       const preserved = before.humanConstraints.map((constraint) => {
         const component = before.components.find((item) => item.id === constraint.componentId);
         return { componentId: constraint.componentId, fields: [...constraint.fields], values: component ? { position: component.position, rotation: component.rotation, dimensions: component.dimensions, material: [component.materialId, component.color], mass: component.mass } : null };
       });
       if (!preserved.length || preserved.some((item) => !item.values)) throw new Error('Edit a component in the shared world first.');
-      await call('inspect_workspace', { since_revision: Math.max(0, before.revision - 2) }, 60);
-      must(await runMachine('System'));
+      await call('inspect_workspace', { since_revision: Math.max(0, before.revision - 2) }, 60, actor);
+      must(await runMachine(actor));
       for (let iteration = 0; iteration < 2 && getSnapshot().runs.at(-1)?.status === 'failed'; iteration += 1) {
         const failed = getSnapshot().runs.at(-1)!;
-        await call('inspect_failure', { run_id: failed.id }, 50);
-        await call('optimize_design', { run_id: failed.id, objective: 'retune around the human-authored transform' }, 80);
-        must(await runMachine('System'));
+        actor = await redesignRun(failed, `${goalPrompt}\nPreserve every human-authored field and retune the surrounding design.`, actor);
       }
       const after = getSnapshot();
       const final = after.runs.at(-1);
@@ -155,7 +260,7 @@ export function ForgeTwinApp() {
     if (!state.components.length) return generateFromPrompt(goalPrompt);
     if (busy) return;
     setBusy(true); setError(null);
-    const result = await runMachine('System');
+    const result = await runMachine('UI');
     if (!result.ok) setError(result.error.message); else setToast(`Physics run ${getSnapshot().phase}`);
     setBusy(false);
   };
@@ -189,7 +294,36 @@ export function ForgeTwinApp() {
     if (!result.ok) setError(result.error.message); else setToast(`Restored revision ${target.revision} as a new head`);
   };
 
-  if (state.screen === 'landing') return <Landing state={state} toolCount={registeredTools} prompt={goalPrompt} promptError={promptError} busy={busy} onPromptChange={updateGoalPrompt} onEnter={() => patchUi({ screen: 'lab' })} onGenerate={generateFromPrompt} onExample={(example) => { setGoalPrompt(example.prompt); setPromptError(null); }} />;
+  const connectTemporaryModel = (key: string) => {
+    const value = key.trim();
+    if (value.length < 20) { setError('Enter a complete OpenAI API key. It stays only in this browser tab.'); return; }
+    setAgentKey(value); setAgentRuntime('session-model'); setAgentSettingsOpen(false);
+    setToast('Model connected for this tab — the next mission will use model-selected planning');
+  };
+  const disconnectTemporaryModel = () => {
+    setAgentKey(''); setAgentRuntime('checking'); setAgentSettingsOpen(false);
+    void getAgentStatus().then((status) => { setAgentModel(status.model); setAgentRuntime(status.configured ? 'server-model' : 'deterministic'); }).catch(() => setAgentRuntime('deterministic'));
+    setToast('Temporary model key removed from this tab');
+  };
+  const cancelAgentRun = () => { abortRef.current?.abort(); setAgentCancelable(false); };
+  const enterScratchWorld = () => {
+    if (busy) return;
+    reset('lab');
+    const goalResult = command('set_design_goal', {
+      machine_name: 'Untitled mechanism', domain: 'Manual sandbox', brief: 'Manually assemble a new mechanical system from reusable primitives.',
+      summary: 'An unconstrained scratch world for human-led assembly.', capabilities: ['structure'],
+      constraints: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 80, unit: '', source: 'inferred' }],
+      max_components: 80, assumptions: ['Concept-level manual assembly'], disclaimer: 'Concept-level rigid-body sandbox; not a fabrication or safety certification.', simulation_model: 'Rapier rigid bodies plus registered reduced-order metrics.',
+      world: { gravity: [0, -9.81, 0], duration: 8, bounds: [16, 10, 12], environment: 'bounded industrial lab' },
+    }, 'UI');
+    if (!goalResult.ok) { setError(goalResult.error.message); return; }
+    const assemblyResult = command('create_assembly', { assembly_id: 'scratch-assembly', name: 'Scratch assembly', purpose: 'Human-authored primitive workspace.' }, 'UI');
+    if (!assemblyResult.ok) { setError(assemblyResult.error.message); return; }
+    addTrace('goal', 'Manual sandbox opened', 'Add primitives from the catalog, edit their physical fields, connect them through WebMCP, or enter a new goal at any time.');
+    setToast('Scratch world ready — the primitive library is unlocked');
+  };
+
+  if (state.screen === 'landing') return <><Landing state={state} toolCount={registeredTools} prompt={goalPrompt} promptError={promptError} busy={busy} agentRuntime={agentRuntime} agentModel={agentModel} onConfigureAgent={() => setAgentSettingsOpen(true)} onPromptChange={updateGoalPrompt} onEnter={enterScratchWorld} onGenerate={generateFromPrompt} onExample={(example) => { setGoalPrompt(example.prompt); setPromptError(null); }} />{agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}</>;
 
   const latestRun = state.runs.at(-1) ?? null;
   const firstFailedRun = state.runs.find((run) => run.status === 'failed') ?? null;
@@ -200,8 +334,8 @@ export function ForgeTwinApp() {
   return <div className="forge-shell"><a className="skip-link" href="#forge-main">Skip to engineering workspace</a>
     <header className="forge-header">
       <button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => patchUi({ screen: 'landing' })} disabled={busy}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button>
-      <div className="header-center"><span className="live-dot" />Shared world live <span className="header-divider" /> REV {state.revision.toString().padStart(2, '0')} <span className="header-divider" /> {registeredTools ? `${registeredTools}/${FORGE_TOOL_COUNT} WebMCP` : `${FORGE_TOOL_COUNT}-tool fallback`}</div>
-      <div className="header-actions"><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Save</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare</button><button className="ghost-button" disabled={busy} onClick={() => { reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
+      <div className="header-center"><span className={`live-dot ${agentRuntime === 'server-model' || agentRuntime === 'session-model' ? 'cyan' : ''}`} />{agentRuntime === 'server-model' || agentRuntime === 'session-model' ? `${agentModel} connected` : 'Local engineer ready'} <span className="header-divider" /> REV {state.revision.toString().padStart(2, '0')} <span className="header-divider" /> {registeredTools === FORGE_TOOL_COUNT ? `${registeredTools} WebMCP tools live` : 'WebMCP host not connected'}</div>
+      <div className="header-actions"><button className="ghost-button" disabled={busy} onClick={() => setAgentSettingsOpen(true)}><KeyRound size={14} />Agent</button><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Checkpoint</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare runs</button><button className="ghost-button" disabled={busy} onClick={() => { reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setAgentTrace([]); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
     </header>
     <main id="forge-main" className="forge-main">
       <aside className="catalog-panel" aria-label="World hierarchy">
@@ -216,17 +350,18 @@ export function ForgeTwinApp() {
         <ForgeScene state={state} onComponentMove={handleEditableMove} onSelect={(id) => patchUi({ selectedComponentId: id || null })} />
         <div className="viewport-topbar"><div className="scene-path"><span>{state.goal?.domain ?? 'Mechanical world'}</span><i>/</i><strong>{state.goal?.machineName ?? 'Empty sandbox'}</strong>{selected && <><i>/</i><b>{selected.role}</b></>}</div><div className="view-controls"><button onClick={() => patchUi({ xray: !state.xray })} aria-pressed={state.xray} className={state.xray ? 'active' : ''}><Layers3 size={14} />X-Ray</button><button onClick={() => setDrawer('telemetry')}><Gauge size={14} />Telemetry</button><button onClick={() => { setSideTab('history'); setDrawer('history'); }}><History size={14} />Revisions</button></div></div>
         <div className="viewport-status"><span className="live-dot cyan" />RAPIER MULTI-BODY <i />60 HZ <i />SEED 424242 <i />{state.components.length} BODIES · {state.joints.length} JOINTS</div>
-        {!state.components.length && <div className="empty-machine-card"><span className="goal-avatar"><Sparkles size={18} /></span><span className="eyebrow">General-purpose physical sandbox</span><h1>Describe the system.<br />ForgeTwin builds the world.</h1><p>No profile selector. The agent creates reusable primitives, physical properties, joints, sensing, actuation, and control logic from scratch.</p><GoalComposer id="lab-design-goal" prompt={goalPrompt} error={promptError} busy={busy} compact onPromptChange={updateGoalPrompt} onGenerate={generateFromPrompt} /></div>}
+        {!state.components.length && <div className="empty-machine-card"><span className="goal-avatar"><Sparkles size={18} /></span><span className="eyebrow">General-purpose physical sandbox</span><h1>Describe the system.<br />ForgeTwin builds the world.</h1><p>No profile selector. The agent creates reusable primitives, physical properties, joints, sensing, actuation, and control logic from scratch.</p><GoalComposer id="lab-design-goal" prompt={goalPrompt} error={promptError} busy={busy} compact agentRuntime={agentRuntime} onPromptChange={updateGoalPrompt} onGenerate={generateFromPrompt} /></div>}
         {state.phase === 'failed' && latestRun && <FailureBanner run={latestRun} onReplay={() => patchUi({ replayRunId: latestRun.id, replayMode: 'failure' })} onFix={diagnoseAndFix} busy={busy} />}
         {humanChallenge && <div className="challenge-banner"><span className="challenge-icon"><Move3D size={18} /></span><div><span className="eyebrow">Generated + physics verified</span><strong>Now perturb the shared world yourself.</strong><p>Select or drag the highlighted {state.goal?.editableLabel}. The agent must preserve your change and redesign around it.</p></div><div className="challenge-actions">{firstFailedRun && <button className="secondary" onClick={() => patchUi({ replayRunId: firstFailedRun.id, replayMode: 'failure' })}><TimerReset size={13} />Replay failure</button>}<button onClick={() => { patchUi({ selectedComponentId: state.goal?.editableComponentId ?? null, xray: true }); setToast(`Selected ${state.goal?.editableLabel}`); }}>Select editable body</button></div></div>}
         {humanEdited && <div className="challenge-banner human"><span className="challenge-icon"><Radio size={18} /></span><div><span className="eyebrow">Human edit detected</span><strong>{state.humanConstraints.length} {state.humanConstraints.length === 1 ? 'body has' : 'bodies have'} locked fields.</strong><p>{state.humanConstraints.map((item) => `${state.components.find((component) => component.id === item.componentId)?.role ?? item.componentId}: ${item.fields.join(', ')}`).join(' · ')}. The agent will preserve every field and redesign the surrounding world.</p></div><button onClick={retuneHumanEdit} disabled={busy}>{busy ? 'Redesigning…' : 'Redesign around my change'}</button></div>}
         {finalHumanPass && latestRun && <div className="pass-banner"><span><BadgeCheck size={20} /></span><div><strong>All constraints pass with the human edit preserved.</strong><p>{latestRun.metrics.measures.slice(0, 3).map((item) => `${item.label} ${item.value}${item.unit}`).join(' · ')}</p></div><button onClick={() => setDrawer('compare')}>Compare designs</button></div>}
       </section>
-      <aside className="agent-panel" aria-label="Agent activity"><div className="side-tabs"><button className={sideTab === 'activity' ? 'active' : ''} onClick={() => setSideTab('activity')}><Activity size={13} />Activity</button><button className={sideTab === 'history' ? 'active' : ''} onClick={() => setSideTab('history')}><History size={13} />History</button></div>{sideTab === 'activity' ? <AgentFeed state={state} toolCount={registeredTools} /> : <RevisionHistory state={state} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} />}<MetricStack metrics={latestRun?.metrics ?? null} phase={state.phase} />{state.goal && <p className="model-note"><AlertTriangle size={12} />{state.goal.disclaimer}</p>}</aside>
+      <aside className="agent-panel" aria-label="Agent activity"><div className="side-tabs"><button className={sideTab === 'activity' ? 'active' : ''} onClick={() => setSideTab('activity')}><Activity size={13} />Activity</button><button className={sideTab === 'history' ? 'active' : ''} onClick={() => setSideTab('history')}><History size={13} />History</button></div>{sideTab === 'activity' ? <AgentFeed state={state} toolCount={registeredTools} trace={agentTrace} runtime={agentRuntime} model={agentModel} busy={busy} canCancel={agentCancelable} onCancel={cancelAgentRun} onConfigure={() => setAgentSettingsOpen(true)} /> : <RevisionHistory state={state} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} />}<MetricStack metrics={latestRun?.designHash === state.designHash ? latestRun.metrics : null} phase={latestRun?.designHash === state.designHash ? state.phase : state.components.length ? 'ready' : state.phase} />{state.goal && <p className="model-note"><AlertTriangle size={12} />{state.goal.disclaimer}</p>}</aside>
     </main>
     {error && <div className="error-toast" role="alert"><AlertTriangle size={15} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><X size={14} /></button></div>}
     {toast && <div className="success-toast" role="status"><Check size={14} />{toast}</div>}
     {drawer && <Drawer type={drawer} state={state} onClose={() => setDrawer(null)} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} onAddPrimitive={addPrimitive} />}
+    {agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}
     <div className="sr-only" aria-live="polite">{busy ? 'Agent is engineering the shared physical world' : toast ?? error ?? ''}</div>
   </div>;
 }
@@ -244,18 +379,45 @@ function AssemblyTree({ state, onSelect }: { state: ForgeState; onSelect: (id: s
   return <div className="catalog-list hierarchy-list" role="tree" aria-label="Generated assembly hierarchy"><div className="assembly-graph-summary" role="note"><span>{state.connections.length} edges</span><span>{state.sensors.length} sensors</span><span>{state.actuators.length + state.motors.length} drives</span><span>{state.controls.length} controls</span></div>{roots.map((root) => renderAssembly(root.id, 0, new Set()))}</div>;
 }
 
-function Landing({ state, toolCount, prompt, promptError, busy, onPromptChange, onEnter, onGenerate, onExample }: { state: ForgeState; toolCount: number; prompt: string; promptError: string | null; busy: boolean; onPromptChange: (prompt: string) => void; onEnter: () => void; onGenerate: (prompt: string) => void; onExample: (example: EngineeringExample) => void }) {
-  return <div className="landing-shell"><header className="landing-nav"><button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button><div><span className="landing-status"><i />Rapier + WebMCP ready</span><button className="ghost-button" onClick={onEnter}>Open sandbox</button></div></header>
-    <main className="landing-hero"><div className="hero-copy"><span className="hero-kicker"><Sparkles size={13} />Agent-native physical engineering</span><h1>Don’t generate it.<br /><em>Engineer it.</em></h1><p>Describe almost any mechanical system. ForgeTwin decomposes the goal into reusable primitives, creates a jointed physical world, simulates it, measures failures, and redesigns the causal parts until the constraints pass.</p><GoalComposer id="design-goal" prompt={prompt} error={promptError} busy={busy} onPromptChange={onPromptChange} onGenerate={onGenerate} /><div className="quick-examples" aria-label="Example engineering systems">{CHALLENGE_EXAMPLES.slice(0, 7).map((example) => <button key={example.id} type="button" onClick={() => onExample(example)}>{example.title}</button>)}</div><div className="hero-actions"><button className="ghost-button hero-secondary" onClick={onEnter} type="button"><Code2 size={15} />Explore empty world</button></div><div className="hero-proof"><span><strong>{primitiveCatalog.length}</strong> reusable primitives</span><span><strong>8</strong> joint types</span><span><strong>60 Hz</strong> multi-body physics</span></div></div>
+function Landing({ state, toolCount, prompt, promptError, busy, agentRuntime, agentModel, onConfigureAgent, onPromptChange, onEnter, onGenerate, onExample }: { state: ForgeState; toolCount: number; prompt: string; promptError: string | null; busy: boolean; agentRuntime: AgentRuntimeMode; agentModel: string; onConfigureAgent: () => void; onPromptChange: (prompt: string) => void; onEnter: () => void; onGenerate: (prompt: string) => void; onExample: (example: EngineeringExample) => void }) {
+  const modelConnected = agentRuntime === 'server-model' || agentRuntime === 'session-model';
+  return <div className="landing-shell"><header className="landing-nav"><button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button><div><span className={`landing-status ${modelConnected ? 'model-connected' : ''}`}><i />{agentRuntime === 'checking' ? 'Checking agent' : modelConnected ? `${agentModel} connected` : 'Local engineer ready'}</span><button className="ghost-button" onClick={onConfigureAgent}><KeyRound size={13} />{modelConnected ? 'Agent settings' : 'Connect AI'}</button><button className="ghost-button" onClick={onEnter}>Open sandbox</button></div></header>
+    <main className="landing-hero"><div className="hero-copy"><span className="hero-kicker"><Sparkles size={13} />Agent-native physical engineering</span><h1>Don’t generate it.<br /><em>Engineer it.</em></h1><p>Describe almost any mechanical system. ForgeTwin decomposes the goal into reusable primitives, creates a jointed physical world, simulates it, measures failures, and redesigns the causal parts until the constraints pass.</p><GoalComposer id="design-goal" prompt={prompt} error={promptError} busy={busy} agentRuntime={agentRuntime} onPromptChange={onPromptChange} onGenerate={onGenerate} /><div className={`agent-runtime-card ${modelConnected ? 'connected' : 'local'}`}><span><Bot size={16} /></span><div><strong>{modelConnected ? `Model agent · ${agentModel}` : 'Local deterministic engineer'}</strong><p>{modelConnected ? 'The model interprets the goal and selects the redesign evidence loop; every action still passes through guarded tools.' : 'Fully functional offline build, physics, telemetry, and bounded redesign. Connect a model for model-selected reasoning.'}</p></div><button type="button" onClick={onConfigureAgent}>{modelConnected ? 'Manage' : 'Connect model'}</button></div><div className="quick-examples" aria-label="Example engineering systems">{CHALLENGE_EXAMPLES.slice(0, 7).map((example) => <button key={example.id} type="button" onClick={() => onExample(example)}>{example.title}</button>)}</div><div className="hero-actions"><button className="ghost-button hero-secondary" onClick={onEnter} type="button"><Code2 size={15} />Explore empty world</button></div><div className="hero-proof"><span><strong>{primitiveCatalog.length}</strong> reusable primitives</span><span><strong>8</strong> joint types</span><span><strong>60 Hz</strong> multi-body physics</span></div></div>
       <div className="hero-machine"><ForgeScene state={state} preview onComponentMove={() => undefined} onSelect={() => undefined} /><div className="hero-hud top"><span>LIVE PHYSICAL WORLD</span><strong>PROMPT → PRIMITIVES → PHYSICS</strong></div><div className="hero-hud bottom"><span>NO COMPLETE-MACHINE TEMPLATES</span><strong>ASSEMBLIES ARE SYNTHESIZED</strong></div><div className="hero-orbit-label one"><i />Explicit mass + material</div><div className="hero-orbit-label two"><i />Joints + control graph</div></div></main>
-    <section className="landing-strip" aria-label="How ForgeTwin works"><article><Cpu size={17} /><div><strong>Agent decomposes</strong><span>Goals become capabilities, constraints, bodies, joints, and control channels.</span></div></article><article><AlertTriangle size={17} /><div><strong>Physics rejects</strong><span>Mass, geometry, support, torque, contacts, and control become evidence.</span></div></article><article><Redo2 size={17} /><div><strong>Optimizer redesigns</strong><span>The agent changes causal fields and reruns the same shared world.</span></div></article><small>{toolCount ? `${toolCount}/${FORGE_TOOL_COUNT} world tools registered in this browser` : 'Deterministic planner works without an external agent'}</small></section>
+    <section className="landing-strip" aria-label="How ForgeTwin works"><article><Cpu size={17} /><div><strong>Agent decomposes</strong><span>Goals become capabilities, constraints, bodies, joints, and control channels.</span></div></article><article><AlertTriangle size={17} /><div><strong>Physics rejects</strong><span>Mass, geometry, support, torque, contacts, and control become evidence.</span></div></article><article><Redo2 size={17} /><div><strong>Optimizer redesigns</strong><span>The agent changes causal fields and reruns the same shared world.</span></div></article><small>{toolCount === FORGE_TOOL_COUNT ? `${toolCount}/${FORGE_TOOL_COUNT} WebMCP tools live in this browser host` : `WebMCP host not connected · ${FORGE_TOOL_COUNT} local tools available`}</small></section>
     <section className="sector-library" aria-labelledby="sector-heading"><div><span className="eyebrow">Open engineering prompt gallery</span><h2 id="sector-heading">Crane, rover, gearbox, arm, bridge—or something new.</h2><p>These are editable prompts, not machine profiles. Each one is synthesized from the same low-level world vocabulary.</p></div><div className="sector-grid">{engineeringExamples.map((example) => <button key={example.id} onClick={() => { onExample(example); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><span>{example.sector}</span><strong>{example.title}</strong><small>compose from primitives</small></button>)}</div><p className="simulation-disclosure">ForgeTwin is a concept-level rigid-body sandbox. Production structures, medical equipment, vehicles, and lifting systems require professional analysis and certification.</p></section>
   </div>;
 }
 
-function GoalComposer({ id, prompt, error, busy, compact = false, onPromptChange, onGenerate }: { id: string; prompt: string; error: string | null; busy: boolean; compact?: boolean; onPromptChange: (prompt: string) => void; onGenerate: (prompt: string) => void }) {
+function GoalComposer({ id, prompt, error, busy, agentRuntime, compact = false, onPromptChange, onGenerate }: { id: string; prompt: string; error: string | null; busy: boolean; agentRuntime: AgentRuntimeMode; compact?: boolean; onPromptChange: (prompt: string) => void; onGenerate: (prompt: string) => void }) {
   const hintId = `${id}-hint`, errorId = `${id}-error`;
-  return <form className={`goal-composer ${compact ? 'compact' : ''}`} aria-busy={busy} onSubmit={(event) => { event.preventDefault(); onGenerate(prompt); }}><label htmlFor={id}>What should ForgeTwin engineer?</label><textarea id={id} value={prompt} onChange={(event) => onPromptChange(event.target.value)} maxLength={500} rows={compact ? 4 : 3} aria-describedby={`${hintId}${error ? ` ${errorId}` : ''}`} aria-invalid={Boolean(error)} disabled={busy} /><div className="goal-composer-meta"><span id={hintId}>{prompt.length}/500 · free-form world synthesis · measurable constraints</span><button className="run-button hero" type="submit" disabled={busy || prompt.trim().length < 12}><Sparkles size={15} />{busy ? 'Engineering…' : 'Engineer from scratch'}</button></div>{error && <p className="goal-error" id={errorId} role="alert"><AlertTriangle size={13} />{error}</p>}</form>;
+  const modelConnected = agentRuntime === 'server-model' || agentRuntime === 'session-model';
+  return <form className={`goal-composer ${compact ? 'compact' : ''}`} aria-busy={busy} onSubmit={(event) => { event.preventDefault(); onGenerate(prompt); }}><label htmlFor={id}>What should ForgeTwin engineer?</label><textarea id={id} value={prompt} onChange={(event) => onPromptChange(event.target.value)} maxLength={500} rows={compact ? 4 : 3} aria-describedby={`${hintId}${error ? ` ${errorId}` : ''}`} aria-invalid={Boolean(error)} disabled={busy} /><div className="goal-composer-meta"><span id={hintId}>{prompt.length}/500 · free-form world synthesis · measurable constraints</span><button className="run-button hero" type="submit" disabled={busy || prompt.trim().length < 12}><Sparkles size={15} />{busy ? 'Engineering…' : modelConnected ? 'Engineer with AI' : 'Engineer locally'}</button></div>{error && <p className="goal-error" id={errorId} role="alert"><AlertTriangle size={13} />{error}</p>}</form>;
+}
+
+function AgentSettingsDialog({ runtime, model, hasTemporaryKey, onConnect, onDisconnect, onClose }: { runtime: AgentRuntimeMode; model: string; hasTemporaryKey: boolean; onConnect: (key: string) => void; onDisconnect: () => void; onClose: () => void }) {
+  const [key, setKey] = useState('');
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
+    dialogRef.current?.querySelector<HTMLElement>('input, button')?.focus();
+    const handle = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onCloseRef.current(); return; }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')];
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handle);
+    return () => { document.removeEventListener('keydown', handle); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
+  }, []);
+  const serverConnected = runtime === 'server-model' && !hasTemporaryKey;
+  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>ForgeTwin runtime</small><h2 id="agent-settings-title">AI agent connection</h2></div><button onClick={onClose} aria-label="Close agent settings"><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${runtime === 'server-model' || runtime === 'session-model' ? 'connected' : 'local'}`}><i /><div><strong>{runtime === 'server-model' || runtime === 'session-model' ? `${model} connected` : 'Local deterministic engineer active'}</strong><p>{runtime === 'server-model' || runtime === 'session-model' ? 'Natural-language planning and redesign decisions come from the model. Physics and tools still run inside ForgeTwin.' : 'The app remains fully usable without a model, but planning decisions are deterministic and clearly labeled.'}</p></div></div>{!serverConnected && !hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); onConnect(key); }}><label htmlFor="temporary-openai-key">Temporary OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder="sk-…" /><p><KeyRound size={12} />Kept only in this tab and sent to the same-origin agent endpoint. It is never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={key.trim().length < 20}><Bot size={14} />Connect model for this tab</button></form>}{serverConnected && <p className="server-key-note"><BadgeCheck size={14} />A server-side model key is configured. It is never exposed to the browser.</p>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect}>Remove temporary key</button>}</div><footer><span>Model reasoning is advisory. Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose}>Done</button></footer></section></div>;
 }
 
 function FailureBanner({ run, onReplay, onFix, busy }: { run: SimulationRun; onReplay: () => void; onFix: () => void; busy: boolean }) {
@@ -268,8 +430,15 @@ function ComponentInspector({ component, state, onMove, onUpdate, busy }: { comp
   return <div className="sensor-inspector component-inspector"><span className="eyebrow">Selected body · {component.primitive}</span><div><strong>{component.role}</strong><code>{component.mass.toFixed(1)} kg</code></div><p>{component.dimensions.map((value) => value.toFixed(2)).join(' × ')} m · {component.materialId}</p><label htmlFor="selected-body-x">X position</label><input id="selected-body-x" aria-label={`${component.role} X position`} type="range" min={-state.world.bounds[0] / 2} max={state.world.bounds[0] / 2} step="0.05" value={x} onChange={(event) => onMove(Number(event.target.value))} disabled={busy || state.phase === 'simulating'} /><div className="nudge-row"><button disabled={busy} onClick={() => onMove(x - .5)} aria-label={`Move ${component.role} left 0.5 meters`}><ArrowLeft size={12} />.5 m</button><button disabled={busy} onClick={() => onMove(x + .5)} aria-label={`Move ${component.role} right 0.5 meters`}>.5 m<ArrowRight size={12} /></button></div><div className="inspector-actions"><button disabled={busy} onClick={() => onUpdate('rotate_component', { component_id: component.id, rotation: [component.rotation[0], component.rotation[1] + Math.PI / 12, component.rotation[2]] }, `${component.role} rotated and human-locked`)}>Rotate 15°</button><button disabled={busy} onClick={() => onUpdate('set_dimensions', { component_id: component.id, dimensions: component.dimensions.map((value) => Number((value * 1.1).toFixed(3))) }, `${component.role} resized +10%`)}>Size +10%</button><button disabled={busy} onClick={() => onUpdate('set_material', { component_id: component.id, material_id: nextMaterial.id }, `Material changed to ${nextMaterial.name}`)}>Next material</button></div>{component.humanLockedFields.length > 0 && <p><Radio size={11} />Human locks: {component.humanLockedFields.join(', ')}</p>}</div>;
 }
 
-function AgentFeed({ state, toolCount }: { state: ForgeState; toolCount: number }) {
-  return <div className="feed-wrap"><div className="panel-heading"><div><span className="eyebrow">WebMCP shared world</span><h2>Agent activity</h2></div><span className="agent-live"><i />{toolCount ? 'LIVE' : 'FALLBACK'}</span></div>{state.activity.length ? <ol className="activity-list">{state.activity.slice(0, 16).map((event) => <li key={event.id} className={event.outcome}><span>{event.tool === 'run_simulation' ? <Activity size={14} /> : event.actor === 'Human' ? <MoveHorizontal size={14} /> : <Cpu size={14} />}</span><div><code>{event.tool}</code><p>{event.detail}</p><small>{event.actor === 'WebMCP' ? 'External agent' : event.actor === 'Human' ? 'Human' : event.actor === 'System' ? 'ForgeTwin agent' : 'Guided UI'}</small></div><time>{formatTime(event.at)}</time></li>)}</ol> : <div className="empty-feed"><Cpu size={23} /><strong>No world actions yet</strong><p>Enter a physical goal or connect an external agent through WebMCP.</p></div>}<div className="tool-footer"><span>{toolCount || FORGE_TOOL_COUNT}/{FORGE_TOOL_COUNT} tools ready</span><code>shared revision {state.revision}</code></div></div>;
+function AgentFeed({ state, toolCount, trace, runtime, model, busy, canCancel, onCancel, onConfigure }: { state: ForgeState; toolCount: number; trace: AgentTraceItem[]; runtime: AgentRuntimeMode; model: string; busy: boolean; canCancel: boolean; onCancel: () => void; onConfigure: () => void }) {
+  const modelConnected = runtime === 'server-model' || runtime === 'session-model';
+  const actorLabel = (actor: Actor) => actor === 'WebMCP' ? 'External WebMCP agent' : actor === 'ModelAgent' ? `Model agent · ${model}` : actor === 'Deterministic' ? 'Local deterministic engineer' : actor === 'Human' ? 'Human' : actor === 'System' ? 'Legacy local automation' : 'Guided UI';
+  return <div className="feed-wrap"><div className="panel-heading"><div><span className="eyebrow">Shared-world execution</span><h2>Agent console</h2></div><span className={`agent-live ${modelConnected ? 'model' : 'local'}`}><i />{runtime === 'checking' ? 'CHECKING' : modelConnected ? 'MODEL' : 'LOCAL'}</span></div>
+    <div className={`agent-identity ${modelConnected ? 'connected' : 'local'}`}><span><Bot size={16} /></span><div><strong>{modelConnected ? model : 'Deterministic engineer'}</strong><p>{modelConnected ? 'Model decisions → guarded tools → Rapier evidence' : 'Guarded local planning → Rapier evidence'}</p></div><button onClick={onConfigure}>{modelConnected ? 'Manage' : 'Connect AI'}</button>{busy && canCancel && <button className="cancel-agent" onClick={onCancel}><Square size={10} fill="currentColor" />Stop</button>}</div>
+    {trace.length > 0 && <ol className="agent-transcript" aria-label="Agent reasoning and observations">{[...trace].reverse().slice(0, 9).map((item) => <li key={item.id} className={item.kind}><span>{item.kind === 'complete' ? <BadgeCheck size={13} /> : item.kind === 'error' ? <AlertTriangle size={13} /> : item.kind === 'goal' ? <Sparkles size={13} /> : <Bot size={13} />}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div><time>{formatTime(item.at)}</time></li>)}</ol>}
+    <div className="feed-divider"><span>World tool calls</span><small>{toolCount === FORGE_TOOL_COUNT ? 'External host connected' : 'In-app execution'}</small></div>
+    {state.activity.length ? <ol className="activity-list">{state.activity.slice(0, 12).map((event) => <li key={event.id} className={event.outcome}><span>{event.tool === 'run_simulation' ? <Activity size={14} /> : event.actor === 'Human' ? <MoveHorizontal size={14} /> : <Cpu size={14} />}</span><div><code>{event.tool}</code><p>{event.detail}</p><small>{actorLabel(event.actor)}</small></div><time>{formatTime(event.at)}</time></li>)}</ol> : <div className="empty-feed"><Cpu size={23} /><strong>No world actions yet</strong><p>Enter a physical goal. The in-app engineer will plan and execute it; WebMCP is optional for an external agent.</p></div>}
+    <div className="tool-footer"><span>{toolCount}/{FORGE_TOOL_COUNT} WebMCP registered</span><code>{FORGE_TOOL_COUNT} in-app tools · rev {state.revision}</code></div></div>;
 }
 
 function MetricStack({ metrics, phase }: { metrics: Metrics | null; phase: ForgeState['phase'] }) {

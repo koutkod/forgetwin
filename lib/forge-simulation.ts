@@ -1,4 +1,5 @@
 import { materialFor, primitiveCatalog } from './forge-data';
+import { SUPPORTED_METRICS } from './forge-metrics';
 import type {
   CollisionEvent, FailureEvent, ForgeState, GoalConstraint, Joint,
   MetricReading, OptimizationAction, ReplayFrame, ReplayItem, SimulationRun,
@@ -8,15 +9,6 @@ import type {
 const DT = 1 / 60;
 const SEED = 424242 as const;
 let rapierReady: Promise<typeof import('@dimforge/rapier3d-compat')> | null = null;
-
-export const SUPPORTED_METRICS = new Set([
-  'payload_capacity', 'lift_height', 'stability_margin', 'placement_error', 'peak_acceleration',
-  'span', 'load_capacity', 'deflection', 'safety_factor', 'speed_ratio', 'output_torque',
-  'output_speed', 'transmission_efficiency', 'reach', 'joint_margin', 'course_time',
-  'platform_tilt', 'traction_margin', 'tracking_error', 'actuator_count', 'response_time',
-  'throughput', 'sorting_accuracy', 'collisions', 'drop_height', 'control_error',
-  'assembly_integrity', 'component_count', 'flow_rate', 'angular_travel',
-]);
 
 async function loadRapier() {
   if (!rapierReady) rapierReady = import('@dimforge/rapier3d-compat').then(async (rapier) => { await rapier.init(); return rapier; });

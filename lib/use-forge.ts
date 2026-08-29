@@ -98,10 +98,11 @@ function failure(state: ForgeState, error: unknown): ToolResult {
 
 export function useForge() {
   const [state, setState] = useState<ForgeState>(createInitialForgeState);
+  const [hydrated, setHydrated] = useState(false);
   const stateRef = useRef(state);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => { const loaded = hydrate(); stateRef.current = loaded; setState(loaded); }, 0);
+    const timeout = window.setTimeout(() => { const loaded = hydrate(); stateRef.current = loaded; setState(loaded); setHydrated(true); }, 0);
     return () => window.clearTimeout(timeout);
   }, []);
 
@@ -146,7 +147,7 @@ export function useForge() {
   const patchUi = useCallback((patch: Parameters<typeof toggleUi>[1]) => commit(toggleUi(stateRef.current, patch)), [commit]);
   const checkpoint = useCallback((label: string) => commit(createCheckpoint(stateRef.current, label)), [commit]);
   const reset = useCallback((screen: ForgeState['screen'] = 'lab') => { try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* Reset still works in memory. */ } commit(createInitialForgeState(screen)); }, [commit]);
-  return { state, command, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot };
+  return { state, hydrated, command, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot };
 }
 
 function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
@@ -186,11 +187,12 @@ function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
   return { type: 'object', properties: definitions[name].properties, required: definitions[name].required, additionalProperties: false };
 }
 
-export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], runMachine: ReturnType<typeof useForge>['runMachine'], getSnapshot: ReturnType<typeof useForge>['getSnapshot']) {
+export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], runMachine: ReturnType<typeof useForge>['runMachine'], getSnapshot: ReturnType<typeof useForge>['getSnapshot'], hydrated = true) {
   const [count, setCount] = useState(0);
   const commandRef = useRef(command), runRef = useRef(runMachine), snapshotRef = useRef(getSnapshot);
   useEffect(() => { commandRef.current = command; runRef.current = runMachine; snapshotRef.current = getSnapshot; }, [command, runMachine, getSnapshot]);
   useEffect(() => {
+    if (!hydrated) return;
     if (!('modelContext' in document) || !document.modelContext) return;
     const lifecycle = new AbortController();
     const names = Object.keys(schemas) as ForgeToolName[];
@@ -205,7 +207,7 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
     } }, { signal: lifecycle.signal }));
     void Promise.allSettled(registrations).then((results) => { if (!lifecycle.signal.aborted) setCount(results.filter((result) => result.status === 'fulfilled').length); });
     return () => { lifecycle.abort(); setCount(0); };
-  }, []);
+  }, [hydrated]);
   return count;
 }
 

@@ -1,6 +1,12 @@
 # ForgeTwin — Don’t generate it. Engineer it.
 
-ForgeTwin is a browser-based, agent-native engineering sandbox. A person describes a physical goal; an AI agent composes a new mechanical world from reusable primitives, assigns physical properties, connects joints and controls, runs deterministic physics, measures failures, and changes the causal parts until the stated constraints pass.
+ForgeTwin is a browser-based, agent-native engineering sandbox. A person describes a physical goal; the in-app engineering agent composes a new mechanical world from reusable primitives, assigns physical properties, connects joints and controls, runs deterministic physics, measures failures, and changes the causal parts until the stated constraints pass.
+
+The runtime is explicit about what is doing the work:
+
+- **Model agent** — when `OPENAI_API_KEY` is configured on the server, or a user connects a temporary key for the current tab, an OpenAI Responses API model interprets the brief and selects the failure-analysis/redesign tool loop.
+- **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
+- **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
 
 There is no conveyor-first workflow and no catalog of complete machines. The same world model can compose conveyors, cranes, lifts, rovers, robotic mechanisms, gear trains, suspension, solar trackers, structural spans, warehouse systems, agricultural equipment, factory buffers, medical lifting concepts, recycling systems, or a novel mechanism assembled from lower-level bodies.
 
@@ -45,7 +51,7 @@ The canonical workspace is a versioned graph:
 - **Evidence** — telemetry samples, collision events, failures, replay frames, measurements, and optimization actions.
 - **Collaboration** — immutable revisions, design hashes, optimistic concurrency, and human-owned field locks.
 
-The 3D editor and external agent operate on this same state. Selecting, moving, rotating, resizing, or changing the material of a body creates a real revision; it is not a cosmetic scene override.
+The 3D editor, in-app agent, and any connected external WebMCP agent operate on this same state. Selecting, moving, rotating, resizing, or changing the material of a body creates a real revision; it is not a cosmetic scene override.
 
 ## Why WebMCP is essential
 
@@ -65,7 +71,7 @@ ForgeTwin exposes small, state-aware engineering operations instead of one opaqu
 | `remove_component`, `remove_joint` | Change topology safely with referential cleanup. |
 | `compare_designs`, `restore_revision` | Compare and restore versioned worlds. |
 
-Every mutating call is Zod-validated and guarded by the current workspace nonce and revision. A stale agent cannot overwrite newer human work. Resetting the sandbox rotates the nonce, so an old agent context cannot mutate the new world.
+Every mutating call is Zod-validated and guarded by the current workspace nonce and revision. A stale agent cannot overwrite newer human work. Resetting the sandbox rotates the nonce, so an old agent context cannot mutate the new world. WebMCP registration waits for local state hydration so persisted state cannot overwrite an early external-agent action.
 
 ## Physics and measurement
 
@@ -85,12 +91,13 @@ After a design passes, drag or edit a component. ForgeTwin marks the changed phy
 
 ## Security model
 
-- The design brief is treated as untrusted data, never executable instructions.
+- The design brief is treated as untrusted data, never executable instructions. The model route wraps it as design data and rejects model output that does not match the strict planning or redesign schema.
 - Control expressions are declarative text and numeric parameters; arbitrary JavaScript is never evaluated.
 - IDs, transforms, dimensions, materials, masses, joints, limits, ratios, forces, speeds, and control values are schema-validated and bounded.
 - The simulator rejects incomplete motion systems and broken references rather than substituting a hidden template.
 - Optimistic concurrency prevents stale writes; human locks survive agent actions and revision restoration.
-- The built-in planner and simulator require no secret, network request, or third-party API.
+- The local planner and simulator require no secret, network request, or third-party API.
+- A server-side OpenAI key is never sent to the browser. A temporary user key is kept only in React memory for the current tab, sent only to the same-origin agent endpoint, and never persisted in `localStorage`.
 
 ## Architecture
 
@@ -108,20 +115,23 @@ Key modules:
 - `lib/forge-prompt.ts` — free-form goal parsing and compositional world synthesis.
 - `lib/forge-engine.ts` — guarded state transitions, ownership, hashing, optimization, compare, and restore.
 - `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
+- `lib/forge-agent.ts` — strict model-plan/redesign schemas, client boundary, status, and temporary-key transport.
 - `lib/use-forge.ts` — Zod tool schemas, WebMCP registration, persistence, and optimistic concurrency.
 - `components/forge/forge-scene.tsx` — generic 3D primitive renderer and X-Ray world view.
 - `app/forgetwin-app.tsx` — agent loop, editor, activity feed, telemetry, compare, and demo UX.
+- `app/api/agent/route.ts` — same-origin server/edge model endpoint using structured Responses API output.
 
 ## Judge-ready walkthrough
 
 1. Enter a crane, rover, gearbox, robotic mechanism, bridge, or entirely new mechanical goal.
-2. Select **Engineer from scratch** and watch scoped WebMCP actions create the world graph.
-3. Observe the baseline physics failure, then open **Replay 0.25×** or **Telemetry** for causal evidence.
-4. Let the agent inspect, measure, redesign, and rerun until all constraints pass.
-5. Toggle **X-Ray** to expose joints, axes, signal lines, actuator paths, velocity vectors, and contacts.
-6. Select any body and move, rotate, resize, or change its material.
-7. Select **Redesign around my change** and verify that the human-owned field remains fixed.
-8. Use **Compare**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
+2. Select **Connect AI** to use a temporary model key, or leave the disclosed local deterministic engineer active.
+3. Select **Engineer with AI** or **Engineer locally** and watch the agent console explain its plan, observations, and guarded world-tool calls.
+4. Observe the baseline physics failure, then open **Replay 0.25×** or **Telemetry** for causal evidence.
+5. Let the agent inspect, measure, redesign, and rerun until all constraints pass.
+6. Toggle **X-Ray** to expose joints, axes, signal lines, actuator paths, velocity vectors, and contacts.
+7. Select any body and move, rotate, resize, or change its material.
+8. Select **Redesign around my change** and verify that the human-owned field remains fixed.
+9. Use **Compare runs**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
 
 ## Run locally
 
@@ -134,6 +144,15 @@ npm run dev
 
 Open `http://localhost:3000/`.
 
+Optional model-backed mode:
+
+```bash
+cp .env.example .env.local
+# Set OPENAI_API_KEY in .env.local; OPENAI_MODEL defaults to gpt-5.4-mini.
+```
+
+Without that key, the complete local engineering flow still works and is labeled as deterministic.
+
 ```bash
 npm run typecheck
 npm run lint
@@ -141,6 +160,6 @@ npm test
 npm run build
 ```
 
-The test suite covers distinct generated world graphs, prompt-sensitive geometry, novel lower-level composition, guarded shared state, human locks, generic Rapier execution, failure-to-redesign loops across multiple machine families, and automated accessibility checks.
+The test suite covers strict model-agent boundaries, explicit no-key fallback, distinct generated world graphs, prompt-sensitive geometry, novel lower-level composition, guarded shared state, exact human Undo, agent-preserved human locks, generic Rapier execution, failure-to-redesign loops across multiple machine families, and automated accessibility checks.
 
 > The AI didn’t generate a picture of a machine. It engineered one, watched it fail, learned from the physics, and fixed it.

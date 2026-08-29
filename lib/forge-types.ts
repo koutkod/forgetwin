@@ -1,6 +1,6 @@
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
-export type Actor = 'WebMCP' | 'UI' | 'Human' | 'System';
+export type Actor = 'WebMCP' | 'UI' | 'Human' | 'ModelAgent' | 'Deterministic' | 'System';
 
 export type PrimitiveKind =
   | 'beam' | 'plate' | 'frame' | 'wheel' | 'shaft' | 'gear' | 'pulley'

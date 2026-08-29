@@ -524,8 +524,9 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   if (name === 'restore_revision') {
     const source = state.revisions.find((item) => item.revision === input.revision);
     if (!source) throw new Error('INVALID_INPUT: revision was not found.');
-    const currentLocks = new Map(state.components.filter((item) => item.humanLockedFields.length).map((item) => [item.id, clone(item)]));
-    const currentConstraints = clone(state.humanConstraints);
+    const preserveHumanLocks = actor === 'WebMCP' || actor === 'ModelAgent' || actor === 'Deterministic' || actor === 'System';
+    const currentLocks = new Map(preserveHumanLocks ? state.components.filter((item) => item.humanLockedFields.length).map((item) => [item.id, clone(item)]) : []);
+    const currentConstraints = preserveHumanLocks ? clone(state.humanConstraints) : [];
     state.goal = clone(source.goal); state.world = clone(source.world); state.assemblies = clone(source.assemblies); state.components = clone(source.components); state.connections = clone(source.connections); state.joints = clone(source.joints); state.motors = clone(source.motors); state.sensors = clone(source.sensors); state.actuators = clone(source.actuators); state.controls = clone(source.controls); state.optimizationLevel = source.optimizationLevel;
     for (const [id, locked] of currentLocks) {
       let restored = state.components.find((item) => item.id === id);
@@ -549,8 +550,10 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
       }
       restored.humanLockedFields = clone(locked.humanLockedFields); restored.lastModifiedBy = 'Human';
     }
-    state.humanConstraints = currentConstraints.filter((item) => currentLocks.has(item.componentId)).map((item) => ({ ...item, fields: clone(currentLocks.get(item.componentId)!.humanLockedFields) }));
-    state = designMutation(state, name, `Revision ${source.revision} restored`, actor, `Created a new head from revision ${source.revision}; current human locks were preserved.`);
+    state.humanConstraints = preserveHumanLocks
+      ? currentConstraints.filter((item) => currentLocks.has(item.componentId)).map((item) => ({ ...item, fields: clone(currentLocks.get(item.componentId)!.humanLockedFields) }))
+      : state.components.filter((item) => item.humanLockedFields.length).map((item) => ({ componentId: item.id, fields: clone(item.humanLockedFields), lockedForAgent: true, changedAtRevision: source.revision }));
+    state = designMutation(state, name, `Revision ${source.revision} restored`, actor, preserveHumanLocks ? `Created a new head from revision ${source.revision}; current human locks were preserved.` : `Restored revision ${source.revision} exactly for the human editor.`);
     return { state, result: success(state, 'Revision restored.') };
   }
   if (name === 'run_simulation') throw new Error('INVALID_PHASE: run_simulation is asynchronous and must use the physics runner.');

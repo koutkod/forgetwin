@@ -43,7 +43,7 @@ describe('ForgeTwin shared world command engine', () => {
     let state = testCommand(original, 'move_component', { component_id: target.id, position: movedPosition }, 'Human');
     expect(state.components.find((item) => item.id === target.id)?.humanLockedFields).toContain('position');
     expect(() => applyForgeTool(state, 'move_component', { component_id: target.id, position: target.position, expected_revision: state.revision, expected_workspace_nonce: state.workspaceNonce }, 'WebMCP')).toThrow(/LOCKED_BY_HUMAN/);
-    state = testCommand(state, 'restore_revision', { revision });
+    state = testCommand(state, 'restore_revision', { revision }, 'ModelAgent');
     expect(state.components.find((item) => item.id === target.id)?.position).toEqual(movedPosition);
   });
 
@@ -90,9 +90,21 @@ describe('ForgeTwin shared world command engine', () => {
     state = testCommand(state, 'set_material', { component_id: target.id, material_id: 'composite' }, 'Human');
     const locked = state.components.find((item) => item.id === target.id)!;
     const expected = { dimensions: locked.dimensions, materialId: locked.materialId, color: locked.color, mass: locked.mass };
-    state = testCommand(state, 'restore_revision', { revision });
+    state = testCommand(state, 'restore_revision', { revision }, 'ModelAgent');
     expect(state.components.find((item) => item.id === target.id)).toMatchObject(expected);
     expect(state.humanConstraints.find((item) => item.componentId === target.id)?.fields).toEqual(expect.arrayContaining(['dimensions', 'material']));
+  });
+
+  it('lets the human Undo restore an earlier revision exactly', () => {
+    let state = assemblePlan(compileDesignBrief('Build a patient lift that raises 90 kg by 1 meter.'));
+    const target = state.components.find((item) => item.primitive === 'plate')!;
+    const originalX = target.position[0];
+    const revision = state.revisions.at(-1)!.revision;
+    state = testCommand(state, 'move_component', { component_id: target.id, position: [originalX + 1, target.position[1], target.position[2]] }, 'Human');
+    expect(state.components.find((item) => item.id === target.id)?.position[0]).toBe(originalX + 1);
+    state = testCommand(state, 'restore_revision', { revision }, 'UI');
+    expect(state.components.find((item) => item.id === target.id)?.position[0]).toBe(originalX);
+    expect(state.components.find((item) => item.id === target.id)?.humanLockedFields).not.toContain('position');
   });
 
   it('starts from a clean schema-v3 world', () => {
