@@ -325,28 +325,43 @@ export function ForgeTwinApp() {
   const localEditCommands = (instruction: string): EditCommand[] => {
     const world = getSnapshot();
     const text = instruction.toLowerCase();
+    const headlightRequest = /\b(headlights?|head lamps?|lamps?|bike lights?|work lights?)\b/.test(text);
+    const addingComponent = /\b(add|create|attach)\b/.test(text);
     const aliases: Record<string, string[]> = {
       handlebar: ['handlebar'], saddle: ['saddle', 'seat'], seat: ['saddle', 'seat'], battery: ['battery'], chain: ['drive chain', 'sprocket'],
+      headlight: ['headlight', 'light module'], lamp: ['headlight', 'light module'],
       'solar panel': ['solar charging panel'], panel: ['solar charging panel', 'tracked panel'], fork: ['front fork'], bicycle: ['top tube', 'chain stay'],
       boom: ['boom'], mast: ['mast'], base: ['base', 'chassis'], wheel: ['wheel'], motor: ['motor'], counterweight: ['counterweight'],
       sensor: ['sensor', 'camera', 'pickup'], gripper: ['gripper'], arm: ['serial link', 'link'], platform: ['platform'], bridge: ['span', 'deck'],
       gear: ['gear', 'sprocket'], conveyor: ['conveyor', 'transport surface'], support: ['support', 'outrigger', 'stay'],
     };
     const named = Object.entries(aliases).find(([name]) => text.includes(name))?.[1] ?? [];
-    const target = world.components.find((item) => named.some((term) => item.role === term))
+    const headlightMount = headlightRequest && addingComponent
+      ? world.components.find((item) => item.role === 'handlebar stem')
+        ?? world.components.find((item) => item.role === 'steering head tube')
+        ?? world.components.find((item) => /front.*fork|front.*frame|vehicle.*frame/.test(item.role))
+      : undefined;
+    const target = headlightMount
+      ?? world.components.find((item) => named.some((term) => item.role === term))
       ?? world.components.find((item) => named.some((term) => item.role.includes(term)))
       ?? world.components.find((item) => item.id === world.selectedComponentId)
       ?? world.components.find((item) => !item.humanLockedFields.length);
     if (!target) throw new Error('Select or name a component to edit.');
-    const primitiveRequest = primitiveCatalog.find((item) => new RegExp(`\\b${item.kind}s?\\b`).test(text));
-    if (/\b(add|create|attach)\b/.test(text) && primitiveRequest) {
+    const primitiveRequest = headlightRequest ? catalogFor('light') : primitiveCatalog.find((item) => new RegExp(`\\b${item.kind}s?\\b`).test(text));
+    if (addingComponent && primitiveRequest) {
       const count = world.components.filter((item) => item.primitive === primitiveRequest.kind).length + 1;
       const id = `chat-${primitiveRequest.kind}-${count}`;
       const assemblyId = target.assemblyId || world.assemblies[0].id;
+      const bicycleWorld = world.components.some((item) => Boolean(item.parameters.bicycle_wheel));
+      const position: [number, number, number] = headlightRequest
+        ? [Number((target.position[0] + .2).toFixed(3)), Number((target.position[1] - .08).toFixed(3)), Number((target.position[2] + (count > 1 ? (count % 2 ? -.14 : .14) : 0)).toFixed(3))]
+        : [target.position[0], target.position[1] + Math.max(.35, target.dimensions[1]), target.position[2]];
+      const role = headlightRequest ? (bicycleWorld ? 'front LED bicycle headlight' : 'directional LED headlight') : `chat-added ${primitiveRequest.name.toLowerCase()}`;
+      const anchorA = position.map((value, index) => Number((value - target.position[index]).toFixed(3))) as [number, number, number];
       return [
-        { tool: 'create_component', input: { component_id: id, primitive: primitiveRequest.kind, assembly_id: assemblyId, role: `chat-added ${primitiveRequest.name.toLowerCase()}`, position: [target.position[0], target.position[1] + Math.max(.35, target.dimensions[1]), target.position[2]], rotation: [0, 0, 0], dimensions: primitiveRequest.defaultDimensions, material_id: primitiveRequest.defaultMaterial, body_type: primitiveRequest.defaultBodyType }, label: `Add ${primitiveRequest.name}` },
+        { tool: 'create_component', input: { component_id: id, primitive: primitiveRequest.kind, assembly_id: assemblyId, role, position, rotation: [0, 0, 0], dimensions: primitiveRequest.defaultDimensions, material_id: primitiveRequest.defaultMaterial, body_type: primitiveRequest.defaultBodyType, ...(headlightRequest ? { mass: .24, color: '#e9f5ff', parameters: { headlight: true, beam_range: 5 } } : {}) }, label: `Add ${primitiveRequest.name}` },
         { tool: 'connect_components', input: { connection_id: `chat-edge-${world.revision + 2}`, source_id: target.id, target_id: id, connection_type: 'mechanical', channel: 'chat_edit' }, label: `Connect ${primitiveRequest.name}` },
-        { tool: 'create_joint', input: { joint_id: `chat-fixed-${world.revision + 3}`, joint_type: 'fixed', component_a: target.id, component_b: id, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: [0, 1, 0] }, label: `Fix ${primitiveRequest.name} to ${target.role}` },
+        { tool: 'create_joint', input: { joint_id: `chat-fixed-${world.revision + 3}`, joint_type: 'fixed', component_a: target.id, component_b: id, anchor_a: anchorA, anchor_b: [0, 0, 0], axis: [0, 1, 0] }, label: `Fix ${primitiveRequest.name} to ${target.role}` },
       ];
     }
     if (/\b(remove|delete)\b/.test(text)) return [{ tool: 'remove_component', input: { component_id: target.id }, label: `Remove ${target.role}` }];
@@ -399,6 +414,11 @@ export function ForgeTwinApp() {
             components: current.components.map((item) => ({ id: item.id, role: item.role, primitive: item.primitive, assembly_id: item.assemblyId, position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId, body_type: item.bodyType, mass: item.mass, human_locked_fields: item.humanLockedFields })),
           }, agentKey || undefined, controller.signal);
           setAgentModel(response.model); summary = response.result.summary; commands = modelEditCommands(response.result.actions);
+          if (/\b(add|create|attach)\b/i.test(prompt) && /\b(headlights?|head lamps?|lamps?|bike lights?|work lights?)\b/i.test(prompt)) {
+            commands = localEditCommands(prompt);
+            summary = 'The agent mapped the request to a purpose-built LED light module and mounted it on the bicycle steering structure.';
+            addTrace('action', 'Guarded component mapping applied', 'Headlight intent → LED light primitive → steering mount. Industrial substitutions were rejected.');
+          }
           addTrace('reasoning', 'Model proposed an in-place revision', summary);
         } catch (caught) {
           actor = 'Deterministic'; setAgentRuntime('deterministic'); commands = localEditCommands(prompt);

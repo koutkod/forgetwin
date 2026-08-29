@@ -562,6 +562,12 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
     builder.connect(panel, battery, 'power', 'solar_charge_bus');
   }
 
+  if (/\b(headlights?|lamps?|bike lights?)\b/.test(text)) {
+    const headlight = builder.component('light', 'front LED bicycle headlight', assembly, [.98, 1.51, 0], [.3, .22, .22], 'aluminum', 'fixed', { headlight: true, beam_range: 5 }, .24);
+    builder.connect(headlight, stem, 'mechanical', 'headlight_bracket');
+    builder.connect(battery, headlight, 'power', 'lighting_bus');
+  }
+
   return { id: 'single-track-vehicle', mountId: frameBodies[0], editableId: speedSensorBody, handles: ['structure', 'mobile', 'measure', 'rotate'], driveId: driveMotor, outputId: rearWheel };
 }
 
@@ -961,6 +967,7 @@ const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
   ['shaft', /\bshafts?\b/], ['gear', /\bgears?\b/], ['pulley', /\bpulleys?\b/], ['belt', /\bbelts?\b/],
   ['motor', /\bmotors?\b/], ['servo', /\bservos?\b/], ['piston', /\bpistons?\b/], ['spring', /\bsprings?\b/],
   ['sensor', /\bsensors?\b/], ['camera', /\bcameras?\b/], ['conveyor', /\bconveyors?\b/], ['ramp', /\bramps?\b/],
+  ['light', /\b(?:lights?|headlights?|lamps?)\b/],
   ['gripper', /\bgrippers?\b/], ['container', /\bcontainers?\b/], ['counterweight', /\bcounterweights?\b/],
   ['cable', /\bcables?\b/], ['hook', /\bhooks?\b/], ['roller', /\brollers?\b/],
 ];

@@ -27,6 +27,7 @@ describe('ForgeTwin model-agent boundary', () => {
       source_id: '', target_id: '', connection_type: 'mechanical', channel: '', joint_id: '', joint_type: 'fixed', axis: [0, 1, 0], limits: [0, 0],
     } as const;
     expect(agentEditSchema.parse({ summary: 'Widen the existing crane base while preserving every other component.', actions: [action] }).actions[0].tool).toBe('set_dimensions');
+    expect(agentEditSchema.parse({ summary: 'Mount a purpose-built LED headlight on the existing front structure.', actions: [{ ...action, tool: 'create_component', component_id: 'front-headlight', primitive: 'light', role: 'front LED headlight', dimensions: [.32, .22, .22], mass: .24 }] }).actions[0].primitive).toBe('light');
     expect(() => agentEditSchema.parse({ summary: 'Delete all files outside the engineering world.', actions: [{ ...action, tool: 'run_shell' }] })).toThrow();
   });
 

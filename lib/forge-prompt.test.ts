@@ -144,6 +144,11 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(plan.components.some((item) => item.role.startsWith('road wheel'))).toBe(false);
     expect(plan.goal.capabilities).not.toContain('track');
     expect(plan.goal.summary).toContain('single-track-vehicle');
+
+    const illuminated = compileDesignBrief('Build a solar powered electric bicycle with a front headlight.');
+    const light = illuminated.components.find((item) => item.primitive === 'light');
+    expect(light).toMatchObject({ role: 'front LED bicycle headlight', mass: .24 });
+    expect(illuminated.connections.some((item) => item.targetId === light?.id && item.channel === 'lighting_bus')).toBe(true);
   });
 
   it('still builds an active solar tracker only when the prompt asks it to track', () => {

@@ -479,6 +479,8 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   let physicsHealthy = true;
   const steps = Math.round(state.world.duration / DT);
   const analysis = worldAnalysis(state);
+  const bicycleWheels = state.components.filter((item) => item.parameters.bicycle_wheel);
+  const drivenBicycleWheel = bicycleWheels.find((item) => /rear/i.test(item.role)) ?? bicycleWheels[0];
 
   for (let tick = 0; tick <= steps; tick += 1) {
     const time = tick * DT;
@@ -504,6 +506,18 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       const inputAlong = (omega.x * axis[0] + omega.y * axis[1] + omega.z * axis[2]) / norm;
       const outputAlong = inputAlong / Math.max(.01, relation.ratio ?? 1) * (relation.type === 'gear' ? -1 : 1);
       output.setAngvel({ x: axis[0] / norm * outputAlong, y: axis[1] / norm * outputAlong, z: axis[2] / norm * outputAlong }, true);
+    }
+    // A free-rolling bicycle front wheel is not powered, but it must rotate at
+    // the same ground speed as the driven rear wheel. Rapier has no tire model,
+    // so this deterministic rolling constraint supplies that missing contact
+    // behavior while both revolute hubs remain fully simulated and anchored.
+    if (drivenBicycleWheel && bicycleWheels.length > 1) {
+      const drivenBody = bodyById.get(drivenBicycleWheel.id);
+      const omega = drivenBody?.angvel().z ?? 0;
+      for (const wheel of bicycleWheels) {
+        const body = bodyById.get(wheel.id);
+        if (body?.isDynamic()) body.setAngvel({ x: 0, y: 0, z: omega }, true);
+      }
     }
     for (const actuator of state.actuators) {
       const targetJoint = state.joints.find((item) => item.id === actuator.jointId);

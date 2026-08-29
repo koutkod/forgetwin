@@ -417,6 +417,26 @@ function LocatingPin({ component, color, xray, selected }: { component: MachineC
   </group>;
 }
 
+function LightBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [length, height, width] = component.dimensions;
+  const vehicleHeadlight = /headlight|bicycle|vehicle|rover/i.test(component.role) || Boolean(component.parameters.headlight);
+  const beamRange = Math.max(1.8, Math.min(6, Number(component.parameters.beam_range ?? 3.2)));
+  const axisRotation: Vec3 = vehicleHeadlight ? [0, 0, -Math.PI / 2] : [Math.PI / 2, 0, 0];
+  const beamRotation: Vec3 = vehicleHeadlight ? [0, 0, Math.PI / 2] : [-Math.PI / 2, 0, 0];
+  const lensPosition: Vec3 = vehicleHeadlight ? [length * .48, 0, 0] : [0, 0, width * .48];
+  const beamPosition: Vec3 = vehicleHeadlight ? [length * .48 + beamRange / 2, 0, 0] : [0, 0, width * .48 + beamRange / 2];
+  return <group>
+    <group position={vehicleHeadlight ? [-length * .42, -height * .38, 0] : [0, -height * .62, -width * .3]}>
+      <BoxBody size={[length * .34, height * .38, width * .48]} color="#2b373d" xray={xray} selected={selected} radius={.025} metalness={.78} roughness={.24} />
+    </group>
+    <mesh rotation={axisRotation} castShadow><cylinderGeometry args={[Math.max(height, width) * .48, Math.max(height, width) * .39, length * .82, 32]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.2} /></mesh>
+    <mesh position={lensPosition} rotation={axisRotation}><cylinderGeometry args={[Math.max(height, width) * .39, Math.max(height, width) * .39, length * .09, 32]} /><meshStandardMaterial color="#f4fbff" emissive="#dff6ff" emissiveIntensity={xray ? .7 : 3.5} metalness={.05} roughness={.08} transparent opacity={xray ? .68 : .96} /></mesh>
+    <mesh position={vehicleHeadlight ? [length * .52, 0, 0] : [0, 0, width * .52]} rotation={vehicleHeadlight ? [0, Math.PI / 2, 0] : [0, 0, 0]}><torusGeometry args={[Math.max(height, width) * .43, Math.max(.012, height * .055), 10, 32]} /><StandardMaterial color="#c9d5da" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>
+    <pointLight position={lensPosition} color="#dff7ff" intensity={xray ? .35 : 1.4} distance={3.2} decay={2} />
+    <mesh position={beamPosition} rotation={beamRotation}><coneGeometry args={[beamRange * .2, beamRange, 28, 1, true]} /><meshBasicMaterial color="#bcefff" transparent opacity={xray ? .14 : .035} depthWrite={false} side={2} /></mesh>
+  </group>;
+}
+
 function ComponentShape({ component, xray, selected, actuatorValue }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
   if (component.parameters.bicycle_wheel) return <BicycleWheel component={component} xray={xray} selected={selected} />;
@@ -461,6 +481,7 @@ function ComponentShape({ component, xray, selected, actuatorValue }: { componen
     return hasPath ? <Line points={[start.map((value, index) => value - component.position[index]) as Vec3, end.map((value, index) => value - component.position[index]) as Vec3]} color={selected ? '#65e5ff' : color} lineWidth={Math.max(1.5, component.dimensions[0] * 38)} /> : <mesh><cylinderGeometry args={[Math.max(.015, component.dimensions[0]), Math.max(.015, component.dimensions[0]), component.dimensions[1], 10]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>;
   }
   if (component.primitive === 'sensor' || component.primitive === 'camera') return <group><BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.035} /><mesh position={[0, 0, component.dimensions[2] * .58]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[component.dimensions[0] * .22, component.dimensions[0] * .22, component.dimensions[2] * .18, 22]} /><StandardMaterial color="#5ee8ff" xray={xray} selected={selected} metalness={.22} roughness={.14} /></mesh><mesh position={[0, 0, component.dimensions[2] * 2.2]}><coneGeometry args={[component.dimensions[0] * 1.4, component.dimensions[2] * 3.2, 16, 1, true]} /><meshBasicMaterial color="#57e5ff" transparent opacity={xray ? .19 : .06} depthWrite={false} /></mesh></group>;
+  if (component.primitive === 'light') return <LightBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'controller') return <ControlCabinet component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'conveyor') return <IndustrialConveyor component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'ramp') return <TransferChute component={component} color={color} xray={xray} selected={selected} />;

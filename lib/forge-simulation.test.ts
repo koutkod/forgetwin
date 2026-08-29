@@ -82,15 +82,22 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
       run = await simulateDesign(state);
     }
     const rearWheel = state.components.find((item) => item.role === 'rear bicycle wheel')!;
+    const frontWheel = state.components.find((item) => item.role === 'front bicycle wheel')!;
     const first = run.replay[0].items.find((item) => item.id === rearWheel.id)!;
+    const firstFront = run.replay[0].items.find((item) => item.id === frontWheel.id)!;
     const middle = run.replay[Math.floor(run.replay.length / 2)].items.find((item) => item.id === rearWheel.id)!;
+    const middleFront = run.replay[Math.floor(run.replay.length / 2)].items.find((item) => item.id === frontWheel.id)!;
     expect(run.status, JSON.stringify(run.metrics.measures, null, 2)).toBe('passed');
     expect(run.physics.engine).toBe('Rapier');
     expect(run.physics.joints).toBeGreaterThanOrEqual(3);
     expect(middle.rotation).not.toEqual(first.rotation);
+    expect(middleFront.rotation).not.toEqual(firstFront.rotation);
     expect(Math.abs(middle.position[0] - rearWheel.position[0])).toBeLessThan(.03);
     expect(Math.abs(middle.position[1] - rearWheel.position[1])).toBeLessThan(.03);
     expect(Math.abs(middle.position[2] - rearWheel.position[2])).toBeLessThan(.03);
+    expect(Math.abs(middleFront.position[0] - frontWheel.position[0])).toBeLessThan(.03);
+    expect(Math.abs(middleFront.position[1] - frontWheel.position[1])).toBeLessThan(.03);
+    expect(Math.abs(middleFront.position[2] - frontWheel.position[2])).toBeLessThan(.03);
     expect(run.metrics.collisions).toBe(0);
   }, 30_000);
 

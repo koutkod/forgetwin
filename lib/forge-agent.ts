@@ -25,7 +25,7 @@ export const agentRedesignSchema = z.object({
 }).strict();
 
 const editTool = z.enum(['set_dimensions', 'set_material', 'set_mass', 'move_component', 'rotate_component', 'create_component', 'remove_component', 'connect_components', 'create_joint']);
-const primitiveKind = z.enum(['beam', 'plate', 'frame', 'wheel', 'shaft', 'gear', 'pulley', 'belt', 'motor', 'servo', 'piston', 'spring', 'sensor', 'camera', 'conveyor', 'ramp', 'gripper', 'container', 'counterweight', 'support', 'controller', 'cable', 'hook', 'roller']);
+const primitiveKind = z.enum(['beam', 'plate', 'frame', 'wheel', 'shaft', 'gear', 'pulley', 'belt', 'motor', 'servo', 'piston', 'spring', 'sensor', 'camera', 'light', 'conveyor', 'ramp', 'gripper', 'container', 'counterweight', 'support', 'controller', 'cable', 'hook', 'roller']);
 const bodyType = z.enum(['fixed', 'dynamic', 'kinematic']);
 const materialId = z.enum(['steel', 'aluminum', 'polymer', 'rubber', 'concrete', 'composite']);
 const vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
@@ -237,7 +237,7 @@ export const AGENT_EDIT_JSON_SCHEMA = {
           tool: { type: 'string', enum: ['set_dimensions', 'set_material', 'set_mass', 'move_component', 'rotate_component', 'create_component', 'remove_component', 'connect_components', 'create_joint'] },
           component_id: { type: 'string', maxLength: 64 },
           assembly_id: { type: 'string', maxLength: 64 },
-          primitive: { type: 'string', enum: ['beam', 'plate', 'frame', 'wheel', 'shaft', 'gear', 'pulley', 'belt', 'motor', 'servo', 'piston', 'spring', 'sensor', 'camera', 'conveyor', 'ramp', 'gripper', 'container', 'counterweight', 'support', 'controller', 'cable', 'hook', 'roller'] },
+          primitive: { type: 'string', enum: ['beam', 'plate', 'frame', 'wheel', 'shaft', 'gear', 'pulley', 'belt', 'motor', 'servo', 'piston', 'spring', 'sensor', 'camera', 'light', 'conveyor', 'ramp', 'gripper', 'container', 'counterweight', 'support', 'controller', 'cable', 'hook', 'roller'] },
           role: { type: 'string', maxLength: 100 },
           position: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'number' } },
           rotation: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'number' } },

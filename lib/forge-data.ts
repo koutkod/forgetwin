@@ -32,6 +32,7 @@ export const primitiveCatalog: PrimitiveCatalogItem[] = [
   primitive('piston', 'Linear piston', 'Actuation', 'Force-limited linear actuator for lift, clamp, or push.', 'cylinder', [.24, 1.1, .24], 'steel', 'kinematic', ['lift', 'push', 'clamp'], '#efaa55'),
   primitive('sensor', 'Configurable sensor', 'Sensing', 'Distance, angle, force, load, IMU, light, or classification channel.', 'box', [.28, .24, .28], 'polymer', 'fixed', ['measure', 'feedback', 'classify'], '#48dceb'),
   primitive('camera', 'Vision camera', 'Sensing', 'Camera/frustum proxy for pose or class observations.', 'box', [.35, .28, .32], 'polymer', 'fixed', ['vision', 'pose', 'classify'], '#4fc9e5'),
+  primitive('light', 'LED light module', 'Illumination', 'Directional lamp with a housing, lens, mounting bracket, and visible beam.', 'box', [.32, .22, .22], 'aluminum', 'fixed', ['illuminate', 'signal', 'headlight', 'work-light'], '#e9f5ff'),
   primitive('controller', 'Control computer', 'Control', 'Runs bounded declarative PID, tracking, timing, or state logic.', 'box', [.55, .34, .45], 'polymer', 'fixed', ['logic', 'feedback', 'interlock'], '#8b6bf5'),
   primitive('conveyor', 'Conveyor surface', 'Transport', 'Powered transport surface constructed with rollers and a motor.', 'box', [4, .18, 1.1], 'steel', 'fixed', ['transport', 'route', 'buffer'], '#2d424d'),
   primitive('roller', 'Conveyor roller', 'Transport', 'Driven or passive roller.', 'cylinder', [.18, 1, .18], 'steel', 'dynamic', ['transport', 'spacing'], '#60727b'),
@@ -87,7 +88,7 @@ export function componentMass(kind: PrimitiveKind, dimensions: Vec3, materialId:
     : item.shape === 'sphere'
       ? 4 / 3 * Math.PI * Math.pow(Math.max(.01, dimensions[0]) / 2, 3)
       : dimensions.reduce((product, value) => product * Math.max(.01, value), 1);
-  const fill = ['beam', 'frame', 'support', 'ramp', 'conveyor'].includes(kind) ? .12 : ['gear', 'wheel', 'pulley'].includes(kind) ? .42 : .72;
+  const fill = kind === 'light' ? .007 : ['beam', 'frame', 'support', 'ramp', 'conveyor'].includes(kind) ? .12 : ['gear', 'wheel', 'pulley'].includes(kind) ? .42 : .72;
   return Number(Math.max(.05, volume * material.density * fill).toFixed(2));
 }
 
