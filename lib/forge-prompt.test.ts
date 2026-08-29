@@ -70,6 +70,10 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(impeller.components.some((item) => item.primitive === 'conveyor')).toBe(false);
     expect(impeller.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['angular_travel', 'output_speed', 'assembly_integrity']));
     expect(impeller.goal.constraints.some((item) => item.metric === 'control_error')).toBe(false);
+
+    const sevenBlade = compileDesignBrief('Build an aluminum seven-blade axial impeller for a ventilation duct and animate it at 300 rpm.');
+    expect(sevenBlade.components.filter((item) => item.parameters?.cad_form === 'aero_blade')).toHaveLength(7);
+    expect(sevenBlade.components.filter((item) => item.parameters?.cad_form === 'aero_blade').every((item) => item.materialId === 'aluminum')).toBe(true);
   });
 
   it('changes physical sizing when numeric requirements change', () => {

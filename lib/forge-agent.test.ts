@@ -17,6 +17,7 @@ describe('ForgeTwin model-agent boundary', () => {
     }).verification_focus).toContain('course_time');
     expect(() => agentPlanSchema.parse({ normalized_prompt: 'Build a useful machine from reusable primitives.', reasoning_summary: 'This is long enough to parse safely.', architecture: ['frame'], assumptions: [], verification_focus: ['invented_metric'] })).toThrow();
     expect(() => agentRedesignSchema.parse({ diagnosis: 'The payload is unstable.', objective: 'Increase stability.', tool_sequence: [{ tool: 'delete_everything', metric: '', objective: '' }] })).toThrow();
+    expect(() => agentRedesignSchema.parse({ diagnosis: 'The payload is unstable.', objective: 'Increase stability.', tool_sequence: [{ tool: 'optimize_design', metric: '', objective: 'x'.repeat(121) }] })).toThrow();
   });
 
   it('accepts guarded in-place chat edits and rejects arbitrary tools', () => {

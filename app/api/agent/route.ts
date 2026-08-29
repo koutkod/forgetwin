@@ -82,7 +82,7 @@ async function createStructuredResponse(apiKey: string, task: z.infer<typeof req
     ? `${BASE_INSTRUCTIONS}\nInterpret the goal, normalize it without changing numeric requirements, describe a composable architecture, list explicit assumptions, and select only metrics with registered evaluators. The browser will translate your decision into small guarded WebMCP-style world tools.`
     : editTask
       ? `${BASE_INSTRUCTIONS}\nEdit the existing shared world in place from the user's short chat request. Use the exact existing component and assembly IDs supplied. Prefer the smallest set of changes. Never edit a field listed in human_locked_fields. For fields unused by a tool, copy the current component values or use neutral placeholders; the browser executes only the fields relevant to the named tool. New components must use a unique lowercase kebab-case ID and should be mechanically connected when appropriate. Do not rebuild the whole machine unless explicitly asked.`
-      : `${BASE_INSTRUCTIONS}\nYou are reviewing a completed Rapier trial. Diagnose the failed measurements and select a strictly sequential evidence loop from inspect_telemetry, inspect_failure, measure_constraint, optimize_design, and run_simulation. End with run_simulation. Do not request edits to human-locked fields.`;
+      : `${BASE_INSTRUCTIONS}\nYou are reviewing a completed Rapier trial. Diagnose the failed measurements and select a strictly sequential evidence loop from inspect_telemetry, inspect_failure, measure_constraint, optimize_design, and run_simulation. End with run_simulation. Keep every tool objective under 120 characters. Do not request edits to human-locked fields.`;
   const input = planTask
     ? { user_goal: task.prompt }
     : editTask

@@ -15,12 +15,12 @@ export const agentPlanSchema = z.object({
 export const redesignStepSchema = z.object({
   tool: z.enum(['inspect_telemetry', 'inspect_failure', 'measure_constraint', 'optimize_design', 'run_simulation']),
   metric: z.union([supportedMetric, z.literal('')]),
-  objective: z.string().trim().max(240),
+  objective: z.string().trim().max(120),
 }).strict();
 
 export const agentRedesignSchema = z.object({
   diagnosis: z.string().trim().min(8).max(700),
-  objective: z.string().trim().min(8).max(300),
+  objective: z.string().trim().min(8).max(120),
   tool_sequence: z.array(redesignStepSchema).min(1).max(8),
 }).strict();
 
@@ -216,7 +216,7 @@ export const AGENT_REDESIGN_JSON_SCHEMA = {
         properties: {
           tool: { type: 'string', enum: ['inspect_telemetry', 'inspect_failure', 'measure_constraint', 'optimize_design', 'run_simulation'] },
           metric: { type: 'string', enum: ['', ...SUPPORTED_METRIC_KEYS] },
-          objective: { type: 'string', maxLength: 240 },
+          objective: { type: 'string', maxLength: 120 },
         },
         required: ['tool', 'metric', 'objective'],
       },

@@ -11,6 +11,18 @@ export const CHALLENGE_EXAMPLES = engineeringExamples;
 const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || 'part';
 const numeric = (value: string | undefined, fallback: number) => value ? Number(value.replaceAll(',', '')) : fallback;
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20,
+};
+
+function countBefore(text: string, noun: string, fallback: number, minimum: number, maximum: number) {
+  const words = Object.keys(NUMBER_WORDS).join('|');
+  const match = text.match(new RegExp(`\\b(${words}|\\d+)\\s*[- ]?\\s*${noun}s?\\b`, 'i'));
+  const parsed = match ? NUMBER_WORDS[match[1].toLowerCase()] ?? Number(match[1]) : fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
 
 interface ParsedValues {
   payloadKg: number;
@@ -715,10 +727,11 @@ function addParametricCadPart(context: ModuleContext): ModuleResult {
     builder.joint('fixed', base, support);
     const hub = builder.component('wheel', 'machined rotor hub', assembly, [0, 2.1, 0], [1, .34, 1], 'aluminum', 'dynamic', { cad_form: 'rotor_hub' });
     const shaftJoint = builder.joint('revolute', support, hub, [0, 0, 1], { limits: [-Math.PI, Math.PI] });
-    const bladeCount = 6;
+    const bladeCount = countBefore(text, 'blade', 6, 2, 12);
+    const bladeMaterial = /\baluminum\b/.test(text) ? 'aluminum' : /\bsteel\b/.test(text) ? 'steel' : 'composite';
     for (let index = 0; index < bladeCount; index += 1) {
       const angle = index / bladeCount * Math.PI * 2;
-      const blade = builder.component('beam', `aerodynamic blade ${index + 1}`, assembly, [Math.cos(angle) * .92, 2.1 + Math.sin(angle) * .92, 0], [1.45, .18, .36], 'composite', 'dynamic', { cad_form: 'aero_blade', blade_index: index, blade_count: bladeCount });
+      const blade = builder.component('beam', `aerodynamic blade ${index + 1}`, assembly, [Math.cos(angle) * .92, 2.1 + Math.sin(angle) * .92, 0], [1.45, .18, .36], bladeMaterial, 'dynamic', { cad_form: 'aero_blade', blade_index: index, blade_count: bladeCount });
       const bladeRotation = ((angle + Math.PI / 2 + Math.PI) % (Math.PI * 2)) - Math.PI;
       builder.rotate(blade, [0, 0, bladeRotation]);
       builder.joint('fixed', hub, blade);
@@ -837,13 +850,13 @@ const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
 ];
 
 function requestedPrimitiveCounts(text: string) {
-  const words: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
   const result = new Map<PrimitiveKind, number>();
   for (const [kind, noun] of requestedPrimitivePatterns) {
     const source = noun.source.replace(/^\\b|\\b$/g, '');
-    const match = text.match(new RegExp(`(?:(one|two|three|four|five|six|seven|eight|\\d+)\\s*[- ]?\\s*)?${source}\\b`));
+    const wordPattern = Object.keys(NUMBER_WORDS).join('|');
+    const match = text.match(new RegExp(`(?:(${wordPattern}|\\d+)\\s*[- ]?\\s*)?${source}\\b`));
     if (!match) continue;
-    result.set(kind, match[1] ? words[match[1]] ?? Number(match[1]) : 1);
+    result.set(kind, match[1] ? NUMBER_WORDS[match[1]] ?? Number(match[1]) : 1);
   }
   return result;
 }
