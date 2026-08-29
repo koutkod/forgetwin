@@ -118,20 +118,27 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(linkage.joints.some((item) => item.type === 'prismatic' && item.limits?.[1] === .5)).toBe(true);
   });
 
-  it('recognizes HVAC brazing language and composes a readable precision fixture', () => {
-    const short = compileDesignBrief('Build a braze plate for a good HVAC unit.');
+  it('distinguishes a brazed-plate heat exchanger from an HVAC brazing fixture', () => {
+    const exchanger = compileDesignBrief('Build a braze plate for a good HVAC unit.');
     const detailed = compileDesignBrief('Build a brazing fixture plate that positions a heat exchanger and two copper pipes within 2 mm before brazing.');
-    for (const plan of [short, detailed]) {
-      expect(plan.goal.machineName).toBe('Precision HVAC brazing fixture');
-      expect(plan.goal.domain).toBe('HVAC manufacturing');
-      expect(plan.components.some((item) => item.parameters?.fixture_plate)).toBe(true);
-      expect(plan.components.some((item) => item.parameters?.heat_exchanger_core)).toBe(true);
-      expect(plan.components.filter((item) => item.parameters?.hvac_pipe).length).toBeGreaterThanOrEqual(4);
-      expect(plan.components.filter((item) => item.parameters?.fixture_clamp)).toHaveLength(2);
-      expect(plan.components.filter((item) => item.parameters?.locating_pin)).toHaveLength(4);
+    expect(exchanger.goal.machineName).toBe('Brazed plate heat exchanger');
+    expect(exchanger.goal.domain).toBe('HVAC thermal systems');
+    expect(exchanger.components.filter((item) => item.parameters?.bphe_plate)).toHaveLength(12);
+    expect(exchanger.components.filter((item) => item.parameters?.bphe_port)).toHaveLength(4);
+    expect(exchanger.components.filter((item) => item.parameters?.bphe_end_plate)).toHaveLength(2);
+    expect(exchanger.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['plate_count', 'port_count', 'assembly_integrity']));
+
+    expect(detailed.goal.machineName).toBe('Precision HVAC brazing fixture');
+    expect(detailed.goal.domain).toBe('HVAC manufacturing');
+    expect(detailed.components.some((item) => item.parameters?.fixture_plate)).toBe(true);
+    expect(detailed.components.some((item) => item.parameters?.heat_exchanger_core)).toBe(true);
+    expect(detailed.components.filter((item) => item.parameters?.hvac_pipe).length).toBeGreaterThanOrEqual(4);
+    expect(detailed.components.filter((item) => item.parameters?.fixture_clamp)).toHaveLength(2);
+    expect(detailed.components.filter((item) => item.parameters?.locating_pin)).toHaveLength(4);
+    expect(detailed.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['alignment_error', 'clamp_force', 'assembly_integrity']));
+    for (const plan of [exchanger, detailed]) {
       expect(plan.components.some((item) => item.role === 'constructed base')).toBe(false);
       expect(plan.components.some((item) => item.role.startsWith('serial link'))).toBe(false);
-      expect(plan.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['alignment_error', 'clamp_force', 'assembly_integrity']));
     }
     expect(detailed.goal.constraints.find((item) => item.metric === 'alignment_error')?.target).toBe(2);
   });

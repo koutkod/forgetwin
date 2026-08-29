@@ -172,6 +172,8 @@ function source(metric: string) {
     flow_rate: 'piston swept volume × crank rpm × volumetric efficiency', angular_travel: 'active revolute-joint limit envelope',
     alignment_error: 'vision and position sensor coverage combined with fixture-controller calibration',
     clamp_force: 'sum of registered hold-down actuator force limits',
+    plate_count: 'count of individually modeled corrugated heat-transfer plates',
+    port_count: 'count of modeled hot- and cold-side process connections',
   };
   return sources[metric];
 }
@@ -214,6 +216,8 @@ function rawMetric(metric: string, state: ForgeState, a: ReturnType<typeof world
     angular_travel: a.angularTravel,
     alignment_error: 18 / Math.max(1, 1 + a.controlQuality * 5 + a.sensorCount * 1.25),
     clamp_force: a.actuatorForce,
+    plate_count: state.components.filter((item) => item.parameters.bphe_plate).length,
+    port_count: state.components.filter((item) => item.parameters.bphe_port).length,
   };
   const value = values[metric];
   if (value === undefined) throw new Error(`UNSUPPORTED_MEASUREMENT: “${metric}” has no registered evaluator.`);

@@ -119,7 +119,8 @@ function inferCapabilities(text: string): Capability[] {
 
 function identity(text: string, capabilities: Capability[]) {
   const candidates: Array<[RegExp, string, string]> = [
-    [/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/, 'Precision HVAC brazing fixture', 'HVAC manufacturing'],
+    [/(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/, 'Precision HVAC brazing fixture', 'HVAC manufacturing'],
+    [/braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/, 'Brazed plate heat exchanger', 'HVAC thermal systems'],
     [/pump|reciprocat/, 'Reciprocating pump mechanism', 'Fluid power'],
     [/four[- ]bar|linkage/, 'Parametric linkage mechanism', 'Mechanism design'],
     [/drawbridge|folding bridge/, 'Actuated folding span', 'Civil mechanisms'],
@@ -151,7 +152,15 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   const spanSystem = /bridge|truss|structural span/.test(text);
   const reciprocating = /pump|reciprocat/.test(text);
   const linkage = /four[- ]bar|linkage/.test(text);
-  const brazingFixture = /hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text);
+  const brazedPlateExchanger = /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text);
+  const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
+
+  if (brazedPlateExchanger) {
+    add('plate_count', 'Corrugated transfer plates', 'min', 12, 'plates');
+    add('port_count', 'Fluid circuit connections', 'exact', 4, 'ports');
+    add('assembly_integrity', 'Brazed pack connectivity', 'min', 100, '%');
+    add('component_count', 'Physical bodies', 'max', 24, '');
+  }
 
   if (brazingFixture) {
     const toleranceMm = numeric(capture(text, /(\d+(?:\.\d+)?)\s*mm\b/i), 2);
@@ -726,6 +735,40 @@ function addBrazingFixture(context: ModuleContext): ModuleResult {
   return { id: 'hvac-brazing-fixture', mountId: plate, editableId: visionBody, handles: ['structure', 'measure'], outputId: core };
 }
 
+function addBrazedPlateHeatExchanger(context: ModuleContext): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly('brazed plate heat exchanger', 'Corrugated stainless heat-transfer plates, copper-brazed seams, four isolated fluid ports, and temperature instrumentation', rootAssemblyId);
+  const rear = builder.component('plate', 'rear pressure plate', assembly, [0, 1.65, -.48], [2.4, 2.9, .12], 'steel', 'fixed', { bphe_end_plate: true, end_role: 'rear' }, 5.2);
+  let previous = rear;
+  const plateCount = 12;
+  for (let index = 0; index < plateCount; index += 1) {
+    const z = -.37 + index * (.74 / (plateCount - 1));
+    const plate = builder.component('plate', `corrugated heat-transfer plate ${index + 1}`, assembly, [0, 1.65, z], [2.12, 2.56, .045], 'steel', 'fixed', { bphe_plate: true, channel: index % 2 ? 'cold' : 'hot', chevron_direction: index % 2 ? -1 : 1 }, .82);
+    builder.joint('fixed', previous, plate);
+    previous = plate;
+  }
+  const front = builder.component('plate', 'front pressure plate', assembly, [0, 1.65, .48], [2.4, 2.9, .12], 'steel', 'fixed', { bphe_end_plate: true, end_role: 'front' }, 5.2);
+  builder.joint('fixed', previous, front);
+
+  const portPositions: Array<[string, Vec3, string]> = [
+    ['hot inlet', [-.72, 2.3, .82], 'hot'], ['hot outlet', [-.72, 1, .82], 'hot'],
+    ['cold inlet', [.72, 1, .82], 'cold'], ['cold outlet', [.72, 2.3, .82], 'cold'],
+  ];
+  const ports: string[] = [];
+  for (const [role, position, circuit] of portPositions) {
+    const port = builder.component('shaft', `${role} connection`, assembly, position, [.3, .62, .3], 'copper', 'fixed', { hvac_pipe: true, bphe_port: true, circuit }, .9);
+    builder.rotate(port, [Math.PI / 2, 0, 0]);
+    builder.joint('fixed', front, port);
+    ports.push(port);
+  }
+  const hotProbe = builder.component('sensor', 'hot-side temperature probe', assembly, [-.72, 2.55, .82], [.16, .2, .16], 'polymer', 'fixed', { bphe_probe: true }, .18);
+  const coldProbe = builder.component('sensor', 'cold-side temperature probe', assembly, [.72, .75, .82], [.16, .2, .16], 'polymer', 'fixed', { bphe_probe: true }, .18);
+  builder.joint('fixed', ports[0], hotProbe); builder.joint('fixed', ports[2], coldProbe);
+  builder.sensor(hotProbe, 'position', 'hot_side_temperature', ports[0], 2);
+  builder.sensor(coldProbe, 'position', 'cold_side_temperature', ports[2], 2);
+  return { id: 'brazed-plate-heat-exchanger', mountId: rear, editableId: hotProbe, handles: ['structure', 'contain', 'measure'], outputId: front };
+}
+
 const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
   ['beam', /\bbeams?\b/], ['plate', /\bplates?\b/], ['frame', /\bframes?\b/], ['wheel', /\bwheels?\b/],
   ['shaft', /\bshafts?\b/], ['gear', /\bgears?\b/], ['pulley', /\bpulleys?\b/], ['belt', /\bbelts?\b/],
@@ -774,7 +817,8 @@ function addRequestedPrimitiveBodies(context: ModuleContext, missing: Array<[Pri
 }
 
 const moduleRules: ModuleRule[] = [
-  { id: 'hvac-brazing-fixture', matches: ({ text }) => /hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text), compose: addBrazingFixture },
+  { id: 'hvac-brazing-fixture', matches: ({ text }) => /(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/.test(text), compose: addBrazingFixture },
+  { id: 'brazed-plate-heat-exchanger', matches: ({ text }) => /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text), compose: addBrazedPlateHeatExchanger },
   { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
   { id: 'rolling-support', matches: ({ capabilities }) => capabilities.includes('mobile'), compose: addRollingSupport },
   { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },

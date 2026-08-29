@@ -116,6 +116,30 @@ function HeatExchangerCore({ component, color, xray, selected }: { component: Ma
   </group>;
 }
 
+function BrazedPlateLeaf({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const direction = Number(component.parameters.chevron_direction ?? 1);
+  return <group>
+    <BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.014} metalness={.9} roughness={.18} />
+    {!xray && Array.from({ length: 7 }, (_, index) => {
+      const offset = -.36 + index * .12;
+      return <Line key={index} points={direction > 0 ? [[-x * .4, y * offset, z * .58], [0, y * (offset + .12), z * .58], [x * .4, y * offset, z * .58]] : [[-x * .4, y * (offset + .12), z * .58], [0, y * offset, z * .58], [x * .4, y * (offset + .12), z * .58]]} color="#b96f43" lineWidth={1.2} />;
+    })}
+    {!xray && [[-.36, -.34], [-.36, .34], [.36, -.34], [.36, .34]].map(([xFactor, yFactor], index) => <mesh key={index} position={[x * xFactor, y * yFactor, z * .6]}><torusGeometry args={[.14, .022, 8, 24]} /><meshStandardMaterial color="#ca7c4b" metalness={.82} roughness={.2} /></mesh>)}
+  </group>;
+}
+
+function BrazedEndPlate({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const front = component.parameters.end_role === 'front';
+  return <group>
+    <BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.065} metalness={.88} roughness={.2} />
+    <group position={[0, 0, z * .62]}><BoxBody size={[x * .78, y * .78, z * .2]} color="#53636a" xray={xray} selected={selected} radius={.05} metalness={.9} roughness={.17} /></group>
+    {front && [[-.3, -.225], [-.3, .225], [.3, -.225], [.3, .225]].map(([xFactor, yFactor], index) => <group key={index} position={[x * xFactor, y * yFactor, z * .78]}><mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[.23, .23, .08, 28]} /><StandardMaterial color="#75858c" xray={xray} selected={selected} metalness={.92} roughness={.15} /></mesh><mesh><torusGeometry args={[.2, .032, 9, 28]} /><StandardMaterial color="#bd7448" xray={xray} selected={selected} metalness={.82} roughness={.2} /></mesh></group>)}
+    {!xray && <><group position={[0, y * .44, z * .7]}><BoxBody size={[x * .9, .07, z * .16]} color="#bd7448" xray={false} selected={selected} radius={.012} /></group><group position={[0, -y * .44, z * .7]}><BoxBody size={[x * .9, .07, z * .16]} color="#bd7448" xray={false} selected={selected} radius={.012} /></group></>}
+  </group>;
+}
+
 function CopperPipe({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const radius = component.dimensions[0] / 2;
   const length = component.dimensions[1];
@@ -147,6 +171,8 @@ function LocatingPin({ component, color, xray, selected }: { component: MachineC
 
 function ComponentShape({ component, xray, selected, actuatorValue }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
+  if (component.parameters.bphe_plate) return <BrazedPlateLeaf component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.bphe_end_plate) return <BrazedEndPlate component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.fixture_plate) return <FixturePlate component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.heat_exchanger_core) return <HeatExchangerCore component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.hvac_pipe) return <CopperPipe component={component} color={color} xray={xray} selected={selected} />;
