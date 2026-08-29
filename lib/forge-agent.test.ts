@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { POST } from '../app/api/agent/route';
 import {
-  agentPlanSchema, agentRedesignSchema, getAgentStatus, requestAgentPlan,
+  agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, requestAgentPlan,
 } from './forge-agent';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -17,6 +17,16 @@ describe('ForgeTwin model-agent boundary', () => {
     }).verification_focus).toContain('course_time');
     expect(() => agentPlanSchema.parse({ normalized_prompt: 'Build a useful machine from reusable primitives.', reasoning_summary: 'This is long enough to parse safely.', architecture: ['frame'], assumptions: [], verification_focus: ['invented_metric'] })).toThrow();
     expect(() => agentRedesignSchema.parse({ diagnosis: 'The payload is unstable.', objective: 'Increase stability.', tool_sequence: [{ tool: 'delete_everything', metric: '', objective: '' }] })).toThrow();
+  });
+
+  it('accepts guarded in-place chat edits and rejects arbitrary tools', () => {
+    const action = {
+      tool: 'set_dimensions', component_id: 'crane-base', assembly_id: 'crane', primitive: 'frame', role: 'crane base',
+      position: [0, .2, 0], rotation: [0, 0, 0], dimensions: [5, .3, 3], material_id: 'steel', body_type: 'fixed', mass: 0,
+      source_id: '', target_id: '', connection_type: 'mechanical', channel: '', joint_id: '', joint_type: 'fixed', axis: [0, 1, 0], limits: [0, 0],
+    } as const;
+    expect(agentEditSchema.parse({ summary: 'Widen the existing crane base while preserving every other component.', actions: [action] }).actions[0].tool).toBe('set_dimensions');
+    expect(() => agentEditSchema.parse({ summary: 'Delete all files outside the engineering world.', actions: [{ ...action, tool: 'run_shell' }] })).toThrow();
   });
 
   it('keeps a temporary key in the request header and validates the model plan', async () => {
@@ -51,6 +61,20 @@ describe('ForgeTwin model-agent boundary', () => {
       await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_NOT_CONFIGURED' });
     } finally {
       if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+    }
+  });
+
+
+  it('defaults to the flagship GPT-5.6 Sol model', async () => {
+    const previousKey = process.env.OPENAI_API_KEY;
+    const previousModel = process.env.OPENAI_MODEL;
+    delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_MODEL;
+    try {
+      const response = await (await import('../app/api/agent/route')).GET();
+      await expect(response.json()).resolves.toMatchObject({ configured: false, model: 'gpt-5.6-sol' });
+    } finally {
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey;
+      if (previousModel === undefined) delete process.env.OPENAI_MODEL; else process.env.OPENAI_MODEL = previousModel;
     }
   });
 });

@@ -258,6 +258,25 @@ class WorldBuilder {
     return value.id;
   }
 
+  rotate(componentId: string, rotation: Vec3) {
+    const target = this.components.find((item) => item.id === componentId);
+    if (!target) throw new Error('Planner attempted to rotate a missing primitive.');
+    target.rotation = rotation;
+    target.parameters = { ...target.parameters, nominal_rx: rotation[0], nominal_ry: rotation[1], nominal_rz: rotation[2] };
+    return componentId;
+  }
+
+  member(primitive: 'beam' | 'cable', role: string, assemblyId: string, start: Vec3, end: Vec3, section: number, materialId = 'steel', bodyType: BodyType = 'fixed', parameters: Record<string, number | string | boolean> = {}) {
+    const delta = end.map((value, index) => value - start[index]) as Vec3;
+    const length = Math.max(.05, Math.hypot(...delta));
+    const center = start.map((value, index) => (value + end[index]) / 2) as Vec3;
+    if (primitive === 'cable') return this.component('cable', role, assemblyId, center, [section, length, section], materialId, bodyType, { ...parameters, start_x: start[0] + this.origin[0], start_y: start[1] + this.origin[1], start_z: start[2] + this.origin[2], end_x: end[0] + this.origin[0], end_y: end[1] + this.origin[1], end_z: end[2] + this.origin[2] });
+    const horizontal = Math.hypot(delta[0], delta[2]);
+    const rotation: Vec3 = [0, -Math.atan2(delta[2], Math.max(.0001, horizontal)), Math.atan2(delta[1], Math.max(.0001, horizontal))];
+    const id = this.component('beam', role, assemblyId, center, [length, section, section], materialId, bodyType, { ...parameters, member_length: length });
+    return this.rotate(id, rotation);
+  }
+
   connect(sourceId: string, targetId: string, type: ConnectionBlueprint['type'], channel: string) {
     const existing = this.connections.find((item) => item.sourceId === sourceId && item.targetId === targetId && item.type === type);
     if (existing) return existing.id;
@@ -318,11 +337,18 @@ function addSpanMembers(context: ModuleContext): ModuleResult {
     const deck = builder.component('plate', folding ? `hinged span ${index + 1}` : 'span deck', assembly, [x, 1.25, 0], [length, .085, 1.5], 'steel', folding ? 'dynamic' : 'fixed', { span_m: length });
     builder.joint(folding ? 'revolute' : 'fixed', previous, deck, [0, 0, 1], { limits: folding ? [0, values.angleDeg * Math.PI / 180] : undefined });
     decks.push(deck); previous = deck;
-    const braceCount = Math.max(3, Math.min(7, Math.ceil(length / 1.25)));
-    for (let brace = 0; brace < braceCount; brace += 1) {
-      const bx = x - length / 2 + (brace + .5) * length / braceCount;
-      const diagonal = builder.component('beam', `span brace ${index + 1}-${brace + 1}`, assembly, [bx, 1.82, brace % 2 ? .62 : -.62], [length / braceCount * 1.28, .12, .12], 'steel', 'fixed');
-      builder.joint('fixed', deck, diagonal, [1, 0, 0]);
+    const braceCount = Math.max(3, Math.min(6, Math.ceil(length / 1.25)));
+    for (const side of [-1, 1]) {
+      const chord = builder.component('beam', `upper chord ${index + 1}-${side < 0 ? 'left' : 'right'}`, assembly, [x, 1.88, side * .66], [length, .11, .11], 'steel', 'fixed');
+      builder.joint('fixed', deck, chord, [1, 0, 0]);
+      for (let brace = 0; brace < braceCount; brace += 1) {
+        const x0 = x - length / 2 + brace * length / braceCount;
+        const x1 = x - length / 2 + (brace + 1) * length / braceCount;
+        const start: Vec3 = [brace % 2 ? x0 : x1, 1.3, side * .66];
+        const end: Vec3 = [brace % 2 ? x1 : x0, 1.88, side * .66];
+        const diagonal = builder.member('beam', `${side < 0 ? 'span brace' : 'diagonal truss'} ${index + 1}-${brace + 1}`, assembly, start, end, .1, 'steel', 'fixed');
+        builder.joint('fixed', deck, diagonal, [1, 0, 0]);
+      }
     }
   }
   if (!folding) builder.joint('fixed', previous, right);
@@ -416,23 +442,28 @@ function addRotaryTransmission(context: ModuleContext): ModuleResult {
 function addSerialLinkage(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
   const assembly = builder.assembly('serial linkage', 'Rotary links, joint drives, and a constructed end-effector chain', rootAssemblyId);
-  const base = builder.component('plate', 'linkage base', assembly, [0, .16, 0], [1.6, .25, 1.4], 'steel', 'fixed');
-  const pedestal = builder.component('beam', 'vertical linkage support', assembly, [0, .85, 0], [.3, 1.5, .3], 'steel', 'dynamic');
+  const base = builder.component('plate', 'linkage base', assembly, [0, .16, 0], [1.8, .25, 1.65], 'steel', 'fixed', { industrial_base: true });
+  const pedestal = builder.component('support', 'rotating pedestal', assembly, [0, .92, 0], [.62, 1.45, .62], 'steel', 'dynamic', { joint_housing: true });
   builder.joint('revolute', base, pedestal, [0, 1, 0], { limits: [-Math.PI, Math.PI] });
   let parent = pedestal;
   const linkLength = values.reachM / 3;
   const actuators: string[] = [];
+  let jointPoint: Vec3 = [0, 1.55, 0];
+  const linkAngles = [35, 18, -22].map((angle) => angle * Math.PI / 180);
   for (let index = 0; index < 3; index += 1) {
-    const link = builder.component('beam', `serial link ${index + 1}`, assembly, [index * linkLength + linkLength / 2, 1.65 + index * .24, 0], [linkLength, .22, .22], 'aluminum', 'dynamic', { link_length: linkLength });
+    const angle = linkAngles[index];
+    const nextPoint: Vec3 = [jointPoint[0] + Math.cos(angle) * linkLength, jointPoint[1] + Math.sin(angle) * linkLength, 0];
+    const link = builder.member('beam', `serial link ${index + 1}`, assembly, jointPoint, nextPoint, .26 - index * .025, 'aluminum', 'dynamic', { link_length: linkLength, hollow_section: true });
     const joint = builder.joint('revolute', parent, link, [0, 0, 1], { limits: [-1.8, 1.8] });
-    const servo = builder.component('servo', `link servo ${index + 1}`, assembly, [index * linkLength, 1.65 + index * .24, -.3], undefined, undefined, 'kinematic');
+    const servo = builder.component('servo', `link servo ${index + 1}`, assembly, [jointPoint[0], jointPoint[1], -.2], [.42 - index * .04, .32, .42 - index * .04], 'steel', 'kinematic', { joint_housing: true });
+    builder.rotate(servo, [Math.PI / 2, 0, 0]);
     actuators.push(builder.actuator(servo, joint, 'servo', Math.max(110, values.payloadKg * 9.81 * values.reachM * .62), 1.8, 3.6));
     builder.connect(servo, link, 'power', 'joint_drive');
-    parent = link;
+    parent = link; jointPoint = nextPoint;
   }
-  const gripper = builder.component('gripper', 'constructed parallel gripper', assembly, [values.reachM, 2.15, 0], undefined, undefined, 'kinematic', { payload_kg: values.payloadKg });
+  const gripper = builder.component('gripper', 'constructed parallel gripper', assembly, [jointPoint[0] + .24, jointPoint[1], 0], [.58, .32, .72], 'steel', 'kinematic', { payload_kg: values.payloadKg });
   builder.joint('fixed', parent, gripper);
-  const camera = builder.component('camera', 'tool pose camera', assembly, [values.reachM - .3, 2.42, 0], undefined, undefined, 'fixed');
+  const camera = builder.component('camera', 'tool pose camera', assembly, [jointPoint[0] - .05, jointPoint[1] + .3, 0], [.24, .18, .24], 'polymer', 'fixed');
   const vision = builder.sensor(camera, 'camera', 'target_pose', gripper, 4);
   builder.control('cartesian placement', 'pid', [vision], actuators, 'solve link setpoints from target pose and payload', values.placementCm / 100);
   builder.connect(camera, gripper, 'signal', 'target_pose');
@@ -442,29 +473,40 @@ function addSerialLinkage(context: ModuleContext): ModuleResult {
 function addCableSuspension(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
   const assembly = builder.assembly('cable suspension', 'Support frame, pulley path, winch, hook, payload, and balance mass', rootAssemblyId);
-  const baseWidth = Math.max(3.2, 2.8 + values.payloadKg / 180);
-  const base = builder.component('frame', 'suspension base', assembly, [-1, .16, 0], [baseWidth, .28, 2.4], 'steel', 'fixed');
-  const mast = builder.component('beam', 'vertical mast', assembly, [-1.8, 2.25, 0], [.34, 4.4, .34], 'steel', 'fixed');
-  const boomLength = Math.max(3.2, Math.min(5.6, values.liftM + 2.8));
-  const boom = builder.component('beam', 'suspension boom', assembly, [-.1, 4.18, 0], [boomLength, .3, .3], 'steel', 'fixed');
+  const baseWidth = Math.max(4.2, 3.6 + values.payloadKg / 220);
+  const base = builder.component('frame', 'crane carrier base', assembly, [-.45, .18, 0], [baseWidth, .34, 2.85], 'steel', 'fixed', { industrial_base: true });
+  const mast = builder.component('beam', 'lattice crane mast', assembly, [-1.35, 2.35, 0], [.42, 4.35, .42], 'steel', 'fixed');
+  const boomLength = Math.max(3.7, Math.min(5.8, values.liftM + 3.1));
+  const boomStart: Vec3 = [-1.35, 4.18, 0];
+  const boomEnd: Vec3 = [boomStart[0] + boomLength * .92, boomStart[1] + boomLength * .28, 0];
+  const boom = builder.member('beam', 'angled lifting boom', assembly, boomStart, boomEnd, .34, 'steel', 'fixed', { hollow_section: true });
   builder.joint('fixed', base, mast); builder.joint('fixed', mast, boom);
-  const pulley = builder.component('pulley', 'head pulley', assembly, [1.48, 3.95, 0], [.62, .2, .62], 'steel', 'dynamic');
+  const rearStay = builder.member('beam', 'rear mast brace', assembly, [-2.05, .38, 0], [-1.35, 3.65, 0], .22, 'steel', 'fixed');
+  builder.joint('fixed', base, rearStay);
+  for (const side of [-1, 1]) {
+    const outrigger = builder.component('beam', `${side < 0 ? 'left' : 'right'} stabilizing outrigger`, assembly, [-.8, .34, side * 1.65], [2.4, .2, .2], 'steel', 'fixed', { outrigger: true });
+    builder.rotate(outrigger, [0, Math.PI / 2, 0]);
+    builder.joint('fixed', base, outrigger);
+  }
+  const pulley = builder.component('pulley', 'boom head pulley', assembly, boomEnd, [.7, .22, .7], 'steel', 'dynamic');
+  builder.rotate(pulley, [Math.PI / 2, 0, 0]);
   const pulleyJoint = builder.joint('revolute', boom, pulley, [0, 0, 1]);
-  const cable = builder.component('cable', 'load cable', assembly, [1.48, 2.75, 0], [.04, Math.max(1.5, values.liftM), .04], 'steel', 'dynamic');
-  const hook = builder.component('hook', 'load hook', assembly, [1.48, 1.65, 0], undefined, undefined, 'dynamic');
+  const hookY = Math.max(1.15, boomEnd[1] - Math.max(2.1, values.liftM));
+  const cable = builder.member('cable', 'load cable', assembly, boomEnd, [boomEnd[0], hookY + .28, 0], .035, 'steel', 'dynamic', { rigging: true });
+  const hook = builder.component('hook', 'forged load hook', assembly, [boomEnd[0], hookY, 0], [.24, .42, .1], 'steel', 'dynamic');
   const ropeJoint = builder.joint('rope', pulley, hook, [0, 1, 0], { limits: [0, Math.max(1.5, values.liftM)] });
   builder.connect(cable, hook, 'mechanical', 'cable_termination');
-  const payload = builder.component('container', 'suspended payload', assembly, [1.48, 1.1, 0], [1.05, .65, .7], 'steel', 'dynamic', { payload_kg: values.payloadKg }, values.payloadKg);
+  const payload = builder.component('container', 'suspended payload', assembly, [boomEnd[0], hookY - .55, 0], [1.25, .48, .62], 'steel', 'dynamic', { payload_kg: values.payloadKg, rigged_load: true }, values.payloadKg);
   builder.joint('fixed', hook, payload);
   const counterMass = Math.max(70, values.payloadKg * .62);
-  const counterweight = builder.component('counterweight', 'balance counterweight', assembly, [-2.55, .85, 0], [1.05, .95, .95], 'concrete', 'dynamic', { payload_kg: counterMass }, counterMass);
+  const counterweight = builder.component('counterweight', 'rear balance counterweight', assembly, [-2.35, .82, 0], [1.2, 1.05, 1.25], 'concrete', 'dynamic', { payload_kg: counterMass, safety_stripes: true }, counterMass);
   builder.joint('fixed', base, counterweight);
-  const motor = builder.component('motor', 'cable winch motor', assembly, [-1.35, 3.76, -.45], undefined, undefined, 'kinematic');
+  const motor = builder.component('motor', 'boom winch motor', assembly, [-1.45, 3.72, -.5], [.48, .6, .48], 'steel', 'kinematic');
   const actuator = builder.actuator(motor, ropeJoint, 'winch', Math.max(900, values.payloadKg * 9.81 * .72), .8, values.liftM);
   builder.motor(motor, pulleyJoint, Math.max(105, values.payloadKg * 4.4), 42);
-  const loadSensor = builder.component('sensor', 'load and swing sensor', assembly, [-1.55, 4.4, 0], undefined, undefined, 'fixed');
+  const loadSensor = builder.component('sensor', 'load and swing sensor', assembly, [-1.55, 4.45, 0], [.23, .18, .23], 'polymer', 'fixed');
   const sensor = builder.sensor(loadSensor, 'load', 'suspended_load', hook, boomLength);
-  const controller = builder.component('controller', 'suspension controller', assembly, [-.5, .55, -1], undefined, undefined, 'fixed');
+  const controller = builder.component('controller', 'crane control cabinet', assembly, [-.55, .72, -1.02], [.72, 1.05, .4], 'steel', 'fixed');
   builder.control('suspension stability', 'pid', [sensor], [actuator], 'limit swing while following lift height', values.liftM);
   builder.joint('fixed', controller, base); builder.joint('fixed', loadSensor, boom);
   return { id: 'cable-suspension', mountId: base, editableId: loadSensor, handles: ['lift', 'suspend', 'stabilize'], driveId: motor, outputId: hook };

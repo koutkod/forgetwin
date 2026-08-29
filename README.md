@@ -4,7 +4,7 @@ ForgeTwin is a browser-based, agent-native engineering sandbox. A person describ
 
 The runtime is explicit about what is doing the work:
 
-- **Model agent** — when `OPENAI_API_KEY` is configured on the server, or a user connects a temporary key for the current tab, an OpenAI Responses API model interprets the brief and selects the failure-analysis/redesign tool loop.
+- **Model agent** — when `OPENAI_API_KEY` is configured on the server, or a user connects a temporary key for the current tab, GPT-5.6 Sol interprets the brief, edits the current world from chat, and selects the failure-analysis/redesign tool loop. `OPENAI_MODEL` can override the default.
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
 
@@ -89,6 +89,10 @@ Gear/belt power transmission and structural stress use disclosed reduced-order e
 
 After a design passes, drag or edit a component. ForgeTwin marks the changed physical field as human-owned and invalidates the prior calibration. The agent detects the new design hash, simulates the modified world, and redesigns surrounding unlocked fields without moving the human component back. Compare and version-history views make the preservation visible.
 
+The **Edit with chat** panel changes the existing world rather than silently starting over. Requests such as “lengthen the boom,” “widen the outriggers,” “move the sensor up 0.5 m,” “use aluminum for the gripper,” or “add another support” compile into small guarded component/joint operations. ForgeTwin commits the revision, runs physics, and—if the edit breaks a constraint—uses the same evidence-driven redesign loop. A bounded deterministic chat interpreter covers common geometry, transform, mass, material, add, and remove requests when no model key is connected.
+
+The renderer uses the same primitive graph to produce industrial frames, rounded structural members, geared shafts, grooved pulleys, rigging, wheels with hubs and tread, drive housings, crates, solar panels, conveyors, supports, and control devices. Camera framing is derived from the current world bounds, so a compact gearbox and a tall crane both fill the workspace without machine-specific camera presets.
+
 ## Security model
 
 - The design brief is treated as untrusted data, never executable instructions. The model route wraps it as design data and rejects model output that does not match the strict planning or redesign schema.
@@ -115,7 +119,7 @@ Key modules:
 - `lib/forge-prompt.ts` — free-form goal parsing and compositional world synthesis.
 - `lib/forge-engine.ts` — guarded state transitions, ownership, hashing, optimization, compare, and restore.
 - `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
-- `lib/forge-agent.ts` — strict model-plan/redesign schemas, client boundary, status, and temporary-key transport.
+- `lib/forge-agent.ts` — strict model-plan/redesign/chat-edit schemas, client boundary, status, and temporary-key transport.
 - `lib/use-forge.ts` — Zod tool schemas, WebMCP registration, persistence, and optimistic concurrency.
 - `components/forge/forge-scene.tsx` — generic 3D primitive renderer and X-Ray world view.
 - `app/forgetwin-app.tsx` — agent loop, editor, activity feed, telemetry, compare, and demo UX.
@@ -130,8 +134,9 @@ Key modules:
 5. Let the agent inspect, measure, redesign, and rerun until all constraints pass.
 6. Toggle **X-Ray** to expose joints, axes, signal lines, actuator paths, velocity vectors, and contacts.
 7. Select any body and move, rotate, resize, or change its material.
-8. Select **Redesign around my change** and verify that the human-owned field remains fixed.
-9. Use **Compare runs**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
+8. Open **Edit with chat**, enter “Make the base wider,” and watch the agent revise and resimulate the same world.
+9. Select **Redesign around my change** and verify that the human-owned field remains fixed.
+10. Use **Compare runs**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
 
 ## Run locally
 
@@ -148,7 +153,7 @@ Optional model-backed mode:
 
 ```bash
 cp .env.example .env.local
-# Set OPENAI_API_KEY in .env.local; OPENAI_MODEL defaults to gpt-5.4-mini.
+# Set OPENAI_API_KEY in .env.local; OPENAI_MODEL defaults to gpt-5.6-sol.
 ```
 
 Without that key, the complete local engineering flow still works and is labeled as deterministic.
