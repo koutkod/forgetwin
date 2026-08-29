@@ -28,6 +28,19 @@ const formatTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour:
 const constraintSymbol = (operator: 'min' | 'max' | 'exact') => operator === 'min' ? '≥' : operator === 'max' ? '≤' : '=';
 type EditMessage = { id: string; role: 'user' | 'agent'; text: string };
 type EditCommand = { tool: ForgeToolName; input: Record<string, unknown>; label: string };
+type GenerationPhase = 'interpreting' | 'planning' | 'assembling' | 'linking' | 'simulating' | 'optimizing' | 'complete';
+type GenerationVisualState = {
+  phase: GenerationPhase;
+  goal: string;
+  progress: number;
+  headline: string;
+  detail: string;
+  machineName?: string;
+  builtBodies?: number;
+  totalBodies?: number;
+  builtLinks?: number;
+  totalLinks?: number;
+};
 
 export function ForgeTwinApp() {
   const forge = useForge();
@@ -49,6 +62,7 @@ export function ForgeTwinApp() {
   const [editPrompt, setEditPrompt] = useState('');
   const [editMessages, setEditMessages] = useState<EditMessage[]>([]);
   const [agentCancelable, setAgentCancelable] = useState(false);
+  const [generationVisual, setGenerationVisual] = useState<GenerationVisualState | null>(null);
   const traceSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -121,6 +135,11 @@ export function ForgeTwinApp() {
     if (requestedPrompt.length < 12) { setPromptError('Describe a physical goal with at least one requirement.'); return; }
     const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true);
     setBusy(true); setError(null); setPromptError(null);
+    setGenerationVisual({
+      phase: 'interpreting', goal: requestedPrompt, progress: 4,
+      headline: 'Reading the engineering intent',
+      detail: 'Separating the object identity, physical requirements, and measurable constraints.',
+    });
     traceSeq.current += 1;
     setAgentTrace([{ id: `agent-trace-${traceSeq.current}`, kind: 'goal', title: 'New engineering mission', detail: requestedPrompt, at: new Date().toISOString() }]);
     try {
@@ -136,6 +155,7 @@ export function ForgeTwinApp() {
       }
       if (agentKey) { shouldUseModel = true; actor = 'ModelAgent'; setAgentRuntime('session-model'); }
       if (shouldUseModel) {
+        setGenerationVisual((current) => current ? { ...current, progress: 9, headline: 'Reasoning across the constraints', detail: `${agentModel} is choosing an architecture that preserves the requested machine identity.` } : current);
         addTrace('action', 'Asking the model to plan', 'Interpreting constraints, selecting a composable architecture, and choosing verification metrics.');
         try {
           const response = await requestAgentPlan(requestedPrompt, agentKey || undefined, controller.signal);
@@ -153,6 +173,13 @@ export function ForgeTwinApp() {
       catch (caught) { throw new Error(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
       plan.brief = requestedPrompt; plan.goal.brief = requestedPrompt;
       plan.assumptions = [...modelAssumptions, ...plan.assumptions].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
+      setGenerationVisual((current) => current ? {
+        ...current, phase: 'planning', progress: 22, machineName: plan.goal.machineName,
+        headline: 'Architecture resolved',
+        detail: `${plan.components.length} bodies, ${plan.joints.length} joints, and ${plan.motors.length + plan.actuators.length} driven elements are ready to compose.`,
+        builtBodies: 0, totalBodies: plan.components.length, builtLinks: 0,
+        totalLinks: plan.connections.length + plan.joints.length + plan.motors.length + plan.sensors.length + plan.actuators.length + plan.controls.length,
+      } : current);
       addTrace('reasoning', 'World plan compiled', `${plan.assemblies.length} assemblies, ${plan.components.length} bodies, ${plan.joints.length} joints, ${plan.motors.length + plan.actuators.length} drives, and ${plan.controls.length} control loops.`);
 
       reset('lab'); await pause(40); ensureActive(controller.signal);
@@ -167,15 +194,30 @@ export function ForgeTwinApp() {
       }, 35, actor, controller.signal);
       addTrace('action', 'Building the shared world', 'Creating the planned bodies, connections, joints, sensors, actuators, and control channels through guarded tools.');
       for (const item of plan.assemblies) await call('create_assembly', { assembly_id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId }, 20, actor, controller.signal);
-      for (const item of plan.components) await call('create_component', {
-        component_id: item.id, primitive: item.primitive, assembly_id: item.assemblyId, role: item.role,
-        position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId,
-        body_type: item.bodyType, mass: item.mass, color: item.color, parameters: item.parameters,
-      }, 20, actor, controller.signal);
+      setGenerationVisual((current) => current ? { ...current, phase: 'assembling', progress: 28, headline: 'Materializing the machine', detail: 'Placing dimensioned physical bodies into the shared 3D world.' } : current);
+      for (const [index, item] of plan.components.entries()) {
+        await call('create_component', {
+          component_id: item.id, primitive: item.primitive, assembly_id: item.assemblyId, role: item.role,
+          position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId,
+          body_type: item.bodyType, mass: item.mass, color: item.color, parameters: item.parameters,
+        }, 20, actor, controller.signal);
+        setGenerationVisual((current) => current ? {
+          ...current, builtBodies: index + 1,
+          progress: Math.round(28 + ((index + 1) / Math.max(1, plan.components.length)) * 34),
+          detail: `${item.role} placed · ${index + 1} of ${plan.components.length} physical bodies`,
+        } : current);
+      }
       const connected = new Set<string>();
+      let builtLinks = 0;
+      const totalLinks = plan.connections.length + plan.joints.length + plan.motors.length + plan.sensors.length + plan.actuators.length + plan.controls.length;
+      const advanceLinkVisual = (detail: string) => {
+        builtLinks += 1;
+        setGenerationVisual((current) => current ? { ...current, phase: 'linking', headline: 'Wiring the physical graph', detail, builtLinks, totalLinks, progress: Math.round(63 + (builtLinks / Math.max(1, totalLinks)) * 16) } : current);
+      };
       for (const item of plan.connections) {
         connected.add([item.sourceId, item.targetId].sort().join('-'));
         await call('connect_components', { connection_id: item.id, source_id: item.sourceId, target_id: item.targetId, connection_type: item.type, channel: item.channel }, 20, actor, controller.signal);
+        advanceLinkVisual(`${item.type} connection established · ${builtLinks + 1} of ${totalLinks} graph links`);
       }
       for (const [index, item] of plan.joints.entries()) {
         const pair = [item.componentA, item.componentB].sort().join('-');
@@ -184,18 +226,21 @@ export function ForgeTwinApp() {
           await call('connect_components', { connection_id: `edge-${index + 1}`, source_id: item.componentA, target_id: item.componentB, connection_type: 'mechanical', channel: item.type }, 20, actor, controller.signal);
         }
         await call('create_joint', { joint_id: item.id, joint_type: item.type, component_a: item.componentA, component_b: item.componentB, anchor_a: item.anchorA, anchor_b: item.anchorB, axis: item.axis, limits: item.limits, ratio: item.ratio, stiffness: item.stiffness, damping: item.damping }, 20, actor, controller.signal);
+        advanceLinkVisual(`${item.type} joint constrained · ${builtLinks + 1} of ${totalLinks} graph links`);
       }
-      for (const item of plan.motors) await call('add_motor', { motor_id: item.id, component_id: item.componentId, joint_id: item.jointId, max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction }, 20, actor, controller.signal);
-      for (const item of plan.sensors) await call('add_sensor', { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range }, 20, actor, controller.signal);
-      for (const item of plan.actuators) await call('add_actuator', { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel }, 20, actor, controller.signal);
-      for (const item of plan.controls) await call('set_control_logic', { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX }, 20, actor, controller.signal);
+      for (const item of plan.motors) { await call('add_motor', { motor_id: item.id, component_id: item.componentId, joint_id: item.jointId, max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction }, 20, actor, controller.signal); advanceLinkVisual(`${item.id} drive channel online · ${builtLinks + 1} of ${totalLinks} graph links`); }
+      for (const item of plan.sensors) { await call('add_sensor', { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range }, 20, actor, controller.signal); advanceLinkVisual(`${item.type} sensing channel online · ${builtLinks + 1} of ${totalLinks} graph links`); }
+      for (const item of plan.actuators) { await call('add_actuator', { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel }, 20, actor, controller.signal); advanceLinkVisual(`${item.type} actuator online · ${builtLinks + 1} of ${totalLinks} graph links`); }
+      for (const item of plan.controls) { await call('set_control_logic', { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX }, 20, actor, controller.signal); advanceLinkVisual(`${item.mode} control loop compiled · ${builtLinks + 1} of ${totalLinks} graph links`); }
 
+      setGenerationVisual((current) => current ? { ...current, phase: 'simulating', progress: 82, headline: 'Physics is taking over', detail: 'Rapier is advancing the assembled world at 60 Hz and measuring every registered constraint.' } : current);
       addTrace('action', 'Running the first physics trial', 'Instantiating the current world in Rapier at 60 Hz and measuring every registered constraint.');
       must(await runMachine(actor));
       const firstRun = getSnapshot().runs.at(-1);
       if (firstRun) addTrace('observation', firstRun.status === 'passed' ? 'Physics accepted the first design' : 'Physics rejected the first design', `${firstRun.diagnosis.summary} Constraint score: ${firstRun.metrics.score}%.`);
       for (let iteration = 0; iteration < 2 && getSnapshot().runs.at(-1)?.status === 'failed'; iteration += 1) {
         const failed = getSnapshot().runs.at(-1)!;
+        setGenerationVisual((current) => current ? { ...current, phase: 'optimizing', progress: 90 + iteration * 3, headline: 'Failure found. Redesigning.', detail: `${failed.diagnosis.summary} The agent is changing only evidence-linked fields.` } : current);
         setToast(`${failed.diagnosis.summary} — agent is inspecting the evidence`);
         actor = await redesignRun(failed, requestedPrompt, actor, controller.signal);
         const rerun = getSnapshot().runs.at(-1);
@@ -204,11 +249,13 @@ export function ForgeTwinApp() {
       const finalRun = getSnapshot().runs.at(-1);
       if (finalRun?.status !== 'passed') throw new Error('The bounded optimizer still misses a target. Open telemetry to inspect the remaining physical constraint.');
       addTrace('complete', 'Engineering mission complete', `${plan.goal.machineName} passes ${finalRun.metrics.measures.filter((item) => item.status === 'pass').length}/${finalRun.metrics.measures.length} measured constraints with ${plan.components.length} generated bodies.`);
+      setGenerationVisual((current) => current ? { ...current, phase: 'complete', progress: 100, headline: 'Engineered. Simulated. Verified.', detail: `${plan.goal.machineName} passes ${finalRun.metrics.measures.filter((item) => item.status === 'pass').length}/${finalRun.metrics.measures.length} constraints with a ${finalRun.metrics.score}% score.` } : current);
       setToast(`${plan.goal.machineName} engineered from ${plan.components.length} primitives · ${finalRun.metrics.score}% constraints pass`);
+      await pause(950);
     } catch (caught) {
       if (caught instanceof Error && caught.name === 'AbortError') { addTrace('observation', 'Engineering run stopped', 'The current agent run was cancelled. The last committed world revision is still available.'); setToast('Agent run cancelled'); }
       else { const message = caught instanceof Error ? caught.message : 'The machine could not be engineered.'; setError(message); addTrace('error', 'Engineering run stopped', message); }
-    } finally { abortRef.current = null; setAgentCancelable(false); setBusy(false); }
+    } finally { abortRef.current = null; setAgentCancelable(false); setBusy(false); setGenerationVisual(null); }
   };
 
   const diagnoseAndFix = async () => {
@@ -457,7 +504,7 @@ export function ForgeTwinApp() {
     setToast('Scratch world ready — the primitive library is unlocked');
   };
 
-  if (state.screen === 'landing') return <><Landing state={state} toolCount={registeredTools} prompt={goalPrompt} promptError={promptError} busy={busy} agentRuntime={agentRuntime} agentModel={agentModel} onConfigureAgent={() => setAgentSettingsOpen(true)} onPromptChange={updateGoalPrompt} onEnter={enterScratchWorld} onGenerate={generateFromPrompt} onExample={(example) => { setGoalPrompt(example.prompt); setPromptError(null); }} />{agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}</>;
+  if (state.screen === 'landing') return <><Landing state={state} toolCount={registeredTools} prompt={goalPrompt} promptError={promptError} busy={busy} agentRuntime={agentRuntime} agentModel={agentModel} onConfigureAgent={() => setAgentSettingsOpen(true)} onPromptChange={updateGoalPrompt} onEnter={enterScratchWorld} onGenerate={generateFromPrompt} onExample={(example) => { setGoalPrompt(example.prompt); setPromptError(null); }} />{generationVisual && <GenerationSequence state={generationVisual} onCancel={cancelAgentRun} />}{agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}</>;
 
   const latestRun = state.runs.at(-1) ?? null;
   const firstFailedRun = state.runs.find((run) => run.status === 'failed') ?? null;
@@ -495,8 +542,66 @@ export function ForgeTwinApp() {
     {error && <div className="error-toast" role="alert"><AlertTriangle size={15} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><X size={14} /></button></div>}
     {toast && <div className="success-toast" role="status"><Check size={14} />{toast}</div>}
     {drawer && <Drawer type={drawer} state={state} onClose={() => setDrawer(null)} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} onAddPrimitive={addPrimitive} />}
+    {generationVisual && <GenerationSequence state={generationVisual} onCancel={cancelAgentRun} />}
     {agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}
     <div className="sr-only" aria-live="polite">{busy ? 'Agent is engineering the shared physical world' : toast ?? error ?? ''}</div>
+  </div>;
+}
+
+const GENERATION_PHASES: Array<{ id: GenerationPhase; label: string; short: string }> = [
+  { id: 'interpreting', label: 'Intent', short: 'Parse goal' },
+  { id: 'planning', label: 'Architecture', short: 'Choose primitives' },
+  { id: 'assembling', label: 'Assembly', short: 'Place bodies' },
+  { id: 'linking', label: 'Systems', short: 'Wire joints' },
+  { id: 'simulating', label: 'Physics', short: 'Run at 60 Hz' },
+  { id: 'complete', label: 'Verified', short: 'Pass constraints' },
+];
+
+function GenerationSequence({ state, onCancel }: { state: GenerationVisualState; onCancel: () => void }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const cancelActionRef = useRef(onCancel);
+  const phaseRef = useRef(state.phase);
+  const activeIndex = state.phase === 'optimizing' ? 4 : GENERATION_PHASES.findIndex((item) => item.id === state.phase);
+  useEffect(() => { cancelActionRef.current = onCancel; }, [onCancel]);
+  useEffect(() => { phaseRef.current = state.phase; }, [state.phase]);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const timer = window.setTimeout(() => cancelRef.current?.focus(), 250);
+    const handle = (event: KeyboardEvent) => { if (event.key === 'Escape' && phaseRef.current !== 'complete') { event.preventDefault(); cancelActionRef.current(); } };
+    document.addEventListener('keydown', handle);
+    return () => { window.clearTimeout(timer); document.removeEventListener('keydown', handle); document.body.style.overflow = previousOverflow; };
+  }, []);
+  return <div className={`generation-backdrop phase-${state.phase}`}>
+    <div className="generation-grid" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
+    <div className="generation-scan" aria-hidden="true" />
+    <section className="generation-stage" role="dialog" aria-modal="true" aria-labelledby="generation-title" aria-describedby="generation-detail">
+      <header className="generation-header"><div className="generation-brand"><span className="brand-mark"><span>F</span></span><div><strong>ForgeTwin</strong><small>LIVE ENGINEERING SEQUENCE</small></div></div><span className="generation-model"><i />AGENT + RAPIER ONLINE</span></header>
+      <div className="generation-main">
+        <div className="generation-visual" aria-hidden="true">
+          <span className="blueprint-axis x" /><span className="blueprint-axis y" />
+          <div className="generation-orbit orbit-one"><i /><i /><i /></div>
+          <div className="generation-orbit orbit-two"><i /><i /><i /><i /></div>
+          <div className="generation-core"><span><Cpu size={34} /></span><b>{Math.round(state.progress)}%</b><small>{state.phase === 'optimizing' ? 'REDESIGN' : state.phase.toUpperCase()}</small></div>
+          <span className="generation-pulse one" /><span className="generation-pulse two" /><span className="generation-pulse three" />
+        </div>
+        <div className="generation-copy">
+          <span className="generation-kicker"><Sparkles size={13} />{state.machineName ?? 'New physical system'}</span>
+          <h2 id="generation-title">{state.headline}</h2>
+          <p id="generation-detail">{state.detail}</p>
+          <blockquote>“{state.goal}”</blockquote>
+          <div className="generation-counters">
+            <span><small>Physical bodies</small><strong>{state.totalBodies ? `${state.builtBodies ?? 0}/${state.totalBodies}` : '—'}</strong></span>
+            <span><small>Graph links</small><strong>{state.totalLinks ? `${state.builtLinks ?? 0}/${state.totalLinks}` : '—'}</strong></span>
+            <span><small>Physics clock</small><strong>60 Hz</strong></span>
+          </div>
+        </div>
+      </div>
+      <ol className="generation-timeline" aria-label="Engineering stages">
+        {GENERATION_PHASES.map((item, index) => <li key={item.id} className={index < activeIndex || state.phase === 'complete' ? 'done' : index === activeIndex ? 'active' : ''}><span>{index < activeIndex || state.phase === 'complete' ? <Check size={12} /> : index + 1}</span><div><strong>{item.label}</strong><small>{item.short}</small></div></li>)}
+      </ol>
+      <footer className="generation-footer"><div className="generation-progress"><i style={{ width: `${state.progress}%` }} /></div><span>{state.progress < 100 ? 'Shared world is updating in real time' : 'Opening the verified engineering workspace'}</span><button ref={cancelRef} type="button" onClick={onCancel} disabled={state.phase === 'complete'}>{state.phase === 'complete' ? <><Check size={13} />Verified</> : <><X size={13} />Cancel run</>}</button></footer>
+    </section>
   </div>;
 }
 

@@ -41,9 +41,10 @@ describe('ForgeTwin accessible world editor shell', () => {
   });
 
   it('runs the complete prompt-to-world-to-optimized-machine UI flow', async () => {
-    const { getByRole, findByText } = render(<ForgeTwinApp />);
+    const { getByRole, findByRole, findByText } = render(<ForgeTwinApp />);
     await waitFor(() => expect(getByRole('button', { name: 'Engineer locally' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer locally' }));
+    expect(await findByRole('dialog', { name: /reading the engineering intent|architecture resolved|materializing the machine/i })).toBeTruthy();
     expect(await findByText('Generated + physics verified', {}, { timeout: 20_000 })).toBeTruthy();
     expect(getByRole('button', { name: 'Compare runs' })).toBeTruthy();
     expect(getByRole('button', { name: 'Select editable body' })).toBeTruthy();
