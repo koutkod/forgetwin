@@ -432,7 +432,17 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   let instantiatedJoints = 0;
   const expectedJoints = state.joints.filter((item) => !['gear', 'belt'].includes(item.type) && !isCompoundRotorJoint(item) && !(bodyById.get(item.componentA)?.isFixed() && bodyById.get(item.componentB)?.isFixed())).length;
   for (const item of state.joints) {
-    const bodyA = bodyById.get(item.componentA), bodyB = bodyById.get(item.componentB), data = jointData(RAPIER, item);
+    const bodyA = bodyById.get(item.componentA), bodyB = bodyById.get(item.componentB);
+    const other = rotorHub && item.componentA === rotorHub.id ? state.components.find((component) => component.id === item.componentB) : rotorHub && item.componentB === rotorHub.id ? state.components.find((component) => component.id === item.componentA) : undefined;
+    const physicalJoint = rotorHub && other && item.type === 'revolute' && (item.componentA === rotorHub.id || item.componentB === rotorHub.id)
+      ? {
+          ...item,
+          anchorA: item.componentA === rotorHub.id ? [0, 0, 0] as Vec3 : rotorHub.position.map((value, index) => value - other.position[index]) as Vec3,
+          anchorB: item.componentB === rotorHub.id ? [0, 0, 0] as Vec3 : rotorHub.position.map((value, index) => value - other.position[index]) as Vec3,
+          limits: undefined,
+        }
+      : item;
+    const data = jointData(RAPIER, physicalJoint);
     if (!bodyA || !bodyB || !data || isCompoundRotorJoint(item) || (bodyA.isFixed() && bodyB.isFixed())) continue;
     try { world.createImpulseJoint(data, bodyA, bodyB, true); instantiatedJoints += 1; }
     catch { throw new Error(`INVALID_DESIGN: Rapier could not instantiate joint ${item.id}.`); }

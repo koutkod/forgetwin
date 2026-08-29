@@ -74,6 +74,15 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
 
   it('keeps every impeller blade rigidly attached to the centered rotor during replay', async () => {
     const state = assemblePlan(compileDesignBrief('Build an aluminum seven-blade axial impeller for a ventilation duct and animate it at 300 rpm.'));
+    // Version 15 and earlier stored the shaft at the midpoint and added a hard
+    // ±180° stop. The simulator must safely normalize those persisted worlds.
+    const legacyShaft = state.joints.find((item) => item.type === 'revolute')!;
+    const legacySupport = state.components.find((item) => item.id === legacyShaft.componentA)!;
+    const legacyHub = state.components.find((item) => item.id === legacyShaft.componentB)!;
+    const shared = legacySupport.position.map((value, index) => (value + legacyHub.position[index]) / 2) as [number, number, number];
+    legacyShaft.anchorA = shared.map((value, index) => value - legacySupport.position[index]) as [number, number, number];
+    legacyShaft.anchorB = shared.map((value, index) => value - legacyHub.position[index]) as [number, number, number];
+    legacyShaft.limits = [-Math.PI, Math.PI];
     const run = await simulateDesign(state);
     const hub = state.components.find((item) => item.parameters.cad_form === 'rotor_hub')!;
     const blades = state.components.filter((item) => item.parameters.cad_form === 'aero_blade');
