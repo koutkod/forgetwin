@@ -47,6 +47,31 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(four.passed.metrics.measures.find((item) => item.metric === 'speed_ratio')?.value).toBe(4);
   }, 30_000);
 
+  it('animates multiple red and blue boxes through the sorter replay', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.'));
+    const run = await simulateDesign(state);
+    const middle = run.replay[Math.floor(run.replay.length / 2)];
+    const packages = middle.items.filter((item) => item.id.startsWith('sort-package-'));
+    expect(packages).toHaveLength(6);
+    expect(packages.filter((item) => item.id.includes('-red-'))).toHaveLength(3);
+    expect(packages.filter((item) => item.id.includes('-blue-'))).toHaveLength(3);
+    expect(new Set(packages.map((item) => item.color))).toEqual(new Set(['#ef4058', '#318dff']));
+    const firstRed = run.replay[0].items.find((item) => item.id === 'sort-package-red-1')!;
+    expect(packages.find((item) => item.id === firstRed.id)?.position).not.toEqual(firstRed.position);
+  }, 30_000);
+
+  it('animates a generated rotating CAD assembly at the requested speed', async () => {
+    const state = assemblePlan(compileDesignBrief('Build an aluminum six-blade impeller and animate it at 240 rpm.'));
+    const run = await simulateDesign(state);
+    const hub = state.components.find((item) => item.parameters.cad_form === 'rotor_hub')!;
+    const first = run.replay[0].items.find((item) => item.id === hub.id)!;
+    const middle = run.replay[Math.floor(run.replay.length / 2)].items.find((item) => item.id === hub.id)!;
+    expect(run.status, JSON.stringify(run.metrics.measures, null, 2)).toBe('passed');
+    expect(run.physics.joints).toBeGreaterThanOrEqual(7);
+    expect(middle.rotation).not.toEqual(first.rotation);
+    expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
+  }, 30_000);
+
   it('simulates a bridge without an actuator and improves its structural evidence', async () => {
     const plan = compileDesignBrief('Build an 8 meter bridge that supports 3000 kg with less than 6 mm deflection.');
     expect(plan.actuators).toHaveLength(0);

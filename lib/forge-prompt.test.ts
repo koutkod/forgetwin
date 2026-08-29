@@ -43,6 +43,35 @@ describe('ForgeTwin world-first brief compiler', () => {
     for (const prompt of Object.values(briefs)) expect(compileDesignBrief(prompt).components.some((item) => forbidden.has(item.primitive))).toBe(false);
   });
 
+  it('builds the exact red-blue sorter as a readable two-route industrial line', () => {
+    const plan = compileDesignBrief('Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.');
+    expect(plan.components.some((item) => item.parameters?.industrial_conveyor)).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.conveyor_frame)).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.sorting_sensor)).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.sorting_diverter)).toBe(true);
+    expect(plan.components.filter((item) => item.parameters?.sorting_chute)).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.sorting_bin)).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.route_color === 'red')).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.route_color === 'blue')).toHaveLength(2);
+    expect(plan.goal.constraints.find((item) => item.metric === 'throughput')?.target).toBe(20);
+  });
+
+  it('constructs recognizable CAD-style parts and rotating assemblies from primitives', () => {
+    const bearing = compileDesignBrief('Build a sealed bearing for a 30 mm shaft.');
+    expect(bearing.components.some((item) => item.parameters?.cad_form === 'bearing')).toBe(true);
+    expect(bearing.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+
+    const impeller = compileDesignBrief('Build an aluminum six-blade impeller and animate it at 240 rpm.');
+    expect(impeller.components.some((item) => item.parameters?.cad_form === 'rotor_hub')).toBe(true);
+    expect(impeller.components.filter((item) => item.parameters?.cad_form === 'aero_blade')).toHaveLength(6);
+    expect(impeller.joints.some((item) => item.type === 'revolute')).toBe(true);
+    expect(impeller.motors.length).toBeGreaterThan(0);
+    expect(impeller.components.every((item) => item.rotation.every((value) => value >= -Math.PI && value <= Math.PI))).toBe(true);
+    expect(impeller.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+    expect(impeller.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['angular_travel', 'output_speed', 'assembly_integrity']));
+    expect(impeller.goal.constraints.some((item) => item.metric === 'control_error')).toBe(false);
+  });
+
   it('changes physical sizing when numeric requirements change', () => {
     const lightCrane = compileDesignBrief('Build a crane that lifts 20 kg by 2 meters without tipping.');
     const heavyCrane = compileDesignBrief('Build a crane that lifts 200 kg by 2 meters without tipping.');
@@ -135,6 +164,7 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(detailed.components.filter((item) => item.parameters?.hvac_pipe).length).toBeGreaterThanOrEqual(4);
     expect(detailed.components.filter((item) => item.parameters?.fixture_clamp)).toHaveLength(2);
     expect(detailed.components.filter((item) => item.parameters?.locating_pin)).toHaveLength(4);
+    expect(detailed.components.some((item) => item.parameters?.cad_form)).toBe(false);
     expect(detailed.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['alignment_error', 'clamp_force', 'assembly_integrity']));
     for (const plan of [exchanger, detailed]) {
       expect(plan.components.some((item) => item.role === 'constructed base')).toBe(false);

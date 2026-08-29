@@ -112,6 +112,7 @@ function inferCapabilities(text: string): Capability[] {
   if (/buffer|queue|spacing|irregular|singulat/.test(text)) capabilities.add('buffer');
   if (/bin|container|collect|recycling|reject|tank|reservoir/.test(text)) capabilities.add('contain');
   if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|pump/.test(text)) capabilities.add('rotate');
+  if (/bearing|flange|coupling|sprocket|cam\b|impeller|propeller|fan\b|turbine|rotor/.test(text)) capabilities.add('rotate');
   if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text)) capabilities.add('measure');
   if (/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text)) capabilities.add('measure');
   return [...capabilities];
@@ -121,6 +122,8 @@ function identity(text: string, capabilities: Capability[]) {
   const candidates: Array<[RegExp, string, string]> = [
     [/(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/, 'Precision HVAC brazing fixture', 'HVAC manufacturing'],
     [/braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/, 'Brazed plate heat exchanger', 'HVAC thermal systems'],
+    [/impeller|propeller|fan\b|turbine|rotor/, 'Parametric rotating assembly', 'Rotating machinery'],
+    [/bearing|flange|coupling|sprocket|cam\b|bracket|housing|enclosure|casing|manifold/, 'Parametric mechanical part', 'Mechanical design'],
     [/pump|reciprocat/, 'Reciprocating pump mechanism', 'Fluid power'],
     [/four[- ]bar|linkage/, 'Parametric linkage mechanism', 'Mechanism design'],
     [/drawbridge|folding bridge/, 'Actuated folding span', 'Civil mechanisms'],
@@ -152,6 +155,7 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   const spanSystem = /bridge|truss|structural span/.test(text);
   const reciprocating = /pump|reciprocat/.test(text);
   const linkage = /four[- ]bar|linkage/.test(text);
+  const parametricRotor = /impeller|propeller|fan\b|turbine|rotor/.test(text);
   const brazedPlateExchanger = /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text);
   const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
 
@@ -218,7 +222,12 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     add('flow_rate', 'Volumetric flow', 'min', values.flowRateLpm, 'L/min', 'flowRateLpm');
     add('control_error', 'Stroke control error', 'max', 5, '%');
   }
-  if (linkage || (capabilities.includes('rotate') && !capabilities.includes('transmit') && !capabilities.includes('track') && !spanSystem)) {
+  if (parametricRotor) {
+    add('angular_travel', 'Continuous shaft rotation', 'min', 360, '°');
+    add('output_speed', 'Rotor speed', 'min', values.rpm, 'rpm', 'rpm');
+    add('assembly_integrity', 'Rotor assembly connectivity', 'min', 95, '%');
+    add('component_count', 'Physical bodies', 'max', 24, '');
+  } else if (linkage || (capabilities.includes('rotate') && !capabilities.includes('transmit') && !capabilities.includes('track') && !spanSystem)) {
     add('angular_travel', 'Angular travel', 'min', values.angleDeg, '°', 'angleDeg');
     if (linkage && values.supplied.has('strokeM')) add('lift_height', 'Linear output stroke', 'min', values.strokeM, 'm', 'strokeM');
     add('control_error', 'Position control error', 'max', 5, '%');
@@ -437,22 +446,24 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
 function addRotaryTransmission(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
   const assembly = builder.assembly('rotary transmission', 'Shafts and a parameterized gear mesh', rootAssemblyId);
-  const base = builder.component('frame', 'transmission housing', assembly, [0, .45, 0], [3.6, .22, 2.2], 'aluminum', 'fixed');
-  const inputShaft = builder.component('shaft', 'input shaft', assembly, [-.85, 1.25, 0], [.16, 1.5, .16], 'steel', 'dynamic', { rpm: values.rpm });
-  const outputShaft = builder.component('shaft', 'output shaft', assembly, [.85, 1.25, 0], [.22, 1.5, .22], 'steel', 'dynamic');
+  const base = builder.component('frame', 'open gearbox housing', assembly, [0, .45, 0], [3.6, .22, 2.2], 'aluminum', 'fixed', { gearbox_housing: true });
+  const inputShaft = builder.component('shaft', 'input shaft', assembly, [-.85, 1.45, 0], [.16, 1.5, .16], 'steel', 'dynamic', { rpm: values.rpm });
+  const outputShaft = builder.component('shaft', 'output shaft', assembly, [.85, 1.45, 0], [.22, 1.5, .22], 'steel', 'dynamic');
+  builder.rotate(inputShaft, [Math.PI / 2, 0, 0]); builder.rotate(outputShaft, [Math.PI / 2, 0, 0]);
   const inputRadius = .32;
   const outputRadius = Math.min(1.45, inputRadius * values.ratio);
-  const inputGear = builder.component('gear', 'input gear', assembly, [-.85, 1.25, 0], [inputRadius * 2, .18, inputRadius * 2], 'steel', 'dynamic', { teeth: 18, pitch_radius: inputRadius, mesh_efficiency: .85 });
-  const outputGear = builder.component('gear', 'output gear', assembly, [.85, 1.25, 0], [outputRadius * 2, .22, outputRadius * 2], 'steel', 'dynamic', { teeth: Math.round(18 * values.ratio), pitch_radius: outputRadius, mesh_efficiency: .85 });
-  const inputJoint = builder.joint('revolute', base, inputShaft, [0, 1, 0]);
+  const inputGear = builder.component('gear', 'input gear', assembly, [-.85, 1.45, 0], [inputRadius * 2, .18, inputRadius * 2], 'steel', 'dynamic', { teeth: 18, pitch_radius: inputRadius, mesh_efficiency: .85 });
+  const outputGear = builder.component('gear', 'output gear', assembly, [.85, 1.45, 0], [outputRadius * 2, .22, outputRadius * 2], 'steel', 'dynamic', { teeth: Math.round(18 * values.ratio), pitch_radius: outputRadius, mesh_efficiency: .85 });
+  const inputJoint = builder.joint('revolute', base, inputShaft, [0, 0, 1]);
   builder.joint('fixed', inputShaft, inputGear);
-  builder.joint('revolute', base, outputShaft, [0, 1, 0]);
+  builder.joint('revolute', base, outputShaft, [0, 0, 1]);
   builder.joint('fixed', outputShaft, outputGear);
-  builder.joint('gear', inputGear, outputGear, [0, 1, 0], { ratio: values.ratio });
-  const motor = builder.component('motor', 'input drive motor', assembly, [-1.55, 1.25, 0], [.46, .55, .46], 'steel', 'kinematic');
+  builder.joint('gear', inputGear, outputGear, [0, 0, 1], { ratio: values.ratio });
+  const motor = builder.component('motor', 'input drive motor', assembly, [-.85, 1.45, -1.02], [.46, .64, .46], 'steel', 'kinematic');
+  builder.rotate(motor, [Math.PI / 2, 0, 0]);
   builder.motor(motor, inputJoint, Math.max(15, values.torqueNm / values.ratio * .72), values.rpm);
   builder.connect(motor, inputShaft, 'power', 'input_torque');
-  const encoder = builder.component('sensor', 'output encoder', assembly, [1.35, 1.6, 0], undefined, undefined, 'fixed');
+  const encoder = builder.component('sensor', 'output encoder', assembly, [.85, 1.78, .42], undefined, undefined, 'fixed');
   const sensor = builder.sensor(encoder, 'speed', 'output_rpm', outputShaft, 2);
   builder.control('speed governor', 'pid', [sensor], [], 'hold output speed at input rpm divided by gear ratio', values.rpm / values.ratio);
   builder.joint('fixed', encoder, base);
@@ -521,7 +532,7 @@ function addCableSuspension(context: ModuleContext): ModuleResult {
   const counterMass = Math.max(70, values.payloadKg * .62);
   const counterweight = builder.component('counterweight', 'rear balance counterweight', assembly, [-2.35, .82, 0], [1.2, 1.05, 1.25], 'concrete', 'dynamic', { payload_kg: counterMass, safety_stripes: true }, counterMass);
   builder.joint('fixed', base, counterweight);
-  const motor = builder.component('motor', 'boom winch motor', assembly, [-1.45, 3.72, -.5], [.48, .6, .48], 'steel', 'kinematic');
+  const motor = builder.component('motor', 'boom winch motor', assembly, [-1.35, 1.05, -.72], [.72, .58, .62], 'steel', 'kinematic', { crane_winch: true });
   const actuator = builder.actuator(motor, ropeJoint, 'winch', Math.max(900, values.payloadKg * 9.81 * .72), .8, values.liftM);
   builder.motor(motor, pulleyJoint, Math.max(105, values.payloadKg * 4.4), 42);
   const loadSensor = builder.component('sensor', 'load and swing sensor', assembly, [-1.55, 4.45, 0], [.23, .18, .23], 'polymer', 'fixed');
@@ -561,42 +572,44 @@ function addMaterialFlow(context: ModuleContext): ModuleResult {
   const minimal = values.maxComponents !== undefined && values.maxComponents <= 7;
   const classify = capabilities.includes('classify');
   const contain = capabilities.includes('contain');
-  const frame = minimal ? null : builder.component('frame', 'flow support frame', assembly, [0, .18, 0], [6.4, .24, 1.7], 'steel', 'fixed');
-  const conveyor = builder.component('conveyor', 'transport surface', assembly, [-.8, .62, 0], [4.6, .18, 1.15], 'steel', 'fixed', { target_throughput: values.throughput });
+  const frame = minimal ? null : builder.component('frame', 'four-leg conveyor support', assembly, [-.7, .48, 0], [5.9, .82, 1.7], 'steel', 'fixed', { conveyor_frame: true });
+  const conveyor = builder.component('conveyor', 'powered rubber belt conveyor', assembly, [-.7, .92, 0], [5.5, .24, 1.32], 'steel', 'fixed', { target_throughput: values.throughput, industrial_conveyor: true });
   if (frame) builder.joint('fixed', frame, conveyor);
   let driveJoint: string | undefined;
   if (!minimal) {
     for (let index = 0; index < 3; index += 1) {
-      const roller = builder.component('roller', `drive roller ${index + 1}`, assembly, [-2.3 + index * 1.5, .56, 0], [.18, 1, .18], 'steel', 'dynamic');
+      const roller = builder.component('roller', `belt roller ${index + 1}`, assembly, [-2.65 + index * 1.85, .91, 0], [.2, 1.2, .2], 'steel', 'dynamic', { conveyor_roller: true });
       driveJoint = builder.joint('revolute', frame!, roller, [0, 0, 1]);
     }
   }
-  const motor = builder.component('motor', 'transport drive motor', assembly, [-2.75, .54, -.85], undefined, undefined, 'kinematic');
+  const motor = builder.component('motor', 'geared conveyor drive motor', assembly, [-3.15, .62, -.95], [.48, .62, .48], 'steel', 'kinematic', { geared_motor: true });
   builder.motor(motor, driveJoint, Math.max(22, values.throughput), Math.max(72, values.throughput * 3.25));
   builder.connect(motor, conveyor, 'power', 'transport_power');
-  const sensorBody = builder.component(classify ? 'camera' : 'sensor', classify ? 'classification camera' : 'occupancy sensor', assembly, [-1.35, 1.32, 0], undefined, undefined, 'fixed');
+  const sensorBody = builder.component(classify ? 'camera' : 'sensor', classify ? 'red-blue vision portal' : 'occupancy sensor', assembly, [-1.35, 1.65, 0], [.38, .34, .38], 'polymer', 'fixed', { sorting_sensor: classify });
   const sensor = builder.sensor(sensorBody, classify ? 'camera' : 'presence', classify ? 'item_class' : 'queue_presence', conveyor, 3);
   builder.connect(sensorBody, conveyor, 'signal', 'flow_observation');
   const actuatorIds: string[] = [];
   if (classify) {
-    const router = builder.component('beam', 'routing gate', assembly, [1.1, .92, 0], [1.1, .12, .16], 'aluminum', 'dynamic');
+    const router = builder.component('beam', 'servo sorting diverter', assembly, [1.15, 1.1, 0], [1.25, .16, .22], 'aluminum', 'dynamic', { sorting_diverter: true });
     const routerJoint = builder.joint('revolute', conveyor, router, [0, 1, 0], { limits: [-.75, .75] });
     actuatorIds.push(builder.actuator(motor, routerJoint, 'servo', 330, 2.2, 1.5));
-    const rampA = builder.component('ramp', 'accepted output guide', assembly, [2.55, .48, -.85], [2.1, .12, .75], 'aluminum', 'fixed');
+    const rampA = builder.component('ramp', 'red output chute', assembly, [2.45, .72, -.9], [2.25, .14, .86], 'aluminum', 'fixed', { sorting_chute: true, route_color: 'red' });
+    builder.rotate(rampA, [0, .48, -.08]);
     builder.connect(conveyor, rampA, 'mechanical', 'output_path');
     if (!minimal) {
-      const rampB = builder.component('ramp', 'alternate output guide', assembly, [2.55, .48, .85], [2.1, .12, .75], 'aluminum', 'fixed');
+      const rampB = builder.component('ramp', 'blue output chute', assembly, [2.45, .72, .9], [2.25, .14, .86], 'aluminum', 'fixed', { sorting_chute: true, route_color: 'blue' });
+      builder.rotate(rampB, [0, -.48, -.08]);
       builder.connect(conveyor, rampB, 'mechanical', 'alternate_path');
     }
     if (contain) {
-      const binA = builder.component('container', 'output container a', assembly, [3.8, .5, -1.4], [1.15, .8, 1.05], 'polymer', 'fixed');
-      const binB = builder.component('container', 'output container b', assembly, [3.8, .5, 1.4], [1.15, .8, 1.05], 'polymer', 'fixed');
+      const binA = builder.component('container', 'red collection bin', assembly, [3.65, .5, -1.85], [1.25, .95, 1.15], 'polymer', 'fixed', { sorting_bin: true, route_color: 'red' }, 18);
+      const binB = builder.component('container', 'blue collection bin', assembly, [3.65, .5, 1.85], [1.25, .95, 1.15], 'polymer', 'fixed', { sorting_bin: true, route_color: 'blue' }, 18);
       builder.connect(rampA, binA, 'mechanical', 'collection_path');
       builder.connect(conveyor, binB, 'mechanical', 'collection_path');
     }
   }
   if (!minimal) {
-    const controller = builder.component('controller', 'flow controller', assembly, [.35, 1.15, -.85], undefined, undefined, 'fixed');
+    const controller = builder.component('controller', 'sorter control cabinet', assembly, [.2, .62, -1.15], [.62, .76, .42], 'polymer', 'fixed', { control_cabinet: true });
     builder.connect(controller, motor, 'signal', 'drive_command');
   }
   builder.control('flow routing', classify ? 'state-machine' : 'threshold', [sensor], actuatorIds, classify ? 'classify then route without stopping transport' : 'meter flow when occupancy rises', values.throughput);
@@ -690,6 +703,51 @@ function addGenericMotion(context: ModuleContext): ModuleResult {
   builder.control('constructed motion', 'pid', [sensor], [actuator], 'drive measured output toward the requested motion envelope', rotary ? values.angleDeg : values.strokeM);
   builder.joint('fixed', sensorBody, support); builder.joint('fixed', controller, base); builder.connect(controller, actuatorBody, 'signal', 'actuator_command');
   return { id: 'constructed-motion', mountId: base, editableId: sensorBody, handles: rotary ? ['rotate', 'measure'] : ['measure'] };
+}
+
+function addParametricCadPart(context: ModuleContext): ModuleResult {
+  const { builder, text, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('parametric cad part', 'Feature-driven part recipe composed from revolved, extruded, swept, and patterned primitive bodies', rootAssemblyId);
+  const rotatingBlade = /impeller|propeller|fan\b|turbine|rotor/.test(text);
+  if (rotatingBlade) {
+    const base = builder.component('frame', 'rotor inspection stand', assembly, [0, .18, 0], [3.2, .3, 2.4], 'steel', 'fixed');
+    const support = builder.component('beam', 'rotor bearing pedestal', assembly, [0, 1.35, -.42], [.36, 2.25, .36], 'steel', 'fixed');
+    builder.joint('fixed', base, support);
+    const hub = builder.component('wheel', 'machined rotor hub', assembly, [0, 2.1, 0], [1, .34, 1], 'aluminum', 'dynamic', { cad_form: 'rotor_hub' });
+    const shaftJoint = builder.joint('revolute', support, hub, [0, 0, 1], { limits: [-Math.PI, Math.PI] });
+    const bladeCount = 6;
+    for (let index = 0; index < bladeCount; index += 1) {
+      const angle = index / bladeCount * Math.PI * 2;
+      const blade = builder.component('beam', `aerodynamic blade ${index + 1}`, assembly, [Math.cos(angle) * .92, 2.1 + Math.sin(angle) * .92, 0], [1.45, .18, .36], 'composite', 'dynamic', { cad_form: 'aero_blade', blade_index: index, blade_count: bladeCount });
+      const bladeRotation = ((angle + Math.PI / 2 + Math.PI) % (Math.PI * 2)) - Math.PI;
+      builder.rotate(blade, [0, 0, bladeRotation]);
+      builder.joint('fixed', hub, blade);
+    }
+    const motor = builder.component('motor', 'variable-speed rotor motor', assembly, [0, 1.45, -.7], [.48, .56, .48], 'steel', 'kinematic');
+    builder.motor(motor, shaftJoint, Math.max(45, values.torqueNm), Math.max(90, values.rpm));
+    const sensorBody = builder.component('sensor', 'rotor speed encoder', assembly, [.48, 2.1, -.26], [.24, .2, .24], 'polymer', 'fixed');
+    builder.sensor(sensorBody, 'speed', 'rotor_speed', hub, 3);
+    builder.connect(support, motor, 'mechanical', 'motor_mount');
+    builder.connect(support, sensorBody, 'mechanical', 'encoder_mount');
+    builder.connect(motor, hub, 'power', 'rotor_drive');
+    return { id: 'parametric-rotor', mountId: base, editableId: sensorBody, handles: ['rotate', 'measure'], outputId: hub };
+  }
+
+  const base = builder.component('frame', 'cad inspection base', assembly, [0, .16, 0], [2.8, .25, 2.1], 'steel', 'fixed');
+  const form = /bearing/.test(text) ? 'bearing' : /flange/.test(text) ? 'flange' : /coupling/.test(text) ? 'coupling' : /sprocket/.test(text) ? 'sprocket' : /cam\b/.test(text) ? 'cam' : /bracket/.test(text) ? 'angle_bracket' : /housing|enclosure|casing/.test(text) ? 'housing' : /manifold|duct|pipe/.test(text) ? 'manifold' : 'machined_part';
+  const primitive: PrimitiveKind = ['bearing', 'flange'].includes(form) ? 'wheel' : form === 'coupling' || form === 'manifold' ? 'shaft' : ['sprocket', 'cam'].includes(form) ? 'gear' : form === 'housing' ? 'frame' : 'plate';
+  const dimensions: Vec3 = form === 'housing' ? [2.1, 1.5, 1.65] : form === 'angle_bracket' ? [1.65, 1.25, 1.25] : form === 'manifold' ? [.72, 1.8, .72] : ['bearing', 'flange', 'sprocket', 'cam'].includes(form) ? [1.6, .32, 1.6] : [.82, 1.35, .82];
+  const part = builder.component(primitive, form.replaceAll('_', ' '), assembly, [0, 1.28, 0], dimensions, form === 'angle_bracket' ? 'aluminum' : 'steel', ['bearing', 'flange', 'coupling', 'sprocket', 'cam'].includes(form) ? 'dynamic' : 'fixed', { cad_form: form, feature_holes: 6, wall_thickness: .08 });
+  builder.connect(base, part, 'mechanical', 'inspection_fixture');
+  if (['bearing', 'flange', 'coupling', 'sprocket', 'cam'].includes(form)) {
+    const joint = builder.joint('revolute', base, part, [0, 1, 0], { limits: [-Math.PI, Math.PI] });
+    const motor = builder.component('motor', 'inspection turntable motor', assembly, [0, .52, 0], [.42, .48, .42], 'steel', 'kinematic');
+    builder.motor(motor, joint, Math.max(22, values.torqueNm * .4), Math.max(30, values.rpm * .35));
+    builder.connect(motor, part, 'power', 'inspection_rotation');
+  }
+  const gauge = builder.component('sensor', 'dimensional inspection probe', assembly, [.95, 1.55, .7], [.24, .2, .24], 'polymer', 'fixed');
+  builder.sensor(gauge, 'position', 'feature_dimension', part, 3);
+  return { id: `parametric-${form}`, mountId: base, editableId: gauge, handles: ['structure', 'rotate', 'measure'], outputId: part };
 }
 
 function addBrazingFixture(context: ModuleContext): ModuleResult {
@@ -829,6 +887,7 @@ const moduleRules: ModuleRule[] = [
   { id: 'tracking-axis', matches: ({ capabilities }) => capabilities.includes('track'), compose: addTrackingAxis },
   { id: 'reciprocating-linkage', matches: ({ text }) => /pump|reciprocat/.test(text), compose: addReciprocatingLinkage },
   { id: 'closed-linkage', matches: ({ text }) => /four[- ]bar|linkage/.test(text), compose: addFourBar },
+  { id: 'parametric-cad-part', matches: ({ text }) => /bearing|flange|coupling|sprocket|cam\b|impeller|propeller|fan\b|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe/.test(text) && !/hvac|heat exchanger|braz/.test(text), compose: addParametricCadPart },
 ];
 
 export function compileDesignBrief(raw: string): CompiledWorldPlan {

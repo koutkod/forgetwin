@@ -303,6 +303,48 @@ function bodySensorValue(state: ForgeState, bodyById: Map<string, ReplayBody>, s
   return 0;
 }
 
+function sortingPackages(state: ForgeState, progress: number): ReplayItem[] {
+  const conveyor = state.components.find((item) => item.primitive === 'conveyor');
+  const diverter = state.components.find((item) => item.parameters.sorting_diverter);
+  const redBin = state.components.find((item) => item.parameters.sorting_bin && item.parameters.route_color === 'red');
+  const blueBin = state.components.find((item) => item.parameters.sorting_bin && item.parameters.route_color === 'blue');
+  if (!conveyor || !diverter || !redBin || !blueBin) return [];
+  const startX = conveyor.position[0] - conveyor.dimensions[0] / 2 + .35;
+  const beltY = conveyor.position[1] + conveyor.dimensions[1] / 2 + .27;
+  const branchX = diverter.position[0] - .18;
+  return Array.from({ length: 6 }, (_, index) => {
+    const phase = (progress + index / 6) % 1;
+    const red = index % 2 === 0;
+    const target = red ? redBin : blueBin;
+    const branchAt = .62;
+    let x: number, y: number, z: number, yaw = 0;
+    if (phase <= branchAt) {
+      const t = phase / branchAt;
+      x = startX + (branchX - startX) * t;
+      y = beltY;
+      z = Math.sin(t * Math.PI * 2) * .018;
+    } else {
+      const t = (phase - branchAt) / (1 - branchAt);
+      const eased = t * t * (3 - 2 * t);
+      x = branchX + (target.position[0] - branchX) * eased;
+      y = beltY + (target.position[1] + target.dimensions[1] * .24 - beltY) * eased + Math.sin(t * Math.PI) * .08;
+      z = target.position[2] * eased;
+      yaw = Math.atan2(target.position[2], Math.max(.1, target.position[0] - branchX));
+    }
+    return {
+      id: `sort-package-${red ? 'red' : 'blue'}-${Math.floor(index / 2) + 1}`,
+      label: `${red ? 'red' : 'blue'} sorting box ${Math.floor(index / 2) + 1}`,
+      color: red ? '#ef4058' : '#318dff',
+      shape: 'box' as const,
+      size: [.62, .48, .54] as Vec3,
+      position: [round(x, 3), round(y, 3), round(z, 3)] as Vec3,
+      rotation: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)] as [number, number, number, number],
+      velocity: [0, 0, 0] as Vec3,
+      state: phase > .95 ? 'delivered' as const : 'moving' as const,
+    };
+  });
+}
+
 export async function simulateDesign(state: ForgeState): Promise<SimulationRun> {
   assertRunnableDesign(state);
   const RAPIER = await loadRapier();
@@ -445,7 +487,9 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
         if (![p.x, p.y, p.z, q.x, q.y, q.z, q.w, v.x, v.y, v.z].every(Number.isFinite)) physicsHealthy = false;
         items.push({ id: item.id, label: item.role, color: item.color, shape: item.shape, size: item.dimensions, position: [round(p.x, 3), round(p.y, 3), round(p.z, 3)], rotation: [round(q.x, 4), round(q.y, 4), round(q.z, 4), round(q.w, 4)], velocity: [round(v.x, 3), round(v.y, 3), round(v.z, 3)], state: p.y < -.3 ? 'failed' : progress > .97 ? 'delivered' : 'moving' });
       }
-      if (testBody) {
+      const routedPackages = state.goal!.capabilities.includes('classify') ? sortingPackages(state, progress) : [];
+      if (routedPackages.length) items.push(...routedPackages);
+      else if (testBody) {
         const p = testBody.translation(), q = testBody.rotation(), v = testBody.linvel();
         items.push({ id: 'test-payload', label: 'simulation payload', color: '#48a9e8', shape: 'box', size: [.56, .56, .56], position: [round(p.x, 3), round(p.y, 3), round(p.z, 3)], rotation: [q.x, q.y, q.z, q.w], velocity: [round(v.x, 3), round(v.y, 3), round(v.z, 3)], state: progress > .97 ? 'delivered' : 'moving' });
       }
