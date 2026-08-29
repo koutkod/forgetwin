@@ -51,23 +51,30 @@ export const worldDefaults: WorldSpec = {
   seed: 424242,
 };
 
-export interface EngineeringExample { id: string; sector: string; title: string; prompt: string }
+export interface EngineeringExample {
+  id: string;
+  sector: string;
+  title: string;
+  prompt: string;
+  description: string;
+  builds: string;
+}
 
 export const engineeringExamples: EngineeringExample[] = [
-  { id: 'sorter', sector: 'Logistics', title: 'Package sorter', prompt: 'Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.' },
-  { id: 'crane', sector: 'Construction', title: 'Stable crane', prompt: 'Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.' },
-  { id: 'rover', sector: 'Robotics', title: 'Payload rover', prompt: 'Build a four-wheel rover that carries 50 kg across rough terrain in under 20 seconds without tipping.' },
-  { id: 'arm', sector: 'Automation', title: 'Robotic arm', prompt: 'Build a three-axis robotic arm with a gripper that reaches 2 meters and places a 12 kg part within 2 cm.' },
-  { id: 'gearbox', sector: 'Powertrain', title: 'Reduction gearbox', prompt: 'Build a compact 4:1 gearbox that accepts 120 rpm and delivers at least 80 Nm of torque.' },
-  { id: 'suspension', sector: 'Mobility', title: 'Rover suspension', prompt: 'Build a rover suspension that keeps a 30 kg payload within 8 degrees of level over uneven terrain.' },
-  { id: 'solar', sector: 'Energy', title: 'Solar tracker', prompt: 'Build a single-axis solar tracker that follows a moving light source within 4 degrees using one actuator.' },
-  { id: 'lift', sector: 'Medical', title: 'Patient lift', prompt: 'Build a lifting mechanism that raises a 90 kg patient load by 1 meter with acceleration below 0.5 m/s².' },
-  { id: 'bridge', sector: 'Structures', title: 'Truss bridge', prompt: 'Build a 6 meter bridge that supports a 2000 kg moving load with less than 8 mm deflection.' },
-  { id: 'warehouse', sector: 'Warehouse', title: 'Adaptive buffer', prompt: 'Build a warehouse buffer that prevents collisions while moving 30 packages per minute.' },
-  { id: 'agriculture', sector: 'Agriculture', title: 'Gentle grader', prompt: 'Build a machine that sorts tomatoes by size while keeping drop height below 15 cm.' },
-  { id: 'recycling', sector: 'Recycling', title: 'Material separator', prompt: 'Build a recycling machine that separates metal, plastic, and rejected objects into three containers.' },
-  { id: 'hvac-fixture', sector: 'HVAC manufacturing', title: 'Brazing fixture', prompt: 'Build a brazing fixture plate that positions a heat exchanger and two copper pipes within 2 mm before brazing.' },
-  { id: 'drawbridge', sector: 'Novel composition', title: 'Counterweighted drawbridge', prompt: 'Build a 4 meter drawbridge that raises in under 15 seconds using a motor, pulley, and counterweight.' },
+  { id: 'sorter', sector: 'Logistics', title: 'Two-color package sorter', prompt: 'Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.', description: 'Recognizes each colored box and sends it to the matching collection bin without stopping the belt.', builds: 'Conveyor · vision portal · servo gate · 2 chutes · 2 bins' },
+  { id: 'crane', sector: 'Construction', title: 'Counterbalanced tower crane', prompt: 'Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.', description: 'Raises a suspended beam with a winch while outriggers and a rear counterweight keep the crane stable.', builds: 'Base · outriggers · lattice mast · boom · winch · cable · hook' },
+  { id: 'rover', sector: 'Robotics', title: 'Four-wheel payload rover', prompt: 'Build a four-wheel rover that carries 50 kg across rough terrain in under 20 seconds without tipping.', description: 'Carries a protected payload over uneven ground with driven wheels and tilt feedback.', builds: 'Chassis · 4 wheels · 2 drive motors · payload bay · IMU' },
+  { id: 'arm', sector: 'Automation', title: 'Three-axis robotic arm', prompt: 'Build a three-axis robotic arm with a gripper that reaches 2 meters and places a 12 kg part within 2 cm.', description: 'Uses three articulated links and a parallel gripper to pick up and accurately place a part.', builds: 'Pedestal · shoulder · elbow · wrist · gripper · camera' },
+  { id: 'gearbox', sector: 'Powertrain', title: '4:1 reduction gearbox', prompt: 'Build a compact 4:1 gearbox that accepts 120 rpm and delivers at least 80 Nm of torque.', description: 'Trades input speed for output torque through two meshing gears inside a supported housing.', builds: 'Housing · input/output shafts · 2 gears · bearings · motor · encoder' },
+  { id: 'suspension', sector: 'Mobility', title: 'Level-riding rover suspension', prompt: 'Build a rover suspension that keeps a 30 kg payload within 8 degrees of level over uneven terrain.', description: 'Lets each wheel follow rough ground while spring-dampers isolate and level the payload deck.', builds: 'Chassis · 4 wheels · 4 spring-dampers · payload · IMU' },
+  { id: 'solar', sector: 'Energy', title: 'Single-axis solar tracker', prompt: 'Build a single-axis solar tracker that follows a moving light source within 4 degrees using one actuator.', description: 'Rotates one framed solar array toward a moving light using a dual light sensor and one servo.', builds: 'Foundation · mast · solar array · hinge · servo · light sensor' },
+  { id: 'lift', sector: 'Medical', title: 'Smooth patient transfer lift', prompt: 'Build a patient lift that raises a 90 kg patient by 1 meter using a sling while keeping acceleration below 0.5 m/s².', description: 'Supports a patient in a visible sling and lifts smoothly from a stable mobile base.', builds: 'Wheeled base · mast · boom · actuator · spreader bar · sling' },
+  { id: 'bridge', sector: 'Structures', title: 'Six-meter truss bridge', prompt: 'Build a 6 meter bridge that supports a 2000 kg moving load with less than 8 mm deflection.', description: 'Carries a moving load across a deck reinforced by clearly visible triangular side trusses.', builds: 'Piers · deck sections · chords · diagonal braces · load sensor' },
+  { id: 'warehouse', sector: 'Warehouse', title: 'Collision-free accumulation buffer', prompt: 'Build a warehouse accumulation buffer that spaces packages and prevents collisions while moving 30 packages per minute.', description: 'Forms an orderly queue with independently controlled conveyor zones and photoelectric stop gates.', builds: '3 conveyor zones · queue sensors · stop gates · drive motors · packages' },
+  { id: 'agriculture', sector: 'Agriculture', title: 'Gentle tomato size grader', prompt: 'Build a machine that sorts tomatoes by size while keeping drop height below 15 cm.', description: 'Carries visible tomatoes across widening rollers so small and large fruit enter separate padded bins gently.', builds: 'Feed belt · grading rollers · size sensor · low chutes · padded bins' },
+  { id: 'recycling', sector: 'Recycling', title: 'Three-stream material separator', prompt: 'Build a recycling machine that separates metal cans, plastic bottles, and rejected objects into three containers.', description: 'Identifies cans and bottles, then routes them into metal, plastic, or reject containers.', builds: 'Feed conveyor · material sensor · 2 diverters · 3 chutes · 3 bins' },
+  { id: 'hvac-fixture', sector: 'HVAC manufacturing', title: 'Heat-exchanger brazing fixture', prompt: 'Build a brazing fixture plate that positions a heat exchanger and two copper pipes within 2 mm before brazing.', description: 'Locates a finned heat exchanger and two copper tubes, then clamps them at the brazing joints.', builds: 'Machined plate · locating pins · exchanger core · copper pipes · clamps' },
+  { id: 'drawbridge', sector: 'Civil mechanisms', title: 'Counterweighted drawbridge', prompt: 'Build a 4 meter drawbridge that raises in under 15 seconds using a motor, pulley, and counterweight.', description: 'Pivots a reinforced road span upward while a cable, pulley, and counterweight reduce motor load.', builds: 'Abutment · truss deck · hinge · motor · pulley · cable · counterweight' },
 ];
 
 export function materialFor(id: string) {

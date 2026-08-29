@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { engineeringExamples } from './forge-data';
 import { compileDesignBrief } from './forge-prompt';
 
 const briefs = {
@@ -54,6 +55,29 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(plan.components.filter((item) => item.parameters?.route_color === 'red')).toHaveLength(2);
     expect(plan.components.filter((item) => item.parameters?.route_color === 'blue')).toHaveLength(2);
     expect(plan.goal.constraints.find((item) => item.metric === 'throughput')?.target).toBe(20);
+  });
+
+  it('keeps every editable gallery prompt recognizable and physically distinct', () => {
+    const checks: Record<string, (plan: ReturnType<typeof compileDesignBrief>) => boolean> = {
+      sorter: (plan) => ['package-red', 'package-blue'].every((form) => plan.components.some((item) => item.parameters?.product_form === form)) && plan.components.filter((item) => item.parameters?.sorting_bin).length === 2,
+      crane: (plan) => plan.components.some((item) => item.parameters?.crane_winch) && plan.components.some((item) => item.primitive === 'hook') && plan.components.some((item) => item.primitive === 'counterweight'),
+      rover: (plan) => plan.components.some((item) => item.parameters?.rover_chassis) && plan.components.filter((item) => item.parameters?.rover_wheel).length === 4,
+      arm: (plan) => plan.components.some((item) => item.primitive === 'gripper') && plan.components.filter((item) => item.role.startsWith('link servo')).length === 3,
+      gearbox: (plan) => plan.components.some((item) => item.parameters?.gearbox_housing) && plan.components.filter((item) => item.primitive === 'gear').length === 2 && plan.components.filter((item) => item.parameters?.gearbox_bearing).length === 2,
+      suspension: (plan) => plan.components.filter((item) => item.primitive === 'spring').length === 4 && plan.components.filter((item) => item.primitive === 'wheel').length === 4,
+      solar: (plan) => plan.components.some((item) => item.parameters?.solar_array) && plan.components.some((item) => item.parameters?.solar_source),
+      lift: (plan) => plan.components.some((item) => item.parameters?.patient_sling) && plan.components.filter((item) => item.parameters?.medical_caster).length === 4,
+      bridge: (plan) => plan.components.some((item) => item.role === 'span deck') && plan.components.some((item) => item.role.includes('diagonal truss')),
+      warehouse: (plan) => plan.components.filter((item) => item.parameters?.buffer_zone && item.primitive === 'conveyor').length === 3 && plan.components.filter((item) => item.parameters?.buffer_gate).length === 2,
+      agriculture: (plan) => plan.components.filter((item) => item.parameters?.product_form === 'tomato').length === 3 && plan.components.filter((item) => item.parameters?.grading_roller).length === 6,
+      recycling: (plan) => ['metal-can', 'plastic-bottle', 'reject-object'].every((form) => plan.components.some((item) => item.parameters?.product_form === form)) && plan.components.filter((item) => item.parameters?.sorting_bin).length === 3,
+      'hvac-fixture': (plan) => plan.components.some((item) => item.parameters?.fixture_plate) && plan.components.some((item) => item.parameters?.heat_exchanger_core) && plan.components.filter((item) => item.parameters?.hvac_pipe).length >= 2,
+      drawbridge: (plan) => plan.components.some((item) => item.role.startsWith('hinged span')) && plan.components.some((item) => item.primitive === 'pulley') && plan.components.some((item) => item.primitive === 'counterweight'),
+    };
+    for (const example of engineeringExamples) {
+      const plan = compileDesignBrief(example.prompt);
+      expect(checks[example.id]?.(plan), `${example.title} should compile to its own recognizable physical signature`).toBe(true);
+    }
   });
 
   it('constructs recognizable CAD-style parts and rotating assemblies from primitives', () => {
@@ -191,9 +215,9 @@ describe('ForgeTwin world-first brief compiler', () => {
     ['parallel lift', 'Design a synchronized cargo elevator for 100 kg.', 'parallel-guides'],
     ['robot mechanism', 'Create a three-axis robotic arm with a gripper.', 'serial-linkage'],
     ['transmission', 'Build a compact 5:1 reduction gearbox.', 'rotary-transmission'],
-    ['material handling', 'Build a warehouse conveyor that sorts three package sizes.', 'material-flow'],
-    ['recycling line', 'Build a recycling machine that separates cans and bottles.', 'material-flow'],
-    ['agricultural grader', 'Build a tomato sorting line with gentle ramps.', 'material-flow'],
+    ['material handling', 'Build a warehouse conveyor that sorts three package sizes.', 'warehouse-buffer'],
+    ['recycling line', 'Build a recycling machine that separates cans and bottles.', 'recycling-separator'],
+    ['agricultural grader', 'Build a tomato sorting line with gentle ramps.', 'tomato-grader'],
     ['structural system', 'Build a truss bridge spanning 8 meters.', 'span-members'],
     ['renewable mechanism', 'Build a solar panel tracker that follows the sun.', 'tracking-axis'],
     ['fluid mechanism', 'Build a reciprocating water pump with a flywheel.', 'reciprocating-linkage'],
@@ -207,7 +231,7 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(plan.goal.summary).toContain(moduleId);
     expect(plan.components.length).toBeGreaterThan(1);
     expect(plan.components.some((item) => item.role === 'mobile payload')).toBe(moduleId === 'rolling-support');
-    if (moduleId !== 'material-flow') expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+    if (!['material-flow', 'warehouse-buffer', 'recycling-separator', 'tomato-grader'].includes(moduleId)) expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
   });
 
   it('still builds an active solar tracker only when the prompt asks it to track', () => {

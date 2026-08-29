@@ -158,8 +158,11 @@ function identity(text: string, capabilities: Capability[]) {
     [/rover|vehicle|mobile robot/, 'Terrain-capable mobile platform', 'Mobile robotics'],
     [/solar|light source/, 'Single-axis tracking mechanism', 'Renewable energy'],
     [/suspension/, 'Compliant suspension mechanism', 'Vehicle dynamics'],
+    [/tomato|produce|fruit.*grad|grader.*fruit/, 'Gentle tomato grading system', 'Agricultural automation'],
+    [/warehouse|accumulation|buffer/, 'Zoned warehouse accumulation system', 'Warehouse automation'],
     [/recycl/, 'Material separation mechanism', 'Recycling'],
-    [/sort|conveyor|warehouse|packages?/, 'Adaptive material-flow mechanism', 'Industrial automation'],
+    [/red.*blue|blue.*red|package sort|box sort/, 'Two-color package sorting system', 'Logistics automation'],
+    [/sort|conveyor|packages?/, 'Adaptive material-flow mechanism', 'Industrial automation'],
   ];
   const found = candidates.find(([pattern]) => pattern.test(text));
   if (found) return { name: found[1], domain: found[2] };
@@ -447,10 +450,10 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
   const assembly = builder.assembly('rolling support', 'Chassis plate, wheel joints, drive shafts, and optional compliant support', rootAssemblyId);
   const length = Math.max(2.1, Math.min(3.6, 2.1 + values.payloadKg / 120));
   const width = Math.max(1.25, Math.min(2.1, 1.3 + values.payloadKg / 180));
-  const chassis = builder.component('plate', 'mobile chassis deck', assembly, [0, .9, 0], [length, .24, width], 'aluminum', 'dynamic', { payload_kg: values.payloadKg });
+  const chassis = builder.component('plate', 'mobile rover chassis', assembly, [0, .9, 0], [length, .24, width], 'aluminum', 'dynamic', { payload_kg: values.payloadKg, rover_chassis: true });
   const wheelPositions: Vec3[] = [[-length * .35, .52, -width * .52], [-length * .35, .52, width * .52], [length * .35, .52, -width * .52], [length * .35, .52, width * .52]];
   wheelPositions.forEach((position, index) => {
-    const wheel = builder.component('wheel', `road wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05 });
+    const wheel = builder.component('wheel', `all-terrain wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05, rover_wheel: true });
     const axle = builder.joint('revolute', chassis, wheel, [0, 0, 1]);
     if (index >= 2) {
       const motor = builder.component('motor', `traction motor ${index - 1}`, assembly, [position[0], .66, position[2] * .72], undefined, undefined, 'kinematic');
@@ -464,7 +467,11 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
       builder.connect(spring, chassis, 'mechanical', 'spring_mount');
     }
   });
-  const payload = builder.component('container', 'mobile payload', assembly, [0, 1.32, 0], [1.1, .58, .85], 'polymer', 'dynamic', { payload_kg: values.payloadKg }, values.payloadKg);
+  const frontBumper = builder.component('beam', 'front rover bumper', assembly, [length * .51, .76, 0], [.16, .2, width * .92], 'steel', 'fixed', { rover_bumper: true }, 2.5);
+  builder.joint('fixed', chassis, frontBumper);
+  const rearRack = builder.component('frame', 'payload safety cage', assembly, [-.25, 1.45, 0], [1.45, .82, width * .72], 'aluminum', 'fixed', { rover_rack: true }, 5.5);
+  builder.joint('fixed', chassis, rearRack);
+  const payload = builder.component('container', 'mobile payload', assembly, [-.25, 1.35, 0], [1.05, .52, .78], 'polymer', 'dynamic', { payload_kg: values.payloadKg, rover_payload: true }, values.payloadKg);
   builder.joint('fixed', chassis, payload);
   const imu = builder.component('sensor', 'chassis imu', assembly, [-.4, 1.28, 0], undefined, undefined, 'fixed');
   const controller = builder.component('controller', 'traction controller', assembly, [.4, 1.25, 0], undefined, undefined, 'fixed');
@@ -692,8 +699,14 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
 
 function addRotaryTransmission(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
-  const assembly = builder.assembly('rotary transmission', 'Shafts and a parameterized gear mesh', rootAssemblyId);
-  const base = builder.component('frame', 'open gearbox housing', assembly, [0, .45, 0], [3.6, .22, 2.2], 'aluminum', 'fixed', { gearbox_housing: true });
+  const assembly = builder.assembly('enclosed reduction gearbox', 'Supported input and output shafts, meshing gears, bearings, motor, and removable safety housing', rootAssemblyId);
+  const base = builder.component('frame', 'open gearbox housing', assembly, [0, .45, 0], [3.6, .32, 2.2], 'aluminum', 'fixed', { gearbox_housing: true });
+  const backPlate = builder.component('plate', 'gearbox rear housing plate', assembly, [0, 1.45, -.72], [3.35, 2.15, .16], 'aluminum', 'fixed', { gearbox_backplate: true });
+  builder.joint('fixed', base, backPlate);
+  for (const x of [-.85, .85]) {
+    const bearing = builder.component('support', `${x < 0 ? 'input' : 'output'} shaft bearing block`, assembly, [x, 1.45, .56], [.62, .72, .28], 'steel', 'fixed', { gearbox_bearing: true });
+    builder.joint('fixed', backPlate, bearing);
+  }
   const inputShaft = builder.component('shaft', 'input shaft', assembly, [-.85, 1.45, 0], [.16, 1.5, .16], 'steel', 'dynamic', { rpm: values.rpm });
   const outputShaft = builder.component('shaft', 'output shaft', assembly, [.85, 1.45, 0], [.22, 1.5, .22], 'steel', 'dynamic');
   builder.rotate(inputShaft, [Math.PI / 2, 0, 0]); builder.rotate(outputShaft, [Math.PI / 2, 0, 0]);
@@ -813,9 +826,166 @@ function addParallelGuides(context: ModuleContext): ModuleResult {
   return { id: 'parallel-guides', mountId: base, editableId: imu, handles: ['lift', 'stabilize'] };
 }
 
+function addPatientLift(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('mobile patient transfer lift', 'Wide rolling base, upright mast, lifting boom, linear actuator, spreader bar, and supportive sling', rootAssemblyId);
+  const leftLeg = builder.member('beam', 'left splayed base leg', assembly, [-1.2, .18, -.7], [1.35, .18, -.42], .16, 'steel', 'fixed', { medical_frame: true, round_tube: true });
+  const rightLeg = builder.member('beam', 'right splayed base leg', assembly, [-1.2, .18, .7], [1.35, .18, .42], .16, 'steel', 'fixed', { medical_frame: true, round_tube: true });
+  const baseCross = builder.component('beam', 'rear base crossmember', assembly, [-1.08, .18, 0], [.24, .24, 1.55], 'steel', 'fixed', { medical_frame: true });
+  const mastPlate = builder.component('plate', 'patient lift mast mounting plate', assembly, [-1, .31, 0], [.72, .12, .82], 'steel', 'fixed', { medical_frame: true }, 5.8);
+  builder.connect(leftLeg, baseCross, 'mechanical', 'welded_base');
+  builder.connect(rightLeg, baseCross, 'mechanical', 'welded_base');
+  builder.joint('fixed', baseCross, mastPlate);
+  for (const [index, position] of ([[-1.12, .14, -.82], [-1.12, .14, .82], [1.28, .14, -.52], [1.28, .14, .52]] as Vec3[]).entries()) {
+    const caster = builder.component('wheel', `medical caster ${index + 1}`, assembly, position, [.26, .11, .26], 'rubber', 'fixed', { medical_caster: true });
+    builder.rotate(caster, [Math.PI / 2, 0, 0]);
+    builder.connect(caster, index < 2 ? baseCross : index === 2 ? leftLeg : rightLeg, 'mechanical', 'swivel_caster_mount');
+  }
+  const mast = builder.component('beam', 'patient lift mast', assembly, [-.9, 1.52, 0], [.28, 2.7, .28], 'steel', 'fixed', { medical_frame: true });
+  builder.connect(mast, baseCross, 'mechanical', 'mast_mount');
+  const boomStart: Vec3 = [-.86, 2.65, 0];
+  const boomEnd: Vec3 = [1.02, 2.95, 0];
+  const boom = builder.member('beam', 'curved lifting boom', assembly, boomStart, boomEnd, .22, 'aluminum', 'dynamic', { medical_boom: true, round_tube: true });
+  const boomJoint = builder.joint('revolute', mast, boom, [0, 0, 1], { limits: [-.18, .55] });
+  const piston = builder.component('piston', 'quiet electric lift actuator', assembly, [-.15, 1.72, 0], [.22, 1.32, .22], 'steel', 'kinematic', { medical_actuator: true });
+  builder.rotate(piston, [0, 0, -.6]);
+  const actuator = builder.actuator(piston, boomJoint, 'piston', Math.max(1400, values.payloadKg * 9.81 * 1.8), .28, Math.max(.55, values.liftM));
+  const spreader = builder.component('beam', 'four-point sling spreader bar', assembly, [1.05, 2.58, 0], [.22, .18, 1.05], 'aluminum', 'dynamic', { patient_spreader: true });
+  builder.joint('spherical', boom, spreader, [0, 1, 0]);
+  const sling = builder.component('container', 'supportive patient sling', assembly, [1.05, 1.82, 0], [.86, .78, .92], 'polymer', 'dynamic', { patient_sling: true, payload_kg: values.payloadKg }, values.payloadKg);
+  const leftStrap = builder.member('cable', 'left sling strap', assembly, [1.05, 2.54, -.43], [1.05, 2.08, -.34], .025, 'steel', 'dynamic', { sling_strap: true });
+  const rightStrap = builder.member('cable', 'right sling strap', assembly, [1.05, 2.54, .43], [1.05, 2.08, .34], .025, 'steel', 'dynamic', { sling_strap: true });
+  builder.connect(leftStrap, sling, 'mechanical', 'left_sling_attachment');
+  builder.connect(rightStrap, sling, 'mechanical', 'right_sling_attachment');
+  builder.joint('fixed', spreader, sling);
+  const sensorBody = builder.component('sensor', 'spreader load and acceleration sensor', assembly, [1.05, 2.48, 0], [.24, .2, .24], 'polymer', 'fixed', { medical_sensor: true });
+  const sensor = builder.sensor(sensorBody, 'load', 'patient_load_acceleration', sling, Math.min(100, values.payloadKg * 1.05));
+  const controller = builder.component('controller', 'handset safety controller', assembly, [-.95, 1.55, -.34], [.24, .48, .18], 'polymer', 'fixed', { medical_controller: true });
+  builder.control('smooth patient transfer', 'pid', [sensor], [actuator], 'raise the sling while limiting acceleration and stopping on overload', values.acceleration);
+  builder.connect(controller, piston, 'signal', 'hold_to_run_lift_command');
+  return { id: 'patient-lift', mountId: baseCross, editableId: sensorBody, handles: ['lift', 'stabilize', 'measure'], driveId: piston, outputId: sling };
+}
+
+function addWarehouseBuffer(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('zoned accumulation buffer', 'Three independently driven conveyor zones meter a visible package queue without contact', rootAssemblyId);
+  const controller = builder.component('controller', 'zone control cabinet', assembly, [0, .62, -1.32], [.7, .9, .42], 'steel', 'fixed', { control_cabinet: true });
+  const sensors: string[] = [];
+  const actuators: string[] = [];
+  let firstConveyor = '';
+  for (let index = 0; index < 3; index += 1) {
+    const x = -2.45 + index * 2.45;
+    const frame = builder.component('frame', `accumulation zone ${index + 1} support`, assembly, [x, .47, 0], [2.32, .8, 1.62], 'steel', 'fixed', { conveyor_frame: true, buffer_zone: index + 1 });
+    const conveyor = builder.component('conveyor', `independent accumulation belt ${index + 1}`, assembly, [x, .92, 0], [2.3, .22, 1.28], 'steel', 'fixed', { industrial_conveyor: true, buffer_zone: index + 1, target_throughput: values.throughput });
+    if (!firstConveyor) firstConveyor = conveyor;
+    builder.joint('fixed', frame, conveyor);
+    const motor = builder.component('motor', `zone ${index + 1} geared drive`, assembly, [x - .82, .62, -.92], [.42, .54, .42], 'steel', 'kinematic', { geared_motor: true });
+    builder.motor(motor, undefined, Math.max(20, values.throughput * .8), Math.max(65, values.throughput * 2.7));
+    builder.connect(controller, motor, 'signal', `zone_${index + 1}_speed_command`);
+    builder.connect(motor, conveyor, 'power', `zone_${index + 1}_drive`);
+    const sensorBody = builder.component('sensor', `zone ${index + 1} photoeye`, assembly, [x + .72, 1.28, -.72], [.24, .28, .24], 'polymer', 'fixed', { buffer_photoeye: true });
+    sensors.push(builder.sensor(sensorBody, 'presence', `zone_${index + 1}_occupied`, conveyor, 1.3));
+    builder.connect(sensorBody, controller, 'signal', `zone_${index + 1}_occupancy`);
+    if (index < 2) {
+      const gate = builder.component('beam', `zone ${index + 1} stop gate`, assembly, [x + 1.03, 1.16, 0], [.16, .62, 1.18], 'aluminum', 'dynamic', { buffer_gate: true });
+      const gateJoint = builder.joint('revolute', frame, gate, [1, 0, 0], { limits: [0, 1.25] });
+      const servo = builder.component('servo', `zone ${index + 1} gate actuator`, assembly, [x + 1.03, 1.1, -.78], [.34, .32, .34], 'aluminum', 'kinematic');
+      actuators.push(builder.actuator(servo, gateJoint, 'servo', 180, 1.4, 1.25));
+      builder.connect(controller, servo, 'signal', `zone_${index + 1}_release`);
+    }
+  }
+  [-2.65, -1.55, -.35, 1.15].forEach((x, index) => {
+    builder.component('container', `queued shipping carton ${index + 1}`, assembly, [x, 1.28, 0], [.58 + index * .05, .52, .68], 'polymer', 'dynamic', { product_form: 'shipping-carton', queue_index: index + 1 }, 3.5 + index);
+  });
+  builder.control('zero-pressure accumulation', 'state-machine', sensors, actuators, 'release one occupied zone only when the next zone is clear', values.throughput);
+  return { id: 'warehouse-buffer', mountId: firstConveyor, editableId: builder.components.find((item) => item.role === 'zone 2 photoeye')!.id, handles: ['transport', 'buffer', 'measure'] };
+}
+
+function addTomatoGrader(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('gentle tomato grader', 'Low feed belt, widening roller bed, size sensing, and padded low-drop collection bins', rootAssemblyId);
+  const frame = builder.component('frame', 'food-grade grader frame', assembly, [0, .47, 0], [6.2, .82, 2], 'aluminum', 'fixed', { conveyor_frame: true, food_grade: true });
+  const feed = builder.component('conveyor', 'soft feed belt', assembly, [-2.2, .94, 0], [2.2, .2, 1.32], 'aluminum', 'fixed', { industrial_conveyor: true, food_grade: true, target_throughput: values.throughput });
+  builder.joint('fixed', frame, feed);
+  const motor = builder.component('motor', 'washdown grader motor', assembly, [-3.1, .66, -.98], [.46, .58, .46], 'steel', 'kinematic', { geared_motor: true });
+  builder.motor(motor, undefined, 24, 65);
+  builder.connect(motor, feed, 'power', 'gentle_feed_drive');
+  for (let index = 0; index < 6; index += 1) {
+    const roller = builder.component('roller', `widening grading roller ${index + 1}`, assembly, [-.72 + index * .5, .95, 0], [.16, 1.15 + index * .08, .16], 'polymer', 'dynamic', { grading_roller: true, food_grade: true, gap_mm: 34 + index * 8 });
+    builder.rotate(roller, [Math.PI / 2, 0, 0]);
+    builder.joint('revolute', frame, roller, [0, 0, 1]);
+  }
+  const sensorBody = builder.component('camera', 'tomato size camera', assembly, [-.55, 1.72, 0], [.34, .3, .34], 'polymer', 'fixed', { sorting_sensor: true, produce_sensor: true });
+  const sensor = builder.sensor(sensorBody, 'camera', 'tomato_diameter', feed, 2.5);
+  const chutes: string[] = [];
+  const bins: string[] = [];
+  for (const [index, route] of ['small', 'large'].entries()) {
+    const side = index ? 1 : -1;
+    const chute = builder.component('ramp', `${route} tomato padded chute`, assembly, [2.18, .72, side * .82], [1.65, .12, .72], 'polymer', 'fixed', { sorting_chute: true, route_color: route === 'small' ? 'green' : 'orange', padded: true });
+    builder.rotate(chute, [0, side * -.36, -.1]);
+    const bin = builder.component('container', `${route} tomato padded bin`, assembly, [3.18, .48, side * 1.45], [1.15, .78, 1.05], 'polymer', 'fixed', { sorting_bin: true, route_color: route === 'small' ? 'green' : 'orange', padded: true }, 12);
+    builder.connect(chute, bin, 'mechanical', `${route}_produce_path`);
+    chutes.push(chute); bins.push(bin);
+  }
+  const diverter = builder.component('beam', 'soft size selector flap', assembly, [1.35, 1.05, 0], [1.05, .14, .2], 'polymer', 'dynamic', { sorting_diverter: true, food_grade: true });
+  const diverterJoint = builder.joint('revolute', feed, diverter, [0, 1, 0], { limits: [-.6, .6] });
+  const servo = builder.component('servo', 'sealed selector servo', assembly, [1.12, .72, -.78], [.36, .32, .36], 'aluminum', 'kinematic');
+  const actuator = builder.actuator(servo, diverterJoint, 'servo', 120, 1.25, 1.2);
+  const controller = builder.component('controller', 'grader control enclosure', assembly, [.15, .56, -1.18], [.62, .72, .38], 'polymer', 'fixed');
+  builder.control('gentle size grading', 'state-machine', [sensor], [actuator], 'select the size lane while limiting transfer drop height', .15);
+  builder.connect(sensorBody, controller, 'signal', 'diameter_measurement');
+  builder.connect(controller, servo, 'signal', 'selector_command');
+  const tomatoes = [
+    { x: -2.55, z: -.2, size: .34, route: 'small' },
+    { x: -1.85, z: .18, size: .46, route: 'large' },
+    { x: -.95, z: -.12, size: .39, route: 'small' },
+  ];
+  tomatoes.forEach((item, index) => builder.component('container', `tomato ${index + 1}`, assembly, [item.x, 1.23, item.z], [item.size, item.size, item.size], 'polymer', 'dynamic', { product_form: 'tomato', grade: item.route }, .11 + index * .03));
+  return { id: 'tomato-grader', mountId: frame, editableId: sensorBody, handles: ['transport', 'classify', 'contain', 'measure'] };
+}
+
+function addRecyclingSeparator(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('three-stream recycling separator', 'Feed conveyor, material identification, two sequential diverters, and three labeled collection streams', rootAssemblyId);
+  const frame = builder.component('frame', 'separator support frame', assembly, [-.65, .48, 0], [6.1, .84, 1.72], 'steel', 'fixed', { conveyor_frame: true });
+  const conveyor = builder.component('conveyor', 'recycling infeed conveyor', assembly, [-.65, .93, 0], [5.65, .24, 1.3], 'steel', 'fixed', { industrial_conveyor: true, target_throughput: values.throughput });
+  builder.joint('fixed', frame, conveyor);
+  const motor = builder.component('motor', 'recycling conveyor drive', assembly, [-3.45, .65, -.92], [.48, .6, .48], 'steel', 'kinematic', { geared_motor: true });
+  builder.motor(motor, undefined, 30, 78);
+  builder.connect(motor, conveyor, 'power', 'infeed_drive');
+  const sensorBody = builder.component('camera', 'material identification tunnel', assembly, [-1.45, 1.68, 0], [.42, .38, .42], 'polymer', 'fixed', { sorting_sensor: true, material_sensor: true });
+  const sensor = builder.sensor(sensorBody, 'camera', 'material_class', conveyor, 3);
+  const controller = builder.component('controller', 'separator control cabinet', assembly, [-.3, .58, -1.18], [.68, .86, .42], 'steel', 'fixed', { control_cabinet: true });
+  const actuators: string[] = [];
+  for (const [index, route] of ['metal', 'plastic'].entries()) {
+    const x = .65 + index * 1.1;
+    const diverter = builder.component('beam', `${route} stream diverter`, assembly, [x, 1.1, 0], [1.02, .16, .22], 'aluminum', 'dynamic', { sorting_diverter: true, route_color: route });
+    const joint = builder.joint('revolute', conveyor, diverter, [0, 1, 0], { limits: [-.7, .7] });
+    const servo = builder.component('servo', `${route} diverter servo`, assembly, [x, .67, -.82], [.36, .34, .36], 'aluminum', 'kinematic');
+    actuators.push(builder.actuator(servo, joint, 'servo', 190, 1.7, 1.4));
+    builder.connect(controller, servo, 'signal', `${route}_eject_command`);
+  }
+  const routes = [
+    { route: 'metal', label: 'metal can', x: 2.55, z: -1.1 },
+    { route: 'plastic', label: 'plastic bottle', x: 2.8, z: 0 },
+    { route: 'reject', label: 'reject object', x: 2.55, z: 1.1 },
+  ];
+  routes.forEach(({ route, label, x, z }, index) => {
+    const chute = builder.component('ramp', `${route} output chute`, assembly, [x, .71, z], [1.7, .13, .72], 'aluminum', 'fixed', { sorting_chute: true, route_color: route });
+    builder.rotate(chute, [0, z * -.27, -.09]);
+    const bin = builder.component('container', `${route} collection bin`, assembly, [3.75, .48, z * 1.55], [1.12, .9, 1.04], 'polymer', 'fixed', { sorting_bin: true, route_color: route }, 15);
+    builder.connect(chute, bin, 'mechanical', `${route}_collection_path`);
+    const form = route === 'metal' ? 'metal-can' : route === 'plastic' ? 'plastic-bottle' : 'reject-object';
+    builder.component('container', label, assembly, [-2.55 + index * .72, 1.34, z * .1], route === 'plastic' ? [.4, .72, .4] : route === 'metal' ? [.46, .66, .46] : [.5, .52, .5], route === 'metal' ? 'aluminum' : 'polymer', 'dynamic', { product_form: form }, route === 'metal' ? .18 : .08);
+  });
+  builder.control('three-stream separation', 'state-machine', [sensor], actuators, 'route metal, plastic, and unknown objects to independent collection streams', values.throughput);
+  builder.connect(sensorBody, controller, 'signal', 'material_classification');
+  return { id: 'recycling-separator', mountId: frame, editableId: sensorBody, handles: ['transport', 'classify', 'contain', 'measure'] };
+}
+
 function addMaterialFlow(context: ModuleContext): ModuleResult {
   const { builder, values, capabilities, rootAssemblyId } = context;
-  const assembly = builder.assembly('material flow path', 'Powered surface, sensing, routing, and collection primitives', rootAssemblyId);
+  const assembly = builder.assembly('two-color package sorter', 'Powered belt, red and blue cartons, vision portal, servo diverter, two chutes, and two labeled bins', rootAssemblyId);
   const minimal = values.maxComponents !== undefined && values.maxComponents <= 7;
   const classify = capabilities.includes('classify');
   const contain = capabilities.includes('contain');
@@ -839,12 +1009,14 @@ function addMaterialFlow(context: ModuleContext): ModuleResult {
   if (classify) {
     const router = builder.component('beam', 'servo sorting diverter', assembly, [1.15, 1.1, 0], [1.25, .16, .22], 'aluminum', 'dynamic', { sorting_diverter: true });
     const routerJoint = builder.joint('revolute', conveyor, router, [0, 1, 0], { limits: [-.75, .75] });
-    actuatorIds.push(builder.actuator(motor, routerJoint, 'servo', 330, 2.2, 1.5));
+    const diverterServo = builder.component('servo', 'sorting gate servo', assembly, [1.05, .68, -.78], [.36, .34, .36], 'aluminum', 'kinematic');
+    actuatorIds.push(builder.actuator(diverterServo, routerJoint, 'servo', 330, 2.2, 1.5));
     const rampA = builder.component('ramp', 'red output chute', assembly, [2.45, .72, -.9], [2.25, .14, .86], 'aluminum', 'fixed', { sorting_chute: true, route_color: 'red' });
     builder.rotate(rampA, [0, .48, -.08]);
     builder.connect(conveyor, rampA, 'mechanical', 'output_path');
+    let rampB = conveyor;
     if (!minimal) {
-      const rampB = builder.component('ramp', 'blue output chute', assembly, [2.45, .72, .9], [2.25, .14, .86], 'aluminum', 'fixed', { sorting_chute: true, route_color: 'blue' });
+      rampB = builder.component('ramp', 'blue output chute', assembly, [2.45, .72, .9], [2.25, .14, .86], 'aluminum', 'fixed', { sorting_chute: true, route_color: 'blue' });
       builder.rotate(rampB, [0, -.48, -.08]);
       builder.connect(conveyor, rampB, 'mechanical', 'alternate_path');
     }
@@ -852,8 +1024,10 @@ function addMaterialFlow(context: ModuleContext): ModuleResult {
       const binA = builder.component('container', 'red collection bin', assembly, [3.65, .5, -1.85], [1.25, .95, 1.15], 'polymer', 'fixed', { sorting_bin: true, route_color: 'red' }, 18);
       const binB = builder.component('container', 'blue collection bin', assembly, [3.65, .5, 1.85], [1.25, .95, 1.15], 'polymer', 'fixed', { sorting_bin: true, route_color: 'blue' }, 18);
       builder.connect(rampA, binA, 'mechanical', 'collection_path');
-      builder.connect(conveyor, binB, 'mechanical', 'collection_path');
+      builder.connect(rampB, binB, 'mechanical', 'collection_path');
     }
+    builder.component('container', 'red shipping carton', assembly, [-2.25, 1.3, -.18], [.68, .56, .62], 'polymer', 'dynamic', { product_form: 'package-red' }, 4.2);
+    builder.component('container', 'blue shipping carton', assembly, [-.55, 1.3, .16], [.68, .56, .62], 'polymer', 'dynamic', { product_form: 'package-blue' }, 4.2);
   }
   if (!minimal) {
     const controller = builder.component('controller', 'sorter control cabinet', assembly, [.2, .62, -1.15], [.62, .76, .42], 'polymer', 'fixed', { control_cabinet: true });
@@ -868,15 +1042,19 @@ function addTrackingAxis(context: ModuleContext): ModuleResult {
   const assembly = builder.assembly('tracking axis', 'Support, pivoting panel, one actuator, and independent sensing', rootAssemblyId);
   const base = builder.component('frame', 'tracking base', assembly, [0, .15, 0], [2.8, .26, 2.1], 'steel', 'fixed');
   const mast = builder.component('beam', 'tracking mast', assembly, [0, 1.3, 0], [.3, 2.5, .3], 'steel', 'fixed');
-  const panel = builder.component('plate', 'tracked panel', assembly, [0, 2.55, 0], [3.4, .14, 2.1], 'composite', 'dynamic', { panel: true });
+  const crossRail = builder.component('beam', 'solar array cross rail', assembly, [0, 2.48, 0], [3.15, .16, .16], 'aluminum', 'dynamic', { solar_rail: true });
+  const panel = builder.component('plate', 'tracked panel', assembly, [0, 2.68, 0], [3.4, .14, 2.1], 'composite', 'dynamic', { panel: true, solar_array: true });
   builder.joint('fixed', base, mast);
-  const hinge = builder.joint('revolute', mast, panel, [0, 0, 1], { limits: [-1.25, 1.25] });
+  const hinge = builder.joint('revolute', mast, crossRail, [0, 0, 1], { limits: [-1.25, 1.25] });
+  builder.joint('fixed', crossRail, panel);
   const servo = builder.component('servo', 'tracking servo', assembly, [0, 2.22, -.42], undefined, undefined, 'kinematic');
   const actuator = builder.actuator(servo, hinge, 'servo', 700, .7, 2.5);
   const sensorBody = builder.component('sensor', 'dual light sensor', assembly, [-1.2, 2.72, 0], undefined, undefined, 'fixed');
   const sensor = builder.sensor(sensorBody, 'light', 'light_error', panel, 10);
+  const lightTarget = builder.component('light', 'simulated moving sun', assembly, [4.2, 5.2, -2.2], [.52, .38, .38], 'aluminum', 'fixed', { solar_source: true, beam_range: 7 }, .4);
   builder.control('light tracking', 'tracking', [sensor], [actuator], 'drive light error toward zero inside hinge limits', 0);
   builder.connect(sensorBody, servo, 'signal', 'tracking_error');
+  builder.connect(lightTarget, sensorBody, 'signal', 'incident_light_direction');
   return { id: 'tracking-axis', mountId: base, editableId: sensorBody, handles: ['track', 'rotate', 'measure'] };
 }
 
@@ -1139,8 +1317,12 @@ const moduleRules: ModuleRule[] = [
   { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },
   { id: 'serial-linkage', matches: ({ capabilities }) => capabilities.includes('manipulate'), compose: addSerialLinkage },
   { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addCableSuspension },
-  { id: 'parallel-guides', matches: ({ text, capabilities }) => capabilities.includes('lift') && !capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addParallelGuides },
-  { id: 'material-flow', matches: ({ capabilities }) => capabilities.includes('transport'), compose: addMaterialFlow },
+  { id: 'patient-lift', matches: ({ text }) => /patient/.test(text), compose: addPatientLift },
+  { id: 'parallel-guides', matches: ({ text, capabilities }) => capabilities.includes('lift') && !capabilities.includes('suspend') && !/bridge|truss|patient/.test(text), compose: addParallelGuides },
+  { id: 'warehouse-buffer', matches: ({ text }) => /warehouse|accumulation|buffer/.test(text), compose: addWarehouseBuffer },
+  { id: 'tomato-grader', matches: ({ text }) => /tomato|produce|fruit.*grad|grader.*fruit/.test(text), compose: addTomatoGrader },
+  { id: 'recycling-separator', matches: ({ text }) => /recycl|metal cans?|plastic bottles?/.test(text), compose: addRecyclingSeparator },
+  { id: 'material-flow', matches: ({ capabilities, text }) => capabilities.includes('transport') && !/warehouse|accumulation|buffer|tomato|produce|fruit|recycl|metal cans?|plastic bottles?/.test(text), compose: addMaterialFlow },
   { id: 'tracking-axis', matches: ({ capabilities }) => capabilities.includes('track'), compose: addTrackingAxis },
   { id: 'reciprocating-linkage', matches: ({ text }) => /pump|reciprocat/.test(text), compose: addReciprocatingLinkage },
   { id: 'closed-linkage', matches: ({ text }) => /four[- ]bar|linkage/.test(text), compose: addFourBar },
