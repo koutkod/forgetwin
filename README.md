@@ -31,12 +31,15 @@ Try prompts such as:
 - “Build a crane that lifts an 80 kg beam by 2 meters without tipping.”
 - “Design a 4:1 gearbox with 120 rpm input and at least 80 N·m output torque.”
 - “Build a rover that carries 5 kg across uneven terrain in under 20 seconds.”
+- “Build a solar-powered electric bicycle.”
 - “Create an 8 meter bridge that supports 3,000 kg with less than 6 mm deflection.”
 - “Build an automatic rotating hatch with an obstruction sensor.”
 
 The examples in the UI are editable briefs, not hidden design templates. Prompt dimensions and targets change the generated graph. When a semantic part is unavailable, the planner builds it from beams, plates, shafts, joints, motors, sensors, and other lower-level primitives.
 
 Compound briefs are composed, not classified into one machine bucket. For example, a gearbox-driven crane contains separate transmission and suspension assemblies with a power edge from the output shaft to the hoist drive; a rover-mounted arm combines rolling support and serial-linkage assemblies. Explicit requests such as gears, pistons, cameras, pulleys, or counterweights are preserved and integrated into the generated graph.
+
+Object identity is authoritative. Obvious spelling variants such as “bycicle” are canonicalized only for topology selection, while modifiers remain attached to the requested object. For example, “solar-powered electric bicycle” produces one connected bicycle assembly with a spoked two-wheel chassis, welded tube frame, fork, cockpit, crank/chain drive, battery, motor, controller, sensor, rack, and fixed charging panel; it does not place a generic rover beside an unrelated solar tracker. Active tracking is created only when the brief explicitly asks to follow, aim at, or orient toward the sun or a light source.
 
 ## Shared world model
 

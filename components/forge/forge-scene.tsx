@@ -55,6 +55,57 @@ function IndustrialFrame({ component, color, xray, selected }: { component: Mach
   </group>;
 }
 
+function BicycleWheel({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const radius = component.dimensions[0] / 2;
+  const width = component.dimensions[1];
+  const spokeColor = selected ? '#65e5ff' : '#c9d3d7';
+  return <group>
+    <mesh castShadow receiveShadow><torusGeometry args={[radius * .88, radius * .095, 14, 64]} /><StandardMaterial color="#151c20" xray={xray} selected={selected} metalness={.08} roughness={.82} /></mesh>
+    <mesh><torusGeometry args={[radius * .78, radius * .026, 10, 56]} /><StandardMaterial color="#b5c1c6" xray={xray} selected={selected} metalness={.92} roughness={.14} /></mesh>
+    {[-1, 1].flatMap((side) => Array.from({ length: 12 }, (_, index) => {
+      const angle = index / 12 * Math.PI * 2;
+      return <Line key={`${side}-${index}`} points={[[0, 0, side * width * .43], [Math.cos(angle) * radius * .77, Math.sin(angle) * radius * .77, side * width * .43]]} color={spokeColor} lineWidth={xray ? .7 : 1.1} transparent opacity={xray ? .68 : .92} />;
+    }))}
+    <mesh rotation={[Math.PI / 2, 0, 0]} castShadow><cylinderGeometry args={[radius * .105, radius * .105, width * 1.35, 24]} /><StandardMaterial color="#53636b" xray={xray} selected={selected} metalness={.9} roughness={.17} /></mesh>
+    <mesh><torusGeometry args={[radius * .19, radius * .018, 8, 32]} /><StandardMaterial color="#d0dadc" xray={xray} selected={selected} metalness={.92} roughness={.14} /></mesh>
+  </group>;
+}
+
+function BicycleTube({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const length = component.dimensions[0];
+  const radius = Math.max(.022, Math.max(component.dimensions[1], component.dimensions[2]) / 2);
+  return <group rotation={[0, 0, Math.PI / 2]}>
+    <mesh castShadow receiveShadow><cylinderGeometry args={[radius, radius, length, 20]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.7} roughness={.24} /></mesh>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .48, 0]}><torusGeometry args={[radius * .92, radius * .12, 7, 20]} /><StandardMaterial color="#d6dee1" xray={xray} selected={selected} metalness={.9} roughness={.14} /></mesh>)}
+  </group>;
+}
+
+function BicycleChain({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const half = component.dimensions[0] / 2;
+  const height = Math.max(.1, component.dimensions[2] * .72);
+  const points = [
+    [-half + height, height, 0], [half - height, height, 0], [half, 0, 0], [half - height, -height, 0],
+    [-half + height, -height, 0], [-half, 0, 0], [-half + height, height, 0],
+  ] as Vec3[];
+  return <group><Line points={points} color={selected ? '#65e5ff' : '#b9c2c5'} lineWidth={xray ? 1 : 2.2} transparent opacity={xray ? .7 : 1} />{!xray && points.slice(0, -1).map((point, index) => <mesh key={index} position={point}><sphereGeometry args={[.025, 8, 8]} /><meshStandardMaterial color="#626e73" metalness={.88} roughness={.2} /></mesh>)}</group>;
+}
+
+function BicycleSeat({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group><group rotation={[0, 0, -.08]}><BoxBody size={[x, y, z]} color={color} xray={xray} selected={selected} radius={Math.min(.08, y * .48)} metalness={.08} roughness={.78} /></group><group position={[-x * .2, -y * .62, 0]}><BoxBody size={[x * .48, y * .24, z * .58]} color="#59666c" xray={xray} selected={selected} radius={.02} /></group></group>;
+}
+
+function BicycleBattery({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group><BoxBody size={component.dimensions} color="#202c33" xray={xray} selected={selected} radius={.055} metalness={.34} roughness={.38} /><group position={[0, 0, z * .53]}><BoxBody size={[x * .82, y * .68, .025]} color={color} xray={xray} selected={selected} radius={.012} /></group>{!xray && <><mesh position={[x * .32, y * .15, z * .57]}><sphereGeometry args={[.025, 10, 10]} /><meshStandardMaterial color="#5cf19a" emissive="#19462c" /></mesh><Line points={[[x * -.28, y * -.2, z * .57], [x * .23, y * -.2, z * .57]]} color="#72828a" lineWidth={1.2} /></>}</group>;
+}
+
+function BicycleHubMotor({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const radius = component.dimensions[0] / 2;
+  const width = component.dimensions[1];
+  return <group rotation={[Math.PI / 2, 0, 0]}><mesh castShadow><cylinderGeometry args={[radius, radius, width, 36]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.22} /></mesh>{!xray && Array.from({ length: 10 }, (_, index) => <mesh key={index} rotation={[0, index / 10 * Math.PI * 2, 0]} position={[0, 0, width * .52]}><boxGeometry args={[radius * .08, radius * 1.55, .018]} /><meshStandardMaterial color="#29353b" metalness={.72} roughness={.26} /></mesh>)}<mesh><cylinderGeometry args={[radius * .2, radius * .2, width * 1.28, 22]} /><StandardMaterial color="#d4dde0" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh></group>;
+}
+
 function Wheel({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const radius = component.dimensions[0] / 2;
   const width = component.dimensions[1];
@@ -368,6 +419,12 @@ function LocatingPin({ component, color, xray, selected }: { component: MachineC
 
 function ComponentShape({ component, xray, selected, actuatorValue }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
+  if (component.parameters.bicycle_wheel) return <BicycleWheel component={component} xray={xray} selected={selected} />;
+  if (component.parameters.bicycle_tube) return <BicycleTube component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.bicycle_chain) return <BicycleChain component={component} xray={xray} selected={selected} />;
+  if (component.parameters.bicycle_seat) return <BicycleSeat component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.bicycle_battery) return <BicycleBattery component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.bicycle_hub_motor) return <BicycleHubMotor component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.cad_form) return <ParametricCadPart component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.bphe_plate) return <BrazedPlateLeaf component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.bphe_end_plate) return <BrazedEndPlate component={component} color={color} xray={xray} selected={selected} />;
@@ -460,7 +517,8 @@ function Machine({ state, preview, frame, onComponentMove, onSelect }: Props & {
     <pointLight position={[-4, 4, -3]} intensity={24} color="#2bd9ff" distance={12} />
     <pointLight position={[4, 3, 4]} intensity={18} color="#ff9c45" distance={11} />
     {components.map((component) => {
-      const replaySafe = state.replayMode === 'failure' || Boolean(component.parameters.cad_form) || (state.goal?.capabilities.includes('transmit') && ['gear', 'shaft'].includes(component.primitive));
+      const bicycleMotion = Boolean(component.parameters.bicycle_wheel || component.parameters.bicycle_sprocket);
+      const replaySafe = state.replayMode === 'failure' || bicycleMotion || Boolean(component.parameters.cad_form) || (state.goal?.capabilities.includes('transmit') && ['gear', 'shaft'].includes(component.primitive));
       const replay = replaySafe ? frame?.items.find((item) => item.id === component.id) : undefined;
       const targetJoint = joints.find((item) => item.componentB === component.id);
       const actuator = state.actuators.find((item) => item.jointId === targetJoint?.id);

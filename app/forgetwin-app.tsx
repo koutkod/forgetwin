@@ -127,7 +127,6 @@ export function ForgeTwinApp() {
     setAgentTrace([{ id: `agent-trace-${traceSeq.current}`, kind: 'goal', title: 'New engineering mission', detail: requestedPrompt, at: new Date().toISOString() }]);
     try {
       let actor: Actor = runtimeActor();
-      let planningPrompt = requestedPrompt;
       let modelAssumptions: string[] = [];
       let shouldUseModel = actor === 'ModelAgent';
       if (agentRuntime === 'checking' && !agentKey) {
@@ -142,9 +141,9 @@ export function ForgeTwinApp() {
         addTrace('action', 'Asking the model to plan', 'Interpreting constraints, selecting a composable architecture, and choosing verification metrics.');
         try {
           const response = await requestAgentPlan(requestedPrompt, agentKey || undefined, controller.signal);
-          planningPrompt = response.result.normalized_prompt; modelAssumptions = response.result.assumptions;
+          modelAssumptions = response.result.assumptions;
           setAgentModel(response.model);
-          addTrace('reasoning', response.result.reasoning_summary, `Architecture: ${response.result.architecture.join(' · ')}. Verify: ${response.result.verification_focus.join(', ')}.`);
+          addTrace('reasoning', response.result.reasoning_summary, `Interpreted as: ${response.result.normalized_prompt}. Architecture: ${response.result.architecture.join(' · ')}. Verify: ${response.result.verification_focus.join(', ')}. The user's object identity remains authoritative.`);
         } catch (caught) {
           actor = 'Deterministic'; setAgentRuntime('deterministic');
           addTrace('fallback', 'Switched to the local engineer', `${caught instanceof Error ? caught.message : 'The model request failed.'} The deterministic planner will still build, simulate, and repair the machine.`);
@@ -152,7 +151,7 @@ export function ForgeTwinApp() {
       } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
 
       let plan;
-      try { plan = compileDesignBrief(planningPrompt); }
+      try { plan = compileDesignBrief(requestedPrompt); }
       catch (caught) { throw new Error(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
       plan.brief = requestedPrompt; plan.goal.brief = requestedPrompt;
       plan.assumptions = [...modelAssumptions, ...plan.assumptions].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
@@ -326,9 +325,16 @@ export function ForgeTwinApp() {
   const localEditCommands = (instruction: string): EditCommand[] => {
     const world = getSnapshot();
     const text = instruction.toLowerCase();
-    const aliases: Record<string, string[]> = { boom: ['boom'], mast: ['mast'], base: ['base', 'chassis'], wheel: ['wheel'], counterweight: ['counterweight'], sensor: ['sensor', 'camera'], gripper: ['gripper'], arm: ['serial link', 'link'], platform: ['platform'], bridge: ['span', 'deck'], gear: ['gear'], conveyor: ['conveyor', 'transport surface'], support: ['support', 'outrigger'] };
+    const aliases: Record<string, string[]> = {
+      handlebar: ['handlebar'], saddle: ['saddle', 'seat'], seat: ['saddle', 'seat'], battery: ['battery'], chain: ['drive chain', 'sprocket'],
+      'solar panel': ['solar charging panel'], panel: ['solar charging panel', 'tracked panel'], fork: ['front fork'], bicycle: ['top tube', 'chain stay'],
+      boom: ['boom'], mast: ['mast'], base: ['base', 'chassis'], wheel: ['wheel'], motor: ['motor'], counterweight: ['counterweight'],
+      sensor: ['sensor', 'camera', 'pickup'], gripper: ['gripper'], arm: ['serial link', 'link'], platform: ['platform'], bridge: ['span', 'deck'],
+      gear: ['gear', 'sprocket'], conveyor: ['conveyor', 'transport surface'], support: ['support', 'outrigger', 'stay'],
+    };
     const named = Object.entries(aliases).find(([name]) => text.includes(name))?.[1] ?? [];
-    const target = world.components.find((item) => named.some((term) => item.role.includes(term)))
+    const target = world.components.find((item) => named.some((term) => item.role === term))
+      ?? world.components.find((item) => named.some((term) => item.role.includes(term)))
       ?? world.components.find((item) => item.id === world.selectedComponentId)
       ?? world.components.find((item) => !item.humanLockedFields.length);
     if (!target) throw new Error('Select or name a component to edit.');

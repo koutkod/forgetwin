@@ -9,6 +9,9 @@ export const DEFAULT_DESIGN_PROMPT = engineeringExamples[1].prompt;
 export const CHALLENGE_EXAMPLES = engineeringExamples;
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
+const canonicalizeMechanicalTerms = (value: string) => value
+  .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle');
+const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text);
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || 'part';
 const numeric = (value: string | undefined, fallback: number) => value ? Number(value.replaceAll(',', '')) : fallback;
 const NUMBER_WORDS: Record<string, number> = {
@@ -116,11 +119,12 @@ function inferCapabilities(text: string): Capability[] {
   if (/sort|separat|route|classif|inspect|reject|color|size|material|grader|recycl/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
   if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient/.test(text)) capabilities.add('lift');
   if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge/.test(text)) capabilities.add('suspend');
-  if (/rover|vehicle|mobile robot|corridor|obstacle|\bwheels?\b|\bdrive\b/.test(text)) capabilities.add('mobile');
+  if (/rover|vehicle|mobile robot|bicycle|corridor|obstacle|\bwheels?\b|\bdrive\b/.test(text)) capabilities.add('mobile');
   if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text)) capabilities.add('manipulate');
   if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(text)) capabilities.add('transmit');
   if (/suspension|spring|rough|uneven|tipping|stability|stabiliz|level/.test(text)) capabilities.add('stabilize');
-  if (/solar|light source|\btrack(?:ing|er)?\b|turbine|blade pitch/.test(text)) capabilities.add('track');
+  const activeTracking = /(?:solar|sun|light source)[^.!?]{0,32}(?:track|follow|aim|orient)|(?:track|follow|aim|orient)[^.!?]{0,32}(?:solar|sun|light source)|turbine|blade pitch/.test(text);
+  if (activeTracking) capabilities.add('track');
   if (/buffer|queue|spacing|irregular|singulat/.test(text)) capabilities.add('buffer');
   if (/bin|container|collect|recycling|reject|tank|reservoir/.test(text)) capabilities.add('contain');
   if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|pump/.test(text)) capabilities.add('rotate');
@@ -145,6 +149,7 @@ function identity(text: string, capabilities: Capability[]) {
     [/crane|hoist/, 'Counterbalanced lifting system', 'Lifting systems'],
     [/patient/, 'Smooth patient lifting mechanism', 'Medical equipment'],
     [/elevator|lift|raising/, 'Synchronized lifting mechanism', 'Lifting systems'],
+    [/\bbicycle\b/, /solar/.test(text) ? 'Solar electric bicycle' : /electric/.test(text) ? 'Electric bicycle' : 'Parametric bicycle', 'Personal electric mobility'],
     [/rover|vehicle|mobile robot/, 'Terrain-capable mobile platform', 'Mobile robotics'],
     [/solar|light source/, 'Single-axis tracking mechanism', 'Renewable energy'],
     [/suspension/, 'Compliant suspension mechanism', 'Vehicle dynamics'],
@@ -170,6 +175,7 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   const parametricRotor = /impeller|propeller|fan\b|turbine|rotor/.test(text);
   const brazedPlateExchanger = /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text);
   const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
+  const bicycle = isBicycleGoal(text);
 
   if (brazedPlateExchanger) {
     add('plate_count', 'Corrugated transfer plates', 'min', 12, 'plates');
@@ -208,8 +214,12 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   if (capabilities.includes('mobile')) {
     add('payload_capacity', 'Payload capacity', 'min', values.payloadKg, 'kg', 'payloadKg');
     add('course_time', 'Course time', 'max', values.durationS, 's', 'durationS');
-    add('platform_tilt', 'Platform tilt', 'max', values.tiltDeg, '°', 'tiltDeg');
+    if (!bicycle) add('platform_tilt', 'Platform tilt', 'max', values.tiltDeg, '°', 'tiltDeg');
     add('traction_margin', 'Traction margin', 'min', 1.1, 'x');
+    if (bicycle) {
+      add('assembly_integrity', 'Connected bicycle assembly', 'min', 95, '%');
+      add('component_count', 'Physical bodies', 'max', 32, '');
+    }
   }
   if (capabilities.includes('track')) {
     add('tracking_error', 'Tracking error', 'max', values.tiltDeg === 8 ? 4 : values.tiltDeg, '°', 'tiltDeg');
@@ -453,6 +463,106 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
   builder.control('traction stability', 'pid', [sensor], [], 'limit wheel torque when tilt or slip rises', values.tiltDeg);
   builder.joint('fixed', imu, chassis); builder.joint('fixed', controller, chassis);
   return { id: 'rolling-support', mountId: chassis, editableId: imu, handles: ['mobile', 'stabilize'] };
+}
+
+function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
+  const { builder, text, rootAssemblyId } = context;
+  const assembly = builder.assembly('bicycle assembly', 'A single coherent vehicle assembled from wheels, tubular frame members, fork, cockpit, electric drive, controls, and an optional solar charging rack', rootAssemblyId);
+  const rear: Vec3 = [-1.18, .68, 0];
+  const front: Vec3 = [1.18, .68, 0];
+  const bottomBracket: Vec3 = [-.12, .82, 0];
+  const seatCluster: Vec3 = [-.46, 1.54, 0];
+  const headLower: Vec3 = [.63, 1.12, 0];
+  const headUpper: Vec3 = [.77, 1.56, 0];
+  const frameBodies: string[] = [];
+  const addTube = (role: string, start: Vec3, end: Vec3, section = .075) => {
+    const id = builder.member('beam', role, assembly, start, end, section, 'aluminum', 'fixed', { bicycle_tube: true });
+    frameBodies.push(id);
+    return id;
+  };
+
+  // A recognizable diamond frame is constructed from individual round tubes;
+  // no bicycle or vehicle mesh is hidden behind a whole-machine primitive.
+  for (const side of [-1, 1]) {
+    const z = side * .1;
+    addTube(`chain stay ${side < 0 ? 'left' : 'right'}`, [rear[0], rear[1], z], [bottomBracket[0], bottomBracket[1], z], .055);
+    addTube(`seat stay ${side < 0 ? 'left' : 'right'}`, [rear[0], rear[1], z], [seatCluster[0], seatCluster[1], z], .055);
+    addTube(`down tube ${side < 0 ? 'left' : 'right'}`, [bottomBracket[0], bottomBracket[1], z], [headLower[0], headLower[1], z], .075);
+    addTube(`top tube ${side < 0 ? 'left' : 'right'}`, [seatCluster[0], seatCluster[1], z], [headUpper[0], headUpper[1], z], .065);
+    addTube(`front fork blade ${side < 0 ? 'left' : 'right'}`, [headLower[0], headLower[1], side * .12], [front[0], front[1], side * .12], .06);
+  }
+  addTube('seat tube', bottomBracket, seatCluster, .08);
+  addTube('steering head tube', headLower, headUpper, .09);
+  const stem = addTube('handlebar stem', headUpper, [.87, 1.75, 0], .055);
+  const handlebar = addTube('handlebar', [.87, 1.75, -.43], [.87, 1.75, .43], .045);
+  builder.rotate(handlebar, [0, -Math.PI / 2, 0]);
+
+  const rearDropout = builder.component('plate', 'rear axle dropout', assembly, rear, [.18, .3, .26], 'steel', 'fixed', { bicycle_dropout: true }, .42);
+  const frontDropout = builder.component('plate', 'front axle dropout', assembly, front, [.18, .3, .28], 'steel', 'fixed', { bicycle_dropout: true }, .45);
+  const bottomShell = builder.component('shaft', 'bottom bracket shell', assembly, bottomBracket, [.16, .3, .16], 'steel', 'fixed', { bicycle_hub: true }, .52);
+  frameBodies.forEach((body, index) => builder.connect(index ? frameBodies[index - 1] : rearDropout, body, 'mechanical', 'welded_tube_node'));
+  builder.connect(frameBodies.at(-1)!, frontDropout, 'mechanical', 'front_fork_dropout');
+  builder.connect(bottomShell, frameBodies.find((id) => builder.components.find((item) => item.id === id)?.role === 'seat tube')!, 'mechanical', 'bottom_bracket_shell');
+  builder.connect(stem, handlebar, 'mechanical', 'cockpit_clamp');
+
+  const rearWheel = builder.component('wheel', 'rear bicycle wheel', assembly, rear, [1.36, .12, 1.36], 'rubber', 'dynamic', { bicycle_wheel: true, friction: 1.05 }, 2.9);
+  const frontWheel = builder.component('wheel', 'front bicycle wheel', assembly, front, [1.36, .12, 1.36], 'rubber', 'dynamic', { bicycle_wheel: true, friction: 1.05 }, 2.6);
+  const centeredRevolute = (supportId: string, rotaryId: string) => {
+    const support = builder.components.find((item) => item.id === supportId)!;
+    const rotary = builder.components.find((item) => item.id === rotaryId)!;
+    const id = builder.joint('revolute', supportId, rotaryId, [0, 0, 1]);
+    const joint = builder.joints.find((item) => item.id === id)!;
+    joint.anchorA = rotary.position.map((value, index) => value - support.position[index]) as Vec3;
+    joint.anchorB = [0, 0, 0];
+    joint.limits = undefined;
+    return id;
+  };
+  centeredRevolute(rearDropout, rearWheel);
+  centeredRevolute(frontDropout, frontWheel);
+
+  const seatPost = addTube('seat post', seatCluster, [-.52, 1.72, 0], .05);
+  const seat = builder.component('plate', 'rider saddle', assembly, [-.58, 1.78, 0], [.48, .11, .26], 'polymer', 'fixed', { bicycle_seat: true }, .48);
+  builder.connect(seatPost, frameBodies.find((id) => builder.components.find((item) => item.id === id)?.role === 'seat tube')!, 'mechanical', 'seat_post_clamp');
+  builder.connect(seatPost, seat, 'mechanical', 'saddle_clamp');
+
+  const crank = builder.component('gear', 'pedal crank sprocket', assembly, bottomBracket, [.4, .075, .4], 'steel', 'dynamic', { teeth: 42, mesh_efficiency: .94, bicycle_sprocket: true }, .72);
+  const crankJoint = centeredRevolute(bottomShell, crank);
+  const chainCenter: Vec3 = [(rear[0] + bottomBracket[0]) / 2, (rear[1] + bottomBracket[1]) / 2, .12];
+  const chain = builder.component('belt', 'bicycle drive chain', assembly, chainCenter, [Math.abs(bottomBracket[0] - rear[0]) + .4, .035, .22], 'steel', 'kinematic', { bicycle_chain: true }, .55);
+  builder.joint('belt', crank, rearWheel, [0, 0, 1], { ratio: 2.65 });
+  builder.connect(chain, crank, 'mechanical', 'chainring_engagement');
+  builder.connect(chain, rearWheel, 'mechanical', 'rear_sprocket_engagement');
+
+  const driveMotor = builder.component('motor', 'mid-drive electric motor', assembly, [-.06, .87, .16], [.36, .18, .36], 'aluminum', 'kinematic', { bicycle_hub_motor: true }, 3.8);
+  builder.motor(driveMotor, crankJoint, 150, 145);
+  builder.connect(driveMotor, bottomShell, 'mechanical', 'motor_mount');
+  builder.connect(driveMotor, crank, 'power', 'pedal_assist_torque');
+  const battery = builder.component('controller', 'removable traction battery', assembly, [.17, 1.16, 0], [.62, .24, .18], 'polymer', 'fixed', { bicycle_battery: true }, 4.6);
+  builder.rotate(battery, [0, 0, .5]);
+  const controller = builder.component('controller', 'electric drive controller', assembly, [-.65, 1.23, 0], [.34, .18, .16], 'polymer', 'fixed', { bicycle_controller: true }, .38);
+  const speedSensorBody = builder.component('sensor', 'wheel speed pickup', assembly, [1.04, .88, .13], [.12, .12, .1], 'polymer', 'fixed', { bicycle_sensor: true }, .08);
+  const speedSensor = builder.sensor(speedSensorBody, 'speed', 'wheel_speed', frontWheel, 3);
+  builder.control('electric pedal assist', 'pid', [speedSensor], [], 'blend rider cadence and motor torque while limiting wheel speed', 25);
+  builder.connect(battery, controller, 'power', 'dc_bus');
+  builder.connect(controller, driveMotor, 'signal', 'motor_command');
+  builder.connect(speedSensorBody, controller, 'signal', 'wheel_speed_feedback');
+  builder.connect(battery, frameBodies[0], 'mechanical', 'battery_mount');
+  builder.connect(controller, frameBodies[0], 'mechanical', 'controller_mount');
+  builder.connect(speedSensorBody, frameBodies.find((id) => builder.components.find((item) => item.id === id)?.role.includes('front fork'))!, 'mechanical', 'sensor_bracket');
+
+  if (/solar/.test(text)) {
+    const rackLeft = addTube('solar rack left stay', [rear[0], rear[1] + .12, -.22], [-1.02, 1.55, -.22], .04);
+    const rackRight = addTube('solar rack right stay', [rear[0], rear[1] + .12, .22], [-1.02, 1.55, .22], .04);
+    const panel = builder.component('plate', 'fixed solar charging panel', assembly, [-1.13, 1.62, 0], [1.2, .065, .58], 'composite', 'fixed', { panel: true, bicycle_solar_panel: true }, 2.3);
+    builder.rotate(panel, [0, 0, -.08]);
+    builder.connect(rearDropout, rackLeft, 'mechanical', 'solar_rack_stay');
+    builder.connect(rearDropout, rackRight, 'mechanical', 'solar_rack_stay');
+    builder.connect(rackLeft, panel, 'mechanical', 'solar_rack_mount');
+    builder.connect(rackRight, panel, 'mechanical', 'solar_rack_mount');
+    builder.connect(panel, battery, 'power', 'solar_charge_bus');
+  }
+
+  return { id: 'single-track-vehicle', mountId: frameBodies[0], editableId: speedSensorBody, handles: ['structure', 'mobile', 'measure', 'rotate'], driveId: driveMotor, outputId: rearWheel };
 }
 
 function addRotaryTransmission(context: ModuleContext): ModuleResult {
@@ -897,7 +1007,8 @@ const moduleRules: ModuleRule[] = [
   { id: 'hvac-brazing-fixture', matches: ({ text }) => /(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/.test(text), compose: addBrazingFixture },
   { id: 'brazed-plate-heat-exchanger', matches: ({ text }) => /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text), compose: addBrazedPlateHeatExchanger },
   { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
-  { id: 'rolling-support', matches: ({ capabilities }) => capabilities.includes('mobile'), compose: addRollingSupport },
+  { id: 'single-track-vehicle', matches: ({ text }) => isBicycleGoal(text), compose: addSingleTrackVehicle },
+  { id: 'rolling-support', matches: ({ text, capabilities }) => capabilities.includes('mobile') && !isBicycleGoal(text), compose: addRollingSupport },
   { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },
   { id: 'serial-linkage', matches: ({ capabilities }) => capabilities.includes('manipulate'), compose: addSerialLinkage },
   { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addCableSuspension },
@@ -915,7 +1026,10 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   if (brief.length > 500) throw new Error('OUT_OF_RANGE: Keep the engineering brief under 500 characters.');
   if (/\b(?:do not|don['’]?t|never)\s+(?:build|design|create|engineer)\b/i.test(brief)) throw new Error('NEGATED_GOAL: The brief explicitly says not to engineer the system.');
 
-  const text = brief.toLowerCase();
+  // The original brief remains visible and auditable. A small synonym layer is
+  // used only for topology selection so spelling mistakes cannot silently turn
+  // the requested object into a different machine family.
+  const text = canonicalizeMechanicalTerms(brief).toLowerCase();
   const capabilities = inferCapabilities(text);
   const values = parseValues(text);
   const constraints = constraintsFor(text, capabilities, values);

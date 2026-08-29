@@ -126,6 +126,32 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(trackedRover.components.some((item) => item.role === 'dual light sensor')).toBe(false);
   });
 
+  it('treats power sources as modifiers and assembles a misspelled solar e-bike as one machine', () => {
+    const plan = compileDesignBrief('build a solar powered electric bycicle');
+    expect(plan.goal.machineName).toBe('Solar electric bicycle');
+    expect(plan.goal.domain).toBe('Personal electric mobility');
+    expect(plan.assemblies.map((item) => item.name)).toEqual(['engineered world', 'bicycle assembly']);
+    expect(plan.components.filter((item) => item.parameters?.bicycle_wheel)).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.bicycle_tube).length).toBeGreaterThanOrEqual(12);
+    expect(plan.components.some((item) => item.role === 'rider saddle')).toBe(true);
+    expect(plan.components.some((item) => item.role === 'handlebar')).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.bicycle_chain)).toBe(true);
+    expect(plan.components.some((item) => item.role === 'mid-drive electric motor')).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.bicycle_battery)).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.bicycle_solar_panel)).toBe(true);
+    expect(plan.components.some((item) => item.role === 'tracked panel')).toBe(false);
+    expect(plan.components.some((item) => item.role === 'mobile chassis deck')).toBe(false);
+    expect(plan.components.some((item) => item.role.startsWith('road wheel'))).toBe(false);
+    expect(plan.goal.capabilities).not.toContain('track');
+    expect(plan.goal.summary).toContain('single-track-vehicle');
+  });
+
+  it('still builds an active solar tracker only when the prompt asks it to track', () => {
+    const tracker = compileDesignBrief('Build a solar tracker that follows the sun using one actuator.');
+    expect(tracker.components.some((item) => item.role === 'tracked panel')).toBe(true);
+    expect(tracker.goal.capabilities).toContain('track');
+  });
+
   it('constructs explicit novel mechanisms and parses paraphrased geometry', () => {
     const pump = compileDesignBrief('Build a reciprocating pump with a flywheel that delivers 20 liters per minute.');
     expect(pump.components.some((item) => item.role === 'reciprocating plunger')).toBe(true);

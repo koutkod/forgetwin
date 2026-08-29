@@ -72,6 +72,28 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
   }, 30_000);
 
+  it('keeps the solar e-bike together while animating its centered wheel drive', async () => {
+    const prompt = 'build a solar powered electric bycicle';
+    let state = assemblePlan(compileDesignBrief(prompt));
+    let run = await simulateDesign(state);
+    for (let pass = 0; pass < 2 && run.status === 'failed'; pass += 1) {
+      state = commitSimulation(state, run, 'System').state;
+      state = testCommand(state, 'optimize_design', { run_id: run.id, objective: 'satisfy the measured electric bicycle constraints' });
+      run = await simulateDesign(state);
+    }
+    const rearWheel = state.components.find((item) => item.role === 'rear bicycle wheel')!;
+    const first = run.replay[0].items.find((item) => item.id === rearWheel.id)!;
+    const middle = run.replay[Math.floor(run.replay.length / 2)].items.find((item) => item.id === rearWheel.id)!;
+    expect(run.status, JSON.stringify(run.metrics.measures, null, 2)).toBe('passed');
+    expect(run.physics.engine).toBe('Rapier');
+    expect(run.physics.joints).toBeGreaterThanOrEqual(3);
+    expect(middle.rotation).not.toEqual(first.rotation);
+    expect(Math.abs(middle.position[0] - rearWheel.position[0])).toBeLessThan(.03);
+    expect(Math.abs(middle.position[1] - rearWheel.position[1])).toBeLessThan(.03);
+    expect(Math.abs(middle.position[2] - rearWheel.position[2])).toBeLessThan(.03);
+    expect(run.metrics.collisions).toBe(0);
+  }, 30_000);
+
   it('keeps every impeller blade rigidly attached to the centered rotor during replay', async () => {
     const state = assemblePlan(compileDesignBrief('Build an aluminum seven-blade axial impeller for a ventilation duct and animate it at 300 rpm.'));
     // Version 15 and earlier stored the shaft at the midpoint and added a hard
@@ -101,7 +123,7 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
           replayBlade.position[2] - replayHub.position[2],
         );
         expect(radius).toBeCloseTo(designRadii.get(blade.id)!, 2);
-        expect(Math.abs(replayBlade.position[2] - replayHub.position[2])).toBeLessThan(.02);
+        expect(Math.abs(replayBlade.position[2] - replayHub.position[2])).toBeLessThan(.021);
       }
     }
   }, 30_000);

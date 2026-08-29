@@ -376,6 +376,8 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   const RAPIER = await loadRapier();
   const world = new RAPIER.World({ x: state.world.gravity[0], y: state.world.gravity[1], z: state.world.gravity[2] });
   world.timestep = DT;
+  world.numSolverIterations = 8;
+  world.numInternalPgsIterations = 2;
   const queue = new RAPIER.EventQueue(true);
   const bodyById = new Map<string, ReturnType<typeof world.createRigidBody>>();
   const colliderOwner = new Map<number, string>();
@@ -394,15 +396,21 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     if (rotorBladeIds.has(item.id)) continue;
     const descriptor = item.bodyType === 'fixed' ? RAPIER.RigidBodyDesc.fixed() : item.bodyType === 'kinematic' ? RAPIER.RigidBodyDesc.kinematicVelocityBased() : RAPIER.RigidBodyDesc.dynamic();
     descriptor.setTranslation(item.position[0], item.position[1], item.position[2]).setRotation(eulerQuaternion(item.rotation)).setLinearDamping(.28).setAngularDamping(.38);
+    if (item.parameters.bicycle_wheel || item.parameters.bicycle_sprocket) descriptor.setAdditionalSolverIterations(10);
     const body = world.createRigidBody(descriptor);
     const half = item.dimensions.map((value) => Math.max(.01, value / 2)) as Vec3;
-    const colliderDescriptor = item.shape === 'sphere' ? RAPIER.ColliderDesc.ball(half[0]) : item.shape === 'cylinder' ? RAPIER.ColliderDesc.cylinder(half[1], half[0]) : item.shape === 'capsule' ? RAPIER.ColliderDesc.capsule(Math.max(.02, half[1] - half[0]), half[0]) : RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]);
+    // Bicycle wheels use an open spoked visual. Their reduced-order physics
+    // body is the rotating hub, not a solid disc that would incorrectly strike
+    // every fork and frame tube passing through the wheel plane.
+    const colliderDescriptor = item.parameters.bicycle_wheel
+      ? RAPIER.ColliderDesc.cylinder(half[1], Math.min(.13, half[0] * .2))
+      : item.shape === 'sphere' ? RAPIER.ColliderDesc.ball(half[0]) : item.shape === 'cylinder' ? RAPIER.ColliderDesc.cylinder(half[1], half[0]) : item.shape === 'capsule' ? RAPIER.ColliderDesc.capsule(Math.max(.02, half[1] - half[0]), half[0]) : RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]);
     const material = materialFor(item.materialId);
     colliderDescriptor.setFriction(material.friction).setRestitution(material.restitution).setMass(item.mass).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-    if (item.parameters.cad_form === 'rotor_hub') colliderDescriptor.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
+    if (item.parameters.cad_form === 'rotor_hub' || item.parameters.bicycle_wheel) colliderDescriptor.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
     // The duct shroud is represented by a torus in the editor. A solid box
     // collider would incorrectly fill its opening and jam the rotor.
-    if (item.parameters.cad_form !== 'rotor_shroud') {
+    if (item.parameters.cad_form !== 'rotor_shroud' && !item.parameters.bicycle_chain) {
       const collider = world.createCollider(colliderDescriptor, body);
       colliderOwner.set(collider.handle, item.id);
     }
