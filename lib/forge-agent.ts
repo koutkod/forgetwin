@@ -90,6 +90,15 @@ export type AgentEdit = z.infer<typeof agentEditSchema>;
 export type AgentEditAction = z.infer<typeof agentEditActionSchema>;
 export type AgentRuntimeMode = 'checking' | 'server-model' | 'session-model' | 'deterministic';
 
+export function normalizeRedesignSequence(decision: AgentRedesign) {
+  const evidence = decision.tool_sequence.filter((step) => step.tool !== 'optimize_design' && step.tool !== 'run_simulation').slice(0, 6);
+  const selectedOptimization = decision.tool_sequence.find((step) => step.tool === 'optimize_design');
+  const optimization = selectedOptimization
+    ? { ...selectedOptimization, objective: selectedOptimization.objective || decision.objective }
+    : { tool: 'optimize_design' as const, metric: '' as const, objective: decision.objective };
+  return [...evidence, optimization, { tool: 'run_simulation' as const, metric: '' as const, objective: '' }];
+}
+
 export interface AgentTraceItem {
   id: string;
   kind: 'goal' | 'reasoning' | 'action' | 'observation' | 'complete' | 'fallback' | 'error';

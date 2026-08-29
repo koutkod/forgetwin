@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { ForgeScene } from '../components/forge/forge-scene';
 import {
-  getAgentStatus, requestAgentEdit, requestAgentPlan, requestAgentRedesign,
+  getAgentStatus, normalizeRedesignSequence, requestAgentEdit, requestAgentPlan, requestAgentRedesign,
   type AgentEditAction, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
@@ -91,9 +91,7 @@ export function ForgeTwinApp() {
           human_locks: getSnapshot().humanConstraints.map((item) => ({ component_id: item.componentId, fields: item.fields })),
         }, agentKey || undefined, signal);
         setAgentModel(response.model);
-        steps = response.result.tool_sequence;
-        if (!steps.some((step) => step.tool === 'optimize_design')) steps = [...steps.filter((step) => step.tool !== 'run_simulation'), { tool: 'optimize_design', metric: '', objective: response.result.objective }, ...steps.filter((step) => step.tool === 'run_simulation')];
-        if (steps.at(-1)?.tool !== 'run_simulation') steps.push({ tool: 'run_simulation', metric: '', objective: '' });
+        steps = normalizeRedesignSequence(response.result);
         addTrace('reasoning', 'Model diagnosed the failed trial', response.result.diagnosis);
         addTrace('action', 'Model selected the evidence loop', steps.map((step) => step.tool).join(' → '));
       } catch (caught) {

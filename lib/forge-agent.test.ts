@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { POST } from '../app/api/agent/route';
 import {
-  agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, requestAgentPlan,
+  agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, normalizeRedesignSequence, requestAgentPlan,
 } from './forge-agent';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -29,6 +29,26 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(agentEditSchema.parse({ summary: 'Widen the existing crane base while preserving every other component.', actions: [action] }).actions[0].tool).toBe('set_dimensions');
     expect(agentEditSchema.parse({ summary: 'Mount a purpose-built LED headlight on the existing front structure.', actions: [{ ...action, tool: 'create_component', component_id: 'front-headlight', primitive: 'light', role: 'front LED headlight', dimensions: [.32, .22, .22], mass: .24 }] }).actions[0].primitive).toBe('light');
     expect(() => agentEditSchema.parse({ summary: 'Delete all files outside the engineering world.', actions: [{ ...action, tool: 'run_shell' }] })).toThrow();
+  });
+
+  it('normalizes model redesigns to one mutation followed by one fresh simulation', () => {
+    const decision = agentRedesignSchema.parse({
+      diagnosis: 'Platform tilt and assembly integrity are outside the measured envelope.',
+      objective: 'Improve stability and connectivity while preserving human locks.',
+      tool_sequence: [
+        { tool: 'inspect_telemetry', metric: '', objective: '' },
+        { tool: 'measure_constraint', metric: 'platform_tilt', objective: '' },
+        { tool: 'optimize_design', metric: '', objective: 'Increase control authority.' },
+        { tool: 'optimize_design', metric: '', objective: 'Reconnect every component.' },
+        { tool: 'run_simulation', metric: '', objective: '' },
+        { tool: 'run_simulation', metric: '', objective: '' },
+      ],
+    });
+    const sequence = normalizeRedesignSequence(decision);
+    expect(sequence.filter((step) => step.tool === 'optimize_design')).toHaveLength(1);
+    expect(sequence.filter((step) => step.tool === 'run_simulation')).toHaveLength(1);
+    expect(sequence.at(-1)?.tool).toBe('run_simulation');
+    expect(sequence.map((step) => step.tool)).toEqual(['inspect_telemetry', 'measure_constraint', 'optimize_design', 'run_simulation']);
   });
 
   it('keeps a temporary key in the request header and validates the model plan', async () => {
