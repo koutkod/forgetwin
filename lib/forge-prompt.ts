@@ -730,7 +730,9 @@ function addParametricCadPart(context: ModuleContext): ModuleResult {
       builder.joint('fixed', support, shroud);
     }
     const hub = builder.component('wheel', 'machined rotor hub', assembly, [0, 2.1, 0], [1, .34, 1], 'aluminum', 'dynamic', { cad_form: 'rotor_hub' });
-    const shaftJoint = builder.joint('revolute', support, hub, [0, 0, 1], { limits: [-Math.PI, Math.PI] });
+    // The bearing axis passes through the hub center. A midpoint anchor makes the
+    // complete rotor orbit the pedestal instead of spinning concentrically.
+    const shaftJoint = builder.joint('revolute', support, hub, [0, 0, 1], { anchorA: [0, .75, .42], anchorB: [0, 0, 0] });
     const bladeCount = countBefore(text, 'blade', 6, 2, 12);
     const bladeMaterial = /\baluminum\b/.test(text) ? 'aluminum' : /\bsteel\b/.test(text) ? 'steel' : 'composite';
     for (let index = 0; index < bladeCount; index += 1) {

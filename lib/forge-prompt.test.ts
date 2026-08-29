@@ -65,6 +65,10 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(impeller.components.some((item) => item.parameters?.cad_form === 'rotor_hub')).toBe(true);
     expect(impeller.components.filter((item) => item.parameters?.cad_form === 'aero_blade')).toHaveLength(6);
     expect(impeller.joints.some((item) => item.type === 'revolute')).toBe(true);
+    const rotorHub = impeller.components.find((item) => item.parameters?.cad_form === 'rotor_hub')!;
+    const bearingJoint = impeller.joints.find((item) => item.type === 'revolute' && item.componentB === rotorHub.id)!;
+    expect(bearingJoint.anchorB).toEqual([0, 0, 0]);
+    expect(bearingJoint.limits).toBeUndefined();
     expect(impeller.motors.length).toBeGreaterThan(0);
     expect(impeller.components.every((item) => item.rotation.every((value) => value >= -Math.PI && value <= Math.PI))).toBe(true);
     expect(impeller.components.some((item) => item.primitive === 'conveyor')).toBe(false);

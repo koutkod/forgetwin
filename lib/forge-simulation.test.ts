@@ -67,9 +67,34 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     const first = run.replay[0].items.find((item) => item.id === hub.id)!;
     const middle = run.replay[Math.floor(run.replay.length / 2)].items.find((item) => item.id === hub.id)!;
     expect(run.status, JSON.stringify(run.metrics.measures, null, 2)).toBe('passed');
-    expect(run.physics.joints).toBeGreaterThanOrEqual(7);
+    expect(run.physics.joints).toBe(1);
     expect(middle.rotation).not.toEqual(first.rotation);
     expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
+  }, 30_000);
+
+  it('keeps every impeller blade rigidly attached to the centered rotor during replay', async () => {
+    const state = assemblePlan(compileDesignBrief('Build an aluminum seven-blade axial impeller for a ventilation duct and animate it at 300 rpm.'));
+    const run = await simulateDesign(state);
+    const hub = state.components.find((item) => item.parameters.cad_form === 'rotor_hub')!;
+    const blades = state.components.filter((item) => item.parameters.cad_form === 'aero_blade');
+    const designRadii = new Map(blades.map((blade) => [blade.id, Math.hypot(blade.position[0] - hub.position[0], blade.position[1] - hub.position[1], blade.position[2] - hub.position[2])]));
+
+    for (const frame of [run.replay[0], run.replay[Math.floor(run.replay.length / 2)], run.replay.at(-1)!]) {
+      const replayHub = frame.items.find((item) => item.id === hub.id)!;
+      expect(Math.abs(replayHub.position[0] - hub.position[0])).toBeLessThan(.02);
+      expect(Math.abs(replayHub.position[1] - hub.position[1])).toBeLessThan(.02);
+      expect(Math.abs(replayHub.position[2] - hub.position[2])).toBeLessThan(.02);
+      for (const blade of blades) {
+        const replayBlade = frame.items.find((item) => item.id === blade.id)!;
+        const radius = Math.hypot(
+          replayBlade.position[0] - replayHub.position[0],
+          replayBlade.position[1] - replayHub.position[1],
+          replayBlade.position[2] - replayHub.position[2],
+        );
+        expect(radius).toBeCloseTo(designRadii.get(blade.id)!, 2);
+        expect(Math.abs(replayBlade.position[2] - replayHub.position[2])).toBeLessThan(.02);
+      }
+    }
   }, 30_000);
 
   it('simulates a bridge without an actuator and improves its structural evidence', async () => {

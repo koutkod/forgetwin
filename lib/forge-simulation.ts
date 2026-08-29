@@ -70,6 +70,31 @@ function eulerQuaternion(rotation: Vec3) {
   return { x: sx * cy * cz - cx * sy * sz, y: cx * sy * cz + sx * cy * sz, z: cx * cy * sz - sx * sy * cz, w: cx * cy * cz + sx * sy * sz };
 }
 
+type QuaternionLike = { x: number; y: number; z: number; w: number };
+
+function multiplyQuaternion(a: QuaternionLike, b: QuaternionLike): QuaternionLike {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+}
+
+function rotateVectorByQuaternion(vector: Vec3, quaternion: QuaternionLike): Vec3 {
+  const [x, y, z] = vector;
+  const { x: qx, y: qy, z: qz, w: qw } = quaternion;
+  const ix = qw * x + qy * z - qz * y;
+  const iy = qw * y + qz * x - qx * z;
+  const iz = qw * z + qx * y - qy * x;
+  const iw = -qx * x - qy * y - qz * z;
+  return [
+    ix * qw + iw * -qx + iy * -qz - iz * -qy,
+    iy * qw + iw * -qy + iz * -qx - ix * -qz,
+    iz * qw + iw * -qz + ix * -qy - iy * -qx,
+  ];
+}
+
 function connectivityRatio(state: ForgeState) {
   if (state.components.length <= 1) return 1;
   const parent = new Map(state.components.map((item) => [item.id, item.id]));
@@ -126,7 +151,8 @@ function worldAnalysis(state: ForgeState) {
     const area = Math.max(.0005, item.dimensions[1] * item.dimensions[2]);
     return sum + materialFor(item.materialId).strength * 1e6 * area * .000152;
   }, 0) / 9.81;
-  const angularTravel = Math.max(0, ...state.joints.filter((item) => item.type === 'revolute' && item.limits).map((item) => Math.abs(item.limits![1] - item.limits![0]) * 180 / Math.PI));
+  const continuousTravel = state.joints.some((item) => item.type === 'revolute' && !item.limits) ? motorRpm * 6 * state.world.duration : 0;
+  const angularTravel = Math.max(continuousTravel, ...state.joints.filter((item) => item.type === 'revolute' && item.limits).map((item) => Math.abs(item.limits![1] - item.limits![0]) * 180 / Math.PI), 0);
   const piston = state.components.find((item) => item.primitive === 'piston' && Number(item.parameters.bore_m) > 0);
   const bore = Number(piston?.parameters.bore_m ?? 0);
   const stroke = Number(piston?.parameters.stroke_m ?? 0);
@@ -169,7 +195,7 @@ function source(metric: string) {
     sorting_accuracy: 'classification sensor count and calibrated routing-control quality', collisions: 'harmful Rapier contact episodes only',
     drop_height: 'vertical difference between active transport and transfer surfaces', control_error: 'controller gain and current sensor calibration offset',
     assembly_integrity: 'largest mechanically connected graph component', component_count: 'physical body count in the shared world',
-    flow_rate: 'piston swept volume × crank rpm × volumetric efficiency', angular_travel: 'active revolute-joint limit envelope',
+    flow_rate: 'piston swept volume × crank rpm × volumetric efficiency', angular_travel: 'continuous motor travel or bounded revolute-joint envelope over simulated time',
     alignment_error: 'vision and position sensor coverage combined with fixture-controller calibration',
     clamp_force: 'sum of registered hold-down actuator force limits',
     plate_count: 'count of individually modeled corrugated heat-transfer plates',
@@ -353,11 +379,19 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   const queue = new RAPIER.EventQueue(true);
   const bodyById = new Map<string, ReturnType<typeof world.createRigidBody>>();
   const colliderOwner = new Map<number, string>();
+  const rotorHub = state.components.find((item) => item.parameters.cad_form === 'rotor_hub');
+  const rotorBlades = rotorHub ? state.components.filter((item) => item.assemblyId === rotorHub.assemblyId && item.parameters.cad_form === 'aero_blade') : [];
+  const rotorBladeIds = new Set(rotorBlades.map((item) => item.id));
+  const isCompoundRotorJoint = (item: Joint) => Boolean(rotorHub && item.type === 'fixed' && ((item.componentA === rotorHub.id && rotorBladeIds.has(item.componentB)) || (item.componentB === rotorHub.id && rotorBladeIds.has(item.componentA))));
   const floor = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -.16, 0));
   const floorCollider = world.createCollider(RAPIER.ColliderDesc.cuboid(state.world.bounds[0] / 2, .12, state.world.bounds[2] / 2).setFriction(.85).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS), floor);
   colliderOwner.set(floorCollider.handle, 'world-floor');
 
   for (const item of state.components) {
+    // A machined rotor is one rigid body. Its authored blade components become
+    // colliders on the hub below instead of independent bodies connected by a
+    // stiff constraint network, which is both more accurate and more stable.
+    if (rotorBladeIds.has(item.id)) continue;
     const descriptor = item.bodyType === 'fixed' ? RAPIER.RigidBodyDesc.fixed() : item.bodyType === 'kinematic' ? RAPIER.RigidBodyDesc.kinematicVelocityBased() : RAPIER.RigidBodyDesc.dynamic();
     descriptor.setTranslation(item.position[0], item.position[1], item.position[2]).setRotation(eulerQuaternion(item.rotation)).setLinearDamping(.28).setAngularDamping(.38);
     const body = world.createRigidBody(descriptor);
@@ -365,15 +399,41 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     const colliderDescriptor = item.shape === 'sphere' ? RAPIER.ColliderDesc.ball(half[0]) : item.shape === 'cylinder' ? RAPIER.ColliderDesc.cylinder(half[1], half[0]) : item.shape === 'capsule' ? RAPIER.ColliderDesc.capsule(Math.max(.02, half[1] - half[0]), half[0]) : RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]);
     const material = materialFor(item.materialId);
     colliderDescriptor.setFriction(material.friction).setRestitution(material.restitution).setMass(item.mass).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-    const collider = world.createCollider(colliderDescriptor, body);
-    bodyById.set(item.id, body); colliderOwner.set(collider.handle, item.id);
+    if (item.parameters.cad_form === 'rotor_hub') colliderDescriptor.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
+    // The duct shroud is represented by a torus in the editor. A solid box
+    // collider would incorrectly fill its opening and jam the rotor.
+    if (item.parameters.cad_form !== 'rotor_shroud') {
+      const collider = world.createCollider(colliderDescriptor, body);
+      colliderOwner.set(collider.handle, item.id);
+    }
+    bodyById.set(item.id, body);
+  }
+
+  if (rotorHub && rotorBlades.length) {
+    const hubBody = bodyById.get(rotorHub.id);
+    if (!hubBody) throw new Error('INVALID_DESIGN: rotor hub body was not instantiated.');
+    for (const blade of rotorBlades) {
+      const half = blade.dimensions.map((value) => Math.max(.01, value / 2)) as Vec3;
+      const colliderDescriptor = RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]);
+      const material = materialFor(blade.materialId);
+      colliderDescriptor
+        .setTranslation(blade.position[0] - rotorHub.position[0], blade.position[1] - rotorHub.position[1], blade.position[2] - rotorHub.position[2])
+        .setRotation(eulerQuaternion(blade.rotation))
+        .setFriction(material.friction)
+        .setRestitution(material.restitution)
+        .setMass(blade.mass)
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+      const collider = world.createCollider(colliderDescriptor, hubBody);
+      bodyById.set(blade.id, hubBody);
+      colliderOwner.set(collider.handle, blade.id);
+    }
   }
 
   let instantiatedJoints = 0;
-  const expectedJoints = state.joints.filter((item) => !['gear', 'belt'].includes(item.type) && !(bodyById.get(item.componentA)?.isFixed() && bodyById.get(item.componentB)?.isFixed())).length;
+  const expectedJoints = state.joints.filter((item) => !['gear', 'belt'].includes(item.type) && !isCompoundRotorJoint(item) && !(bodyById.get(item.componentA)?.isFixed() && bodyById.get(item.componentB)?.isFixed())).length;
   for (const item of state.joints) {
     const bodyA = bodyById.get(item.componentA), bodyB = bodyById.get(item.componentB), data = jointData(RAPIER, item);
-    if (!bodyA || !bodyB || !data || (bodyA.isFixed() && bodyB.isFixed())) continue;
+    if (!bodyA || !bodyB || !data || isCompoundRotorJoint(item) || (bodyA.isFixed() && bodyB.isFixed())) continue;
     try { world.createImpulseJoint(data, bodyA, bodyB, true); instantiatedJoints += 1; }
     catch { throw new Error(`INVALID_DESIGN: Rapier could not instantiate joint ${item.id}.`); }
   }
@@ -482,10 +542,25 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
         if (item.bodyType === 'fixed') continue;
         const body = bodyById.get(item.id); if (!body) continue;
         const p = body.translation(), q = body.rotation(), v = body.linvel();
-        const speed = Math.hypot(v.x, v.y, v.z);
-        peakSpeed = Math.max(peakSpeed, speed); peakHeight = Math.max(peakHeight, p.y);
-        if (![p.x, p.y, p.z, q.x, q.y, q.z, q.w, v.x, v.y, v.z].every(Number.isFinite)) physicsHealthy = false;
-        items.push({ id: item.id, label: item.role, color: item.color, shape: item.shape, size: item.dimensions, position: [round(p.x, 3), round(p.y, 3), round(p.z, 3)], rotation: [round(q.x, 4), round(q.y, 4), round(q.z, 4), round(q.w, 4)], velocity: [round(v.x, 3), round(v.y, 3), round(v.z, 3)], state: p.y < -.3 ? 'failed' : progress > .97 ? 'delivered' : 'moving' });
+        let replayPosition: Vec3 = [p.x, p.y, p.z];
+        let replayRotation: QuaternionLike = q;
+        let replayVelocity: Vec3 = [v.x, v.y, v.z];
+        if (rotorHub && rotorBladeIds.has(item.id)) {
+          const localOffset = item.position.map((value, index) => value - rotorHub.position[index]) as Vec3;
+          const offset = rotateVectorByQuaternion(localOffset, q);
+          const angular = body.angvel();
+          replayPosition = [p.x + offset[0], p.y + offset[1], p.z + offset[2]];
+          replayRotation = multiplyQuaternion(q, eulerQuaternion(item.rotation));
+          replayVelocity = [
+            v.x + angular.y * offset[2] - angular.z * offset[1],
+            v.y + angular.z * offset[0] - angular.x * offset[2],
+            v.z + angular.x * offset[1] - angular.y * offset[0],
+          ];
+        }
+        const speed = Math.hypot(...replayVelocity);
+        peakSpeed = Math.max(peakSpeed, speed); peakHeight = Math.max(peakHeight, replayPosition[1]);
+        if (![...replayPosition, replayRotation.x, replayRotation.y, replayRotation.z, replayRotation.w, ...replayVelocity].every(Number.isFinite)) physicsHealthy = false;
+        items.push({ id: item.id, label: item.role, color: item.color, shape: item.shape, size: item.dimensions, position: replayPosition.map((value) => round(value, 3)) as Vec3, rotation: [round(replayRotation.x, 4), round(replayRotation.y, 4), round(replayRotation.z, 4), round(replayRotation.w, 4)], velocity: replayVelocity.map((value) => round(value, 3)) as Vec3, state: replayPosition[1] < -.3 ? 'failed' : progress > .97 ? 'delivered' : 'moving' });
       }
       const routedPackages = state.goal!.capabilities.includes('classify') ? sortingPackages(state, progress) : [];
       if (routedPackages.length) items.push(...routedPackages);
@@ -520,6 +595,6 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     designRevision: state.designRevision, designHash: state.designHash, seed: SEED, startedAt: new Date().toISOString(), status: passed ? 'passed' : 'failed', metrics, telemetry, collisions, failures, replay, objective: runObjective,
     diagnosis: { summary: passed ? 'Every measured constraint is inside the current concept envelope.' : failures[0]?.title ?? 'The design needs another measured revision.', evidence: passed ? `${metrics.score}% of registered constraints pass from ${state.components.length} bodies and ${instantiatedJoints} instantiated Rapier joints.` : failures[0]?.detail ?? 'Review the fixed-step telemetry.', action: passed ? 'Save or perturb the design to test a new condition.' : `Apply ${suggested.length} causal changes to physical or control fields, then rerun the unchanged measurements.`, recommendations: suggested },
     configuration: { editablePosition: [...editable.position], componentCount: state.components.length, jointCount: state.joints.length, totalMass: metrics.totalMass, optimizationLevel: state.optimizationLevel },
-    physics: { engine: 'Rapier', timestepHz: 60, simulatedSeconds: state.world.duration, model: state.goal!.simulationModel, seed: SEED, bodies: state.components.length + (testBody ? 2 : 1), joints: instantiatedJoints },
+    physics: { engine: 'Rapier', timestepHz: 60, simulatedSeconds: state.world.duration, model: state.goal!.simulationModel, seed: SEED, bodies: state.components.length - rotorBlades.length + (testBody ? 2 : 1), joints: instantiatedJoints },
   };
 }
