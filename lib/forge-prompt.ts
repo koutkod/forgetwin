@@ -12,8 +12,25 @@ const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u
 const canonicalizeMechanicalTerms = (value: string) => value
   .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle')
   .replace(/\b(?:go\s*cart|go-cart|gokart)\b/gi, 'go-kart');
-const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text);
+const isBicycleBrakeGoal = (text: string) => /\b(?:bicycle|bike)\s+(?:disc\s+)?(?:brake|caliper)\b|\b(?:disc\s+)?(?:brake|caliper)\s+(?:assembly\s+)?(?:for|of)\s+(?:a\s+)?(?:bicycle|bike)\b/.test(text);
+const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text) && !isBicycleBrakeGoal(text);
 const isRoadVehicleGoal = (text: string) => !/\bcar\s+(?:jack|lift|hoist)\b/.test(text) && /\b(?:go-kart|kart|buggy|automobile|car|atv|all-terrain vehicle)\b/.test(text);
+const isCentrifugalPumpGoal = (text: string) => /\bcentrifugal(?:\s+(?:water|process|fluid|coolant))?\s+pump\b/.test(text);
+const isHydraulicPressGoal = (text: string) => /\b(?:hydraulic|shop|workshop|h-frame|c-frame)\s+press\b|\bpress\s+(?:machine|frame)\b/.test(text);
+const isBenchViseGoal = (text: string) => /\b(?:bench|machine|engineer'?s?)\s+vi[cs]e\b|\bvi[cs]e\s+(?:with|using|driven|assembly)\b/.test(text);
+const isBottleJackGoal = (text: string) => /\b(?:hydraulic\s+)?bottle\s+jack\b/.test(text);
+const isWindYawGoal = (text: string) => /\b(?:wind\s+)?turbine\b[^.!?]{0,55}\b(?:yaw|wind direction|nacelle orient)|\b(?:yaw|wind direction|nacelle orient)[^.!?]{0,55}\b(?:wind\s+)?turbine\b/.test(text);
+const isDrillPressGoal = (text: string) => /\b(?:bench(?:top)?\s+|floor\s+|radial\s+|magnetic\s+)?drill\s+press\b/.test(text);
+const isRackSteeringGoal = (text: string) => /\brack(?:[- ]and[- ])pinion\s+steering\b|\bsteering\s+rack(?:\s+and\s+pinion)?\b/.test(text);
+const isGrainMillGoal = (text: string) => /\b(?:grain|corn|wheat|cereal)\s+(?:roller\s+)?mill\b|\b(?:pedal|hand|manual)[- ]powered\s+(?:grain|corn|wheat|cereal)\s+mill\b/.test(text);
+const isStandaloneWinchGoal = (text: string) => /\bwinch\b/.test(text) && !/\b(?:crane|hoist)\b/.test(text);
+const isPlanetaryDifferentialGoal = (text: string) => /\bplanetary(?:\s+gear)?\s+differential\b|\bdifferential\s+planetary\s+gear(?:set|train)?\b/.test(text);
+const isScissorLiftGoal = (text: string) => /\bscissor(?:[- ]?type)?[- ]?(?:lift|table|platform)\b/.test(text);
+const pumpPart = '(?:bracket|housing|casing|impeller|shaft|seal|cover|flange|manifold|bearing)';
+const pumpName = 'centrifugal(?:\\s+(?:water|process|fluid|coolant))?\\s+pump';
+const isCentrifugalPumpPartGoal = (text: string) => new RegExp(
+  `\\b(?:${pumpName}\\s+(?:mounting\\s+)?${pumpPart}|${pumpPart}(?:\\s*(?:,|/|and)\\s*${pumpPart})*\\s+(?:for|of)\\s+(?:a\\s+)?${pumpName})\\b`,
+).test(text);
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || 'part';
 const numeric = (value: string | undefined, fallback: number) => value ? Number(value.replaceAll(',', '')) : fallback;
 const NUMBER_WORDS: Record<string, number> = {
@@ -46,6 +63,8 @@ interface ParsedValues {
   acceleration: number;
   angleDeg: number;
   strokeM: number;
+  forceN: number;
+  linearSpeedMps: number;
   maxComponents?: number;
   supplied: Set<string>;
 }
@@ -87,15 +106,24 @@ function parseValues(text: string): ParsedValues {
   };
   const liftCm = capture(text, /(?:lift|raise|raises|raising|travel|height)[^.!?]{0,45}?(\d+(?:\.\d+)?)\s*cm\b/i);
   if (liftCm) supplied.add('liftM');
+  const liftMm = liftCm ? undefined : capture(text, /(?:lift|raise|raises|raising|travel|height)[^.!?]{0,45}?(\d+(?:\.\d+)?)\s*mm\b/i);
+  if (liftMm) supplied.add('liftM');
+  const payloadTons = capture(text, /(\d+(?:\.\d+)?)[-\s]*(?:metric\s+)?(?:tonnes?|tons?)\b/i);
+  if (payloadTons) supplied.add('payloadKg');
   const strokeCm = capture(text, /(?:stroke|opens?|travel)[^.!?]{0,30}?(\d+(?:\.\d+)?)\s*cm\b/i);
   if (strokeCm) supplied.add('strokeM');
-  const strokeMeters = capture(text, /(?:(?:stroke|opens?|travel)[^.!?]{0,30}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b|(\d+(?:\.\d+)?)\s*(?:m|meters?)[^.!?]{0,18}?(?:linear\s+)?stroke\b)/i);
+  const strokeMm = capture(text, /(?:(?:stroke|opens?|travel)[^.!?]{0,30}?(\d+(?:\.\d+)?)\s*mm\b|(\d+(?:\.\d+)?)\s*mm\b[^.!?]{0,18}?(?:linear\s+)?stroke\b)/i);
+  if (strokeMm) supplied.add('strokeM');
+  const strokeMeters = capture(text, /(?:(?:stroke|opens?|travel)[^.!?]{0,30}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b|(\d+(?:\.\d+)?)\s*(?:m|meters?)\b[^.!?]{0,18}?(?:linear\s+)?stroke\b)/i);
   if (strokeMeters) supplied.add('strokeM');
+  const forceKn = capture(text, /(\d+(?:,\d{3})*(?:\.\d+)?)\s*k\s*n\b/i);
+  const forceNewtons = forceKn ? undefined : capture(text, /(?:press(?:ing)?\s+force|appl(?:y|ies|ying))[^.!?]{0,24}?(\d+(?:,\d{3})*(?:\.\d+)?)\s*n\b/i);
+  if (forceKn || forceNewtons) supplied.add('forceN');
   const maxComponents = capture(text, /(?:no more than|at most|maximum(?: of)?|using)\s+(\d+)\s+(?:components?|parts?)/i);
   if (maxComponents) supplied.add('maxComponents');
   return {
-    payloadKg: read('payloadKg', /(\d+(?:,\d{3})*(?:\.\d+)?)\s*kg\b/i, 25),
-    liftM: liftCm ? numeric(liftCm, 100) / 100 : read('liftM', /(?:lift|raise|raises|raising|travel|height)[^.!?]{0,45}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b/i, 1),
+    payloadKg: payloadTons ? numeric(payloadTons, 1) * 1000 : read('payloadKg', /(\d+(?:,\d{3})*(?:\.\d+)?)\s*kg\b/i, 25),
+    liftM: liftMm ? numeric(liftMm, 1000) / 1000 : liftCm ? numeric(liftCm, 100) / 100 : read('liftM', /(?:lift|raise|raises|raising|travel|height)[^.!?]{0,45}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b/i, 1),
     spanM: read('spanM', /(?:(\d+(?:\.\d+)?)\s*(?:m|meters?)\s+(?:bridge|span|drawbridge)|(?:bridge|span|drawbridge)[^.!?]{0,24}?(\d+(?:\.\d+)?)\s*(?:m|meters?))/i, 4),
     reachM: read('reachM', /(?:reach|reaches|radius)[^.!?]{0,20}?(\d+(?:\.\d+)?)\s*(?:m|meters?)\b/i, 1.5),
     durationS: read('durationS', /(?:under|within|less than|in)\s+(\d+(?:\.\d+)?)\s*(?:s|seconds?)\b/i, 20),
@@ -109,7 +137,9 @@ function parseValues(text: string): ParsedValues {
     deflectionMm: read('deflectionMm', /(?:(?:deflection|deflect)[^.!?]{0,20}?(\d+(?:\.\d+)?)\s*mm\b|(\d+(?:\.\d+)?)\s*mm\s*(?:of\s+)?deflection)/i, 10),
     acceleration: read('acceleration', /(?:acceleration|accelerating)[^.!?]{0,26}?(\d+(?:\.\d+)?)\s*m\/s(?:²|2)/i, .8),
     angleDeg: read('angleDeg', /(?:rotate|rotation|open|sweep|travel)[^.!?]{0,28}?(\d+(?:\.\d+)?)\s*(?:°|degrees?)/i, 75),
-    strokeM: strokeCm ? numeric(strokeCm, 100) / 100 : strokeMeters ? numeric(strokeMeters, 1) : 1,
+    strokeM: strokeMm ? numeric(strokeMm, 1000) / 1000 : strokeCm ? numeric(strokeCm, 100) / 100 : strokeMeters ? numeric(strokeMeters, 1) : 1,
+    forceN: forceKn ? numeric(forceKn, 20) * 1000 : numeric(forceNewtons, 20000),
+    linearSpeedMps: read('linearSpeedMps', /(\d+(?:\.\d+)?)\s*m\s*\/\s*s(?!\s*(?:²|\^?2))/i, .25),
     maxComponents: maxComponents ? Number(maxComponents) : undefined,
     supplied,
   };
@@ -119,30 +149,44 @@ function inferCapabilities(text: string): Capability[] {
   const capabilities = new Set<Capability>(['structure']);
   if (/\b(?:conveyors?|packages?|boxes?|sort(?:er|ing|ed|s)?|warehouse|factory line|buffers?|singulat(?:e|ion)|feed(?:er|ing)?|recycl(?:e|ing)|graders?|routing)\b/.test(text)) capabilities.add('transport');
   if (/\b(?:sort(?:er|ing|ed|s)?|separat(?:e|ion)|rout(?:e|ing)|classif(?:y|ication)|inspect(?:ion)?|reject|color|size|material|graders?|recycl(?:e|ing))\b/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
-  if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient/.test(text)) capabilities.add('lift');
-  if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge/.test(text)) capabilities.add('suspend');
-  if (/\b(?:rover|vehicle|mobile robot|bicycle|go-kart|kart|buggy|automobile|car|atv|forklift|agv|truck|tractor|motorcycle)\b/.test(text) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(text)) capabilities.add('mobile');
+  if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient|\bwinch\b/.test(text)) capabilities.add('lift');
+  if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge|\bwinch\b/.test(text)) capabilities.add('suspend');
+  if (/\b(?:rover|vehicle|mobile robot|bicycle|go-kart|kart|buggy|automobile|car|atv|forklift|agv|truck|tractor|motorcycle)\b/.test(text) && !isBicycleBrakeGoal(text) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(text)) capabilities.add('mobile');
   if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text)) capabilities.add('manipulate');
   if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(text)) capabilities.add('transmit');
+  if (isPlanetaryDifferentialGoal(text)) { capabilities.add('rotate'); capabilities.add('transmit'); }
   if (/suspension|spring|rough|uneven|tipping|stability|stabiliz|level/.test(text)) capabilities.add('stabilize');
   const activeTracking = /(?:solar|sun|light source)[^.!?]{0,32}(?:track|follow|aim|orient)|(?:track|follow|aim|orient)[^.!?]{0,32}(?:solar|sun|light source)|blade pitch|turbine yaw/.test(text);
   if (activeTracking) capabilities.add('track');
   if (/buffer|queue|spacing|irregular|singulat/.test(text)) capabilities.add('buffer');
   if (/\b(?:bins?|containers?|collect(?:or|ion)?|recycling|reject|tanks?|reservoirs?)\b/.test(text)) capabilities.add('contain');
-  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|reciprocat|piston pump|plunger pump|centrifugal pump/.test(text)) capabilities.add('rotate');
+  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|reciprocat|piston pump|plunger pump/.test(text) || (isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text))) capabilities.add('rotate');
+  if (isBenchViseGoal(text) || isWindYawGoal(text) || isDrillPressGoal(text) || isRackSteeringGoal(text) || isBicycleBrakeGoal(text) || isGrainMillGoal(text)) capabilities.add('rotate');
+  if (isGrainMillGoal(text)) capabilities.add('contain');
+  if (isBottleJackGoal(text)) capabilities.add('stabilize');
   if (/bearing|flange|coupling|sprocket|cam\b|impeller|propeller|fan\b|turbine|rotor/.test(text)) capabilities.add('rotate');
-  if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text)) capabilities.add('measure');
+  if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text) || isBenchViseGoal(text) || isWindYawGoal(text) || isDrillPressGoal(text) || isRackSteeringGoal(text) || isBicycleBrakeGoal(text) || isGrainMillGoal(text)) capabilities.add('measure');
   if (/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text)) capabilities.add('measure');
   return [...capabilities];
 }
 
 function identity(text: string, capabilities: Capability[]) {
+  if (isBenchViseGoal(text)) return { name: 'Screw-driven bench vise', domain: 'Machine-shop tooling' };
+  if (isBottleJackGoal(text)) return { name: 'Hydraulic bottle jack', domain: 'Hydraulic lifting equipment' };
+  if (isWindYawGoal(text)) return { name: 'Wind-turbine yaw drive', domain: 'Wind energy' };
+  if (isDrillPressGoal(text)) return { name: 'Bench drill press', domain: 'Machine-shop tooling' };
+  if (isRackSteeringGoal(text)) return { name: 'Rack-and-pinion steering assembly', domain: 'Automotive steering' };
+  if (isBicycleBrakeGoal(text)) return { name: 'Bicycle disc brake', domain: 'Bicycle braking systems' };
+  if (isGrainMillGoal(text)) return { name: 'Pedal-powered grain roller mill', domain: 'Agricultural processing equipment' };
+  if (isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text)) return { name: 'Centrifugal process pump', domain: 'Fluid machinery' };
+  if (isHydraulicPressGoal(text)) return { name: /\bshop\s+press\b/.test(text) ? 'Hydraulic shop press' : 'Hydraulic press', domain: 'Industrial forming equipment' };
+  if (isStandaloneWinchGoal(text)) return { name: /\belectric\b/.test(text) ? 'Electric cable winch' : 'Cable drum winch', domain: 'Material handling' };
+  if (isPlanetaryDifferentialGoal(text)) return { name: 'Compact planetary differential', domain: 'Power transmission' };
   const candidates: Array<[RegExp, string, string]> = [
     [/(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/, 'Precision HVAC brazing fixture', 'HVAC manufacturing'],
     [/braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/, 'Brazed plate heat exchanger', 'HVAC thermal systems'],
     [/impeller|propeller|fan\b|turbine|rotor/, 'Parametric rotating assembly', 'Rotating machinery'],
     [/bearing|flange|coupling|sprocket|cam\b|bracket|housing|enclosure|casing|manifold/, 'Parametric mechanical part', 'Mechanical design'],
-    [/centrifugal pump/, 'Centrifugal pump rotor assembly', 'Fluid power'],
     [/reciprocat|piston pump|plunger pump/, 'Reciprocating pump mechanism', 'Fluid power'],
     [/four[- ]bar|linkage/, 'Parametric linkage mechanism', 'Mechanism design'],
     [/drawbridge|folding bridge/, 'Actuated folding span', 'Civil mechanisms'],
@@ -151,6 +195,7 @@ function identity(text: string, capabilities: Capability[]) {
     [/robotic arm|robot arm|manipulat/, 'Articulated robotic mechanism', 'Robotics'],
     [/crane|hoist/, 'Counterbalanced lifting system', 'Lifting systems'],
     [/patient/, 'Smooth patient lifting mechanism', 'Medical equipment'],
+    [/scissor(?:[- ]?type)?[- ]?(?:lift|table|platform)/, 'Scissor lift', 'Lifting systems'],
     [/elevator|lift|raising/, 'Synchronized lifting mechanism', 'Lifting systems'],
     [/\bbicycle\b/, /solar/.test(text) ? 'Solar electric bicycle' : /electric/.test(text) ? 'Electric bicycle' : 'Parametric bicycle', 'Personal electric mobility'],
     [/\bgo-kart\b|\bkart\b/, /electric/.test(text) ? 'Electric go-kart' : 'Go-kart', 'Personal electric mobility'],
@@ -180,12 +225,17 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   };
   const spanSystem = /bridge|truss|structural span/.test(text);
   const reciprocating = /reciprocat|piston pump|plunger pump/.test(text);
+  const centrifugal = isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text);
   const linkage = /four[- ]bar|linkage/.test(text);
-  const parametricRotor = /impeller|propeller|fan\b|turbine|rotor|centrifugal pump/.test(text);
+  const parametricRotor = /impeller|propeller|fan\b|turbine|rotor/.test(text) || centrifugal;
   const brazedPlateExchanger = /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text);
   const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
   const bicycle = isBicycleGoal(text);
   const roadVehicle = isRoadVehicleGoal(text);
+  const hydraulicPress = isHydraulicPressGoal(text);
+  const drumWinch = isStandaloneWinchGoal(text);
+  const bottleJack = isBottleJackGoal(text);
+  const grainMill = isGrainMillGoal(text);
 
   if (brazedPlateExchanger) {
     add('plate_count', 'Corrugated transfer plates', 'min', 12, 'plates');
@@ -200,6 +250,18 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     add('clamp_force', 'Available clamp force', 'min', 1200, 'N');
     add('assembly_integrity', 'Fixture connectivity', 'min', 95, '%');
     add('component_count', 'Physical bodies', 'max', 24, '');
+  }
+
+  if (hydraulicPress) {
+    add('pressing_force', 'Available pressing force', 'min', values.forceN, 'N', 'forceN');
+    add('stroke', 'Ram stroke', 'min', values.strokeM, 'm', 'strokeM');
+    add('platen_parallelism', 'Platen parallelism error', 'max', 1, 'mm');
+    add('safety_factor', 'Press-frame safety factor', 'min', 1.5, '');
+  }
+
+  if (drumWinch) {
+    add('line_speed', 'Cable line speed', 'exact', values.linearSpeedMps, 'm/s', 'linearSpeedMps');
+    add('cable_safety_factor', 'Cable safety factor', 'min', 5, 'x');
   }
 
   if (spanSystem) {
@@ -239,9 +301,9 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     add('actuator_count', 'Actuator count', 'max', /one actuator|single actuator/.test(text) ? 1 : 2, '');
     add('response_time', 'Response time', 'max', 2.5, 's');
   }
-  if (capabilities.includes('lift') && !(spanSystem && capabilities.includes('rotate'))) {
+  if (capabilities.includes('lift') && !hydraulicPress && !(spanSystem && capabilities.includes('rotate'))) {
     add('payload_capacity', 'Payload capacity', 'min', values.payloadKg, 'kg', 'payloadKg');
-    add('lift_height', 'Lift height', 'min', values.liftM, 'm', 'liftM');
+    add('lift_height', 'Lift height', 'min', bottleJack && !values.supplied.has('liftM') ? .3 : values.liftM, 'm', 'liftM');
     add('stability_margin', 'Stability margin', 'min', capabilities.includes('suspend') ? .2 : .12, 'm');
     if (/level|synchron/.test(text)) add('platform_tilt', 'Platform tilt', 'max', values.tiltDeg, '°', 'tiltDeg');
     if (/placement|places?/.test(text)) add('placement_error', 'Placement error', 'max', values.placementCm, 'cm', 'placementCm');
@@ -253,19 +315,23 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     add('collisions', 'Harmful collisions', 'max', 0, '');
     if (/drop/.test(text)) add('drop_height', 'Drop height', 'max', numeric(capture(text, /(\d+(?:\.\d+)?)\s*cm/i), 15), 'cm');
   }
-  if (reciprocating) {
+  if (reciprocating || centrifugal) {
     add('flow_rate', 'Volumetric flow', 'min', values.flowRateLpm, 'L/min', 'flowRateLpm');
-    add('control_error', 'Stroke control error', 'max', 5, '%');
+    if (reciprocating) add('control_error', 'Stroke control error', 'max', 5, '%');
   }
   if (parametricRotor) {
     add('angular_travel', 'Continuous shaft rotation', 'min', 360, '°');
-    add('output_speed', 'Rotor speed', 'min', values.rpm, 'rpm', 'rpm');
+    add('output_speed', 'Rotor speed', 'min', centrifugal && !values.supplied.has('rpm') ? 1800 : values.rpm, 'rpm', 'rpm');
     add('assembly_integrity', 'Rotor assembly connectivity', 'min', 95, '%');
     add('component_count', 'Physical bodies', 'max', 24, '');
   } else if (linkage || (capabilities.includes('rotate') && !capabilities.includes('transmit') && !capabilities.includes('track') && !spanSystem)) {
     add('angular_travel', 'Angular travel', 'min', values.angleDeg, '°', 'angleDeg');
     if (linkage && values.supplied.has('strokeM')) add('lift_height', 'Linear output stroke', 'min', values.strokeM, 'm', 'strokeM');
     add('control_error', 'Position control error', 'max', 5, '%');
+  }
+  if (grainMill) {
+    add('assembly_integrity', 'Connected mill drivetrain', 'min', 95, '%');
+    add('component_count', 'Physical bodies', 'max', 24, '');
   }
   if (!result.length) {
     add('safety_factor', 'Mechanical safety factor', 'min', 1.35, '');
@@ -455,17 +521,23 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
   const wheelPositions: Vec3[] = [[-length * .35, .52, -width * .52], [-length * .35, .52, width * .52], [length * .35, .52, -width * .52], [length * .35, .52, width * .52]];
   wheelPositions.forEach((position, index) => {
     const wheel = builder.component('wheel', `all-terrain wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05, rover_wheel: true });
-    const axle = builder.joint('revolute', chassis, wheel, [0, 0, 1]);
+    let axleParent = chassis;
+    if (context.capabilities.includes('stabilize')) {
+      const stiffness = Math.max(15000, values.payloadKg * 680);
+      const side = position[2] < 0 ? 'left' : 'right';
+      const end = position[0] < 0 ? 'rear' : 'front';
+      const carrier = builder.component('support', `${end} ${side} suspension upright`, assembly, [position[0], .68, position[2] * .9], [.2, .48, .18], 'steel', 'dynamic', { rover_upright: true, operation_index: index }, 3.8);
+      builder.joint('spring', chassis, carrier, [0, 1, 0], { stiffness, damping: 2100, limits: [0, .55] });
+      const spring = builder.component('spring', `suspension element ${index + 1}`, assembly, [position[0], .82, position[2] * .78], [.12, .55, .12], 'steel', 'dynamic', { stiffness, damping: 2100, operation_index: index });
+      builder.connect(spring, chassis, 'mechanical', 'upper_spring_mount');
+      builder.connect(spring, carrier, 'mechanical', 'lower_spring_mount');
+      axleParent = carrier;
+    }
+    const axle = builder.joint('revolute', axleParent, wheel, [0, 0, 1]);
     if (index >= 2) {
       const motor = builder.component('motor', `traction motor ${index - 1}`, assembly, [position[0], .66, position[2] * .72], undefined, undefined, 'kinematic');
       builder.motor(motor, axle, Math.max(38, values.payloadKg * 1.85), 150);
       builder.connect(motor, wheel, 'power', 'traction_power');
-    }
-    if (context.capabilities.includes('stabilize')) {
-      const stiffness = Math.max(15000, values.payloadKg * 680);
-      const spring = builder.component('spring', `suspension element ${index + 1}`, assembly, [position[0], .82, position[2] * .78], [.12, .55, .12], 'steel', 'dynamic', { stiffness, damping: 2100 });
-      builder.joint('spring', chassis, wheel, [0, 1, 0], { stiffness, damping: 2100, limits: [0, .55] });
-      builder.connect(spring, chassis, 'mechanical', 'spring_mount');
     }
   });
   const frontBumper = builder.component('beam', 'front rover bumper', assembly, [length * .51, .76, 0], [.16, .2, width * .92], 'steel', 'fixed', { rover_bumper: true }, 2.5);
@@ -756,6 +828,60 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
   return { id: 'single-track-vehicle', mountId: frameBodies[0], editableId: speedSensorBody, handles: ['structure', 'mobile', 'measure', 'rotate'], driveId: driveMotor, outputId: rearWheel };
 }
 
+function addPlanetaryDifferential(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('planetary differential gearset', 'Open cutaway differential with coaxial sun and ring outputs, three orbiting planets, a driven carrier, and explicit input/output shafts', rootAssemblyId);
+  const base = builder.component('frame', 'compact differential bench housing', assembly, [0, .16, 0], [3.4, .26, 2.8], 'aluminum', 'fixed', { planetary_housing: true }, 18);
+  const bearingSupport = builder.component('support', 'coaxial differential bearing pedestal', assembly, [0, .8, -.34], [.58, 1.34, .58], 'steel', 'fixed', { planetary_bearing: true }, 9);
+  const housingRing = builder.component('frame', 'open differential housing ring', assembly, [0, 1.55, -.12], [2.35, 2.35, .2], 'aluminum', 'fixed', { cad_form: 'rotor_shroud', planetary_housing_ring: true }, 12);
+  builder.connect(base, bearingSupport, 'mechanical', 'bearing_pedestal_mount');
+  builder.connect(base, housingRing, 'mechanical', 'housing_ring_mount');
+
+  const carrier = builder.component('frame', 'three-pin planet carrier', assembly, [0, 1.55, -.16], [.82, .82, .12], 'steel', 'dynamic', { cad_form: 'rotor_shroud', planetary_carrier: true }, 5.5);
+  const carrierJoint = builder.joint('revolute', bearingSupport, carrier, [0, 0, 1], { anchorA: [0, .75, .18], anchorB: [0, 0, 0] });
+  const sun = builder.component('gear', 'central sun output gear', assembly, [0, 1.55, .05], [.48, .15, .48], 'steel', 'dynamic', { teeth: 18, planetary_sun: true, mesh_efficiency: .93 }, 2.1);
+  builder.joint('revolute', bearingSupport, sun, [0, 0, 1], { anchorA: [0, .75, .39], anchorB: [0, 0, 0] });
+  const ring = builder.component('gear', 'internal ring output gear', assembly, [0, 1.55, .05], [1.82, 1.82, .2], 'steel', 'dynamic', { cad_form: 'rotor_shroud', teeth: 54, planetary_ring: true, internal_teeth: true, mesh_efficiency: .93 }, 7.8);
+  builder.joint('revolute', bearingSupport, ring, [0, 0, 1], { anchorA: [0, .75, .39], anchorB: [0, 0, 0] });
+
+  for (let index = 0; index < 3; index += 1) {
+    const angle = index / 3 * Math.PI * 2;
+    const x = Math.cos(angle) * .47;
+    const y = 1.55 + Math.sin(angle) * .47;
+    const orbit = { planetary_orbit_radius: .47, planetary_center_x: 0, planetary_center_y: 1.55, planetary_orbit_angle: angle };
+    const pad = builder.component('plate', `carrier planet pad ${index + 1}`, assembly, [x, y, -.18], [.3, .3, .06], 'steel', 'dynamic', { planetary_carrier_pad: true, planet_index: index + 1, ...orbit }, .45);
+    const planet = builder.component('gear', `planet gear ${index + 1}`, assembly, [x, y, .05], [.38, .13, .38], 'steel', 'dynamic', { teeth: 18, planetary_planet: true, planet_index: index + 1, mesh_efficiency: .93, ...orbit }, 1.1);
+    builder.joint('fixed', carrier, pad);
+    builder.joint('fixed', pad, planet);
+  }
+  const differentialStageRatio = Math.sqrt(Math.max(1, values.ratio));
+  builder.joint('gear', carrier, sun, [0, 0, 1], { ratio: differentialStageRatio });
+  builder.joint('belt', carrier, ring, [0, 0, 1], { ratio: differentialStageRatio });
+
+  const inputShaft = builder.component('shaft', 'carrier input shaft', assembly, [0, 1.55, -1.25], [.16, .9, .16], 'steel', 'kinematic', { planetary_input_shaft: true, operation_spin: 2.7 }, 2.4);
+  const leftOutput = builder.component('shaft', 'left sun-gear output shaft', assembly, [0, 1.55, .72], [.2, 1.05, .2], 'steel', 'kinematic', { planetary_output_shaft: true, output_side: 'left', operation_spin: -1.8 }, 2.8);
+  const rightOutput = builder.component('shaft', 'right ring-gear output shaft', assembly, [0, 1.55, -.68], [.28, .66, .28], 'steel', 'kinematic', { planetary_output_shaft: true, output_side: 'right', operation_spin: 1.8 }, 3.2);
+  [inputShaft, leftOutput, rightOutput].forEach((id) => builder.rotate(id, [Math.PI / 2, 0, 0]));
+  builder.connect(inputShaft, carrier, 'mechanical', 'input_to_carrier_coupling');
+  builder.connect(sun, leftOutput, 'mechanical', 'sun_to_left_output_coupling');
+  builder.connect(ring, rightOutput, 'mechanical', 'ring_to_right_output_coupling');
+
+  const motor = builder.component('motor', 'differential input drive motor', assembly, [0, 1.55, -1.82], [.5, .62, .5], 'steel', 'kinematic', { planetary_drive: true }, 8.5);
+  builder.rotate(motor, [Math.PI / 2, 0, 0]);
+  builder.motor(motor, carrierJoint, Math.max(28, values.torqueNm), Math.max(90, values.rpm));
+  const carrierActuator = builder.actuator(motor, carrierJoint, 'rotary-motor', Math.max(28, values.torqueNm), Math.max(90, values.rpm) * Math.PI / 30, Math.PI * 2);
+  builder.connect(base, motor, 'mechanical', 'motor_mount');
+  builder.connect(motor, inputShaft, 'power', 'carrier_input_torque');
+  const leftEncoder = builder.component('sensor', 'left output speed encoder', assembly, [-.45, 1.92, .42], [.2, .18, .2], 'polymer', 'fixed', { planetary_encoder: true, output_side: 'left' }, .25);
+  const rightEncoder = builder.component('sensor', 'right output speed encoder', assembly, [.45, 1.92, -.38], [.2, .18, .2], 'polymer', 'fixed', { planetary_encoder: true, output_side: 'right' }, .25);
+  const leftSensor = builder.sensor(leftEncoder, 'speed', 'left_output_rpm', sun, 2);
+  const rightSensor = builder.sensor(rightEncoder, 'speed', 'right_output_rpm', ring, 2);
+  builder.connect(housingRing, leftEncoder, 'mechanical', 'left_encoder_mount');
+  builder.connect(housingRing, rightEncoder, 'mechanical', 'right_encoder_mount');
+  builder.control('differential speed split', 'synchronized', [leftSensor, rightSensor], [carrierActuator], 'regulate carrier input while observing how the planetary set distributes speed to both outputs', values.rpm / Math.max(1, values.ratio));
+  return { id: 'planetary-differential', mountId: base, editableId: leftEncoder, handles: ['structure', 'transmit', 'rotate', 'measure'], inputId: inputShaft, outputId: leftOutput, driveId: motor };
+}
+
 function addRotaryTransmission(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
   const scale = .125;
@@ -864,6 +990,129 @@ function addCableSuspension(context: ModuleContext): ModuleResult {
   return { id: 'cable-suspension', mountId: base, editableId: loadSensor, handles: ['lift', 'suspend', 'stabilize'], driveId: motor, outputId: hook };
 }
 
+function addHydraulicPress(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly(
+    'hydraulic press frame',
+    'Rigid H-frame, work bed, moving platen, hydraulic ram, matched tooling, pressure sensing, and guarded power unit',
+    rootAssemblyId,
+  );
+  const base = builder.component('frame', 'hydraulic press base', assembly, [0, .18, 0], [3.8, .32, 2.35], 'steel', 'fixed', { press_base: true, safety_stripes: true }, 210);
+  const leftColumn = builder.component('beam', 'left press column', assembly, [-1.42, 2.12, 0], [.4, 3.85, .5], 'steel', 'fixed', { press_column: true }, 145);
+  const rightColumn = builder.component('beam', 'right press column', assembly, [1.42, 2.12, 0], [.4, 3.85, .5], 'steel', 'fixed', { press_column: true }, 145);
+  const crown = builder.component('beam', 'reinforced press crown', assembly, [0, 4.02, 0], [3.35, .5, 1.5], 'steel', 'fixed', { press_crown: true }, 190);
+  const bed = builder.component('beam', 'adjustable press bed', assembly, [0, 1.18, 0], [2.75, .38, 1.52], 'steel', 'fixed', { press_bed: true }, 165);
+  builder.joint('fixed', base, leftColumn);
+  builder.joint('fixed', base, rightColumn);
+  builder.joint('fixed', leftColumn, crown);
+  builder.joint('fixed', rightColumn, crown);
+  builder.joint('fixed', base, bed);
+
+  const platen = builder.component('plate', 'moving press platen', assembly, [0, 2.78, 0], [2.48, .3, 1.34], 'steel', 'kinematic', { press_platen: true, operation_travel: values.strokeM }, 115);
+  const pressJoint = builder.joint('prismatic', crown, platen, [0, -1, 0], { limits: [0, values.strokeM] });
+  const cylinderBarrel = builder.component('piston', 'hydraulic cylinder barrel', assembly, [0, 3.62, 0], [.68, 1.08, .68], 'steel', 'fixed', { hydraulic_barrel: true, rated_force_n: values.forceN }, 72);
+  builder.joint('fixed', crown, cylinderBarrel);
+  const ram = builder.component('piston', 'hydraulic press ram', assembly, [0, 3.25, 0], [.3, 1.02, .3], 'steel', 'dynamic', { hydraulic_ram: true, stroke_m: values.strokeM, operation_travel: values.strokeM }, 34);
+  builder.joint('fixed', platen, ram);
+
+  const lowerDie = builder.component('plate', 'lower press tooling plate', assembly, [0, 1.43, 0], [1.55, .16, 1.02], 'steel', 'fixed', { press_tooling: 'lower' }, 42);
+  const workpieceY = 1.62;
+  const workpieceHeight = .2;
+  const upperDieHeight = .16;
+  // Author the open tooling with a visible but reachable clearance. The upper
+  // die's lower face must cross the workpiece's upper face during the requested
+  // stroke; otherwise the animation would be a press that never presses.
+  const toolingClearance = Math.min(.04, Math.max(.01, values.strokeM * .1));
+  const upperDieY = workpieceY + workpieceHeight / 2 + toolingClearance + upperDieHeight / 2;
+  const upperDie = builder.component('plate', 'upper press tooling plate', assembly, [0, upperDieY, 0], [1.55, upperDieHeight, 1.02], 'steel', 'dynamic', { press_tooling: 'upper', tooling_clearance_m: toolingClearance, operation_travel: values.strokeM }, 42);
+  const workpiece = builder.component('plate', 'workpiece between press dies', assembly, [0, workpieceY, 0], [1.12, workpieceHeight, .76], 'aluminum', 'fixed', { press_workpiece: true }, 8);
+  builder.joint('fixed', bed, lowerDie);
+  builder.joint('fixed', platen, upperDie);
+  builder.joint('fixed', lowerDie, workpiece);
+
+  const loadCell = builder.component('sensor', 'platen force and position transducer', assembly, [.82, 2.78, 0], [.25, .2, .25], 'steel', 'dynamic', { press_load_cell: true, operation_travel: values.strokeM }, 1.4);
+  builder.joint('fixed', platen, loadCell);
+  const forceSensor = builder.sensor(loadCell, 'force', 'pressing_force', upperDie, Math.max(1, values.strokeM + .5));
+  const powerUnit = builder.component('motor', 'hydraulic pump power unit', assembly, [-1.05, .7, -.72], [.7, .65, .62], 'steel', 'fixed', { hydraulic_power_unit: true }, 45);
+  const controller = builder.component('controller', 'two-hand press safety controller', assembly, [1.05, .72, -.78], [.65, .62, .38], 'steel', 'fixed', { guarded_press_control: true }, 4.5);
+  builder.joint('fixed', base, powerUnit);
+  builder.joint('fixed', base, controller);
+  const actuator = builder.actuator(ram, pressJoint, 'piston', Math.max(20000, values.forceN), Math.max(.025, Math.min(.18, values.strokeM / 3)), values.strokeM);
+  builder.control('press force and stroke control', 'pid', [forceSensor], [actuator], 'advance the ram through the requested stroke while limiting force and maintaining platen alignment', values.forceN);
+  builder.connect(powerUnit, ram, 'power', 'hydraulic_pressure_supply');
+  builder.connect(loadCell, controller, 'signal', 'press_force_feedback');
+  return { id: 'hydraulic-press', mountId: base, editableId: loadCell, handles: ['structure', 'measure'], driveId: ram, outputId: platen };
+}
+
+function addDrumWinch(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly(
+    'electric cable drum winch',
+    'Rigid skid, supported winding drum, electric gearmotor, overhead fairlead, load cable, hook, payload, and closed-loop load control',
+    rootAssemblyId,
+  );
+  const base = builder.component('frame', 'winch skid base', assembly, [0, .18, 0], [4.1, .32, 2.45], 'steel', 'fixed', { winch_base: true, safety_stripes: true }, 155);
+  const leftPedestal = builder.component('support', 'left drum bearing pedestal', assembly, [-.72, 1.08, -.78], [.42, 1.72, .4], 'steel', 'fixed', { winch_bearing: true }, 38);
+  const rightPedestal = builder.component('support', 'right drum bearing pedestal', assembly, [-.72, 1.08, .78], [.42, 1.72, .4], 'steel', 'fixed', { winch_bearing: true }, 38);
+  builder.joint('fixed', base, leftPedestal);
+  builder.joint('fixed', base, rightPedestal);
+  const shaft = builder.component('shaft', 'winch drum shaft', assembly, [-.72, 1.38, 0], [.2, 1.82, .2], 'steel', 'dynamic', { winch_shaft: true }, 18);
+  builder.rotate(shaft, [Math.PI / 2, 0, 0]);
+  const shaftJoint = builder.joint('revolute', leftPedestal, shaft, [0, 0, 1], { anchorA: [0, .3, .78], anchorB: [0, 0, 0] });
+  builder.connect(rightPedestal, shaft, 'mechanical', 'outboard_bearing_support');
+  const drum = builder.component('pulley', 'grooved cable winding drum', assembly, [-.72, 1.38, 0], [1.02, 1.12, 1.02], 'steel', 'dynamic', { winch_drum: true, drum_radius_m: .51, design_line_speed_mps: values.linearSpeedMps }, 62);
+  builder.rotate(drum, [Math.PI / 2, 0, 0]);
+  builder.joint('fixed', shaft, drum);
+  for (const side of [-1, 1]) {
+    const flange = builder.component('wheel', `${side < 0 ? 'left' : 'right'} cable drum flange`, assembly, [-.72, 1.38, side * .61], [1.34, .11, 1.34], 'steel', 'dynamic', { winch_drum_flange: true }, 12);
+    builder.rotate(flange, [Math.PI / 2, 0, 0]);
+    builder.joint('fixed', drum, flange);
+  }
+  const motor = builder.component('motor', 'electric winch gearmotor', assembly, [-.72, 1.38, -1.12], [.68, .62, .68], 'steel', 'kinematic', { electric_winch_motor: true });
+  const drumRpm = values.linearSpeedMps / (2 * Math.PI * .51) * 60;
+  builder.motor(motor, shaftJoint, Math.max(55, values.payloadKg * 9.81 * .51 * 1.3), Math.max(.2, drumRpm));
+  builder.connect(motor, shaft, 'power', 'winch_drum_torque');
+
+  const hookY = .95;
+  const fairleadY = Math.max(3.72, hookY + values.liftM + .68);
+  const mastBottomY = .13;
+  const mast = builder.component('beam', 'winch lifting mast', assembly, [1.18, (fairleadY + mastBottomY) / 2, 0], [.4, fairleadY - mastBottomY, .48], 'steel', 'fixed', { winch_mast: true, fairlead_height_m: fairleadY }, 112);
+  const boom = builder.member('beam', 'overhead fairlead beam', assembly, [1.18, fairleadY, 0], [2.58, fairleadY, 0], .34, 'steel', 'fixed', { winch_fairlead_support: true, fairlead_height_m: fairleadY });
+  builder.joint('fixed', base, mast);
+  builder.joint('fixed', mast, boom);
+  const fairlead = builder.component('pulley', 'overhead cable fairlead pulley', assembly, [2.52, fairleadY, 0], [.72, .24, .72], 'steel', 'dynamic', { winch_fairlead: true, fairlead_height_m: fairleadY }, 11);
+  builder.rotate(fairlead, [Math.PI / 2, 0, 0]);
+  builder.joint('revolute', boom, fairlead, [0, 0, 1], { anchorA: [.64, 0, 0], anchorB: [0, 0, 0] });
+  const hook = builder.component('hook', 'forged winch lifting hook', assembly, [2.52, hookY, 0], [.28, .48, .14], 'steel', 'kinematic', { winch_hook: true, winch_travel_m: values.liftM }, 8);
+  // Anchor the reduced-order tension constraint to the fixed fairlead beam.
+  // The visible pulley remains free to rotate, but it does not receive the
+  // entire suspended load through a second under-constrained dynamic body.
+  const ropeJoint = builder.joint('rope', boom, hook, [0, 1, 0], {
+    limits: [0, Math.max(.2, fairleadY - hookY - .19)],
+    anchorA: [.64, 0, 0],
+    anchorB: [0, .24, 0],
+  });
+  const payload = builder.component('container', 'winch test payload', assembly, [2.52, hookY - .58, 0], [1.18, .55, .78], 'steel', 'dynamic', { payload_kg: values.payloadKg, winch_payload: true, winch_travel_m: values.liftM }, values.payloadKg);
+  builder.joint('fixed', hook, payload);
+  const ratedBreakingLoad = Math.max(12000, values.payloadKg * 9.81 * 6);
+  const drumLead = builder.member('cable', 'drum-to-fairlead cable', assembly, [-.2, 1.76, 0], [2.52, fairleadY, 0], .035, 'steel', 'kinematic', { winch_cable: true, cable_segment: 'lead', rated_breaking_load_n: ratedBreakingLoad });
+  const loadLine = builder.member('cable', 'vertical winch load line', assembly, [2.52, fairleadY, 0], [2.52, hookY + .2, 0], .035, 'steel', 'kinematic', { winch_cable: true, cable_segment: 'load', rated_breaking_load_n: ratedBreakingLoad, winch_travel_m: values.liftM });
+  builder.connect(drum, drumLead, 'mechanical', 'cable_winding');
+  builder.connect(drumLead, fairlead, 'mechanical', 'fairlead_entry');
+  builder.connect(fairlead, loadLine, 'mechanical', 'fairlead_exit');
+  builder.connect(loadLine, hook, 'mechanical', 'cable_termination');
+
+  const loadCell = builder.component('sensor', 'winch cable load cell', assembly, [2.18, fairleadY, -.28], [.24, .2, .24], 'steel', 'fixed', { winch_load_cell: true, fairlead_height_m: fairleadY }, 1.2);
+  builder.joint('fixed', boom, loadCell);
+  const loadSensor = builder.sensor(loadCell, 'load', 'winch_line_load', hook, Math.max(2, values.liftM + 1));
+  const controller = builder.component('controller', 'winch speed and overload controller', assembly, [.18, .7, -.82], [.7, .72, .4], 'steel', 'fixed', { winch_controller: true }, 5.5);
+  builder.joint('fixed', base, controller);
+  const actuator = builder.actuator(motor, ropeJoint, 'winch', Math.max(1200, values.payloadKg * 9.81 * 2.1), values.linearSpeedMps, values.liftM);
+  builder.control('winch lift control', 'pid', [loadSensor], [actuator], 'wind the drum at the requested line speed while limiting cable load and hook travel', values.linearSpeedMps);
+  builder.connect(loadCell, controller, 'signal', 'winch_load_feedback');
+  return { id: 'drum-winch', mountId: base, editableId: loadCell, handles: ['lift', 'suspend', 'rotate', 'measure'], driveId: motor, outputId: hook };
+}
+
 function addParallelGuides(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
   const assembly = builder.assembly('parallel linear guides', 'Load platform, parallel slides, pistons, and cross-level feedback', rootAssemblyId);
@@ -885,6 +1134,200 @@ function addParallelGuides(context: ModuleContext): ModuleResult {
   builder.control('cross level', 'synchronized', [sensor], actuators, 'synchronize slide travel and limit acceleration', values.acceleration);
   builder.joint('fixed', imu, platform);
   return { id: 'parallel-guides', mountId: base, editableId: imu, handles: ['lift', 'stabilize'] };
+}
+
+function addScissorLift(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly(
+    'hydraulic scissor lift',
+    'Grounded rectangular base, two visible crossed-link pairs, a level load platform, hydraulic cylinder, safety feedback, and a rated payload',
+    rootAssemblyId,
+  );
+  const base = builder.component(
+    'frame',
+    'grounded scissor lift base',
+    assembly,
+    [0, .18, 0],
+    [3.55, .3, 2.15],
+    'steel',
+    'fixed',
+    { scissor_base: true, safety_stripes: true },
+    260,
+  );
+  const baseDeck = builder.component(
+    'plate',
+    'scissor lift base deck',
+    assembly,
+    [0, .35, 0],
+    [3.2, .1, 1.82],
+    'steel',
+    'fixed',
+    { scissor_base_deck: true },
+    115,
+  );
+  builder.joint('fixed', base, baseDeck);
+
+  const platform = builder.component(
+    'plate',
+    'level scissor lift platform',
+    assembly,
+    [0, 1.52, 0],
+    [3.3, .2, 2.02],
+    'aluminum',
+    'kinematic',
+    { scissor_platform: true, scissor_travel_m: values.liftM, rated_payload_kg: values.payloadKg },
+    110,
+  );
+  // A single centered guide is the reduced-order constraint that keeps the
+  // platform level without over-constraining Rapier with a closed linkage.
+  // The crossed arms remain an explicit, readable load path in the design
+  // graph while this prismatic joint supplies stable animated travel.
+  // The positive-Y guide is shared by both the deterministic motion graph and
+  // Rapier's actuator velocity, so the visible deck and physical deck travel
+  // upward together instead of disagreeing about the lift direction.
+  const liftJoint = builder.joint('prismatic', base, platform, [0, 1, 0], { limits: [0, values.liftM] });
+
+  const lowerY = .44;
+  // Keep a small reduced-order roller clearance below the moving deck so the
+  // visual X members do not become solid collision stops in the physics run.
+  const upperY = 1.24;
+  const halfSpan = 1.28;
+  const centerY = (lowerY + upperY) / 2;
+  const armAngle = Math.atan2(upperY - lowerY, halfSpan * 2);
+  const arms: string[] = [];
+  [-.72, .72].forEach((z, pairIndex) => {
+    const side = z < 0 ? 'left' : 'right';
+    const rising = builder.member(
+      'beam',
+      `${side} scissor arm rising right`,
+      assembly,
+      [-halfSpan, lowerY, z],
+      [halfSpan, upperY, z],
+      .17,
+      'steel',
+      'fixed',
+      { scissor_arm: true, scissor_pair: pairIndex + 1, scissor_direction: 'rising-right', scissor_lower_y: lowerY, scissor_initial_height: upperY - lowerY, scissor_travel_m: values.liftM },
+    );
+    const falling = builder.member(
+      'beam',
+      `${side} scissor arm rising left`,
+      assembly,
+      [halfSpan, lowerY, z],
+      [-halfSpan, upperY, z],
+      .17,
+      'steel',
+      'fixed',
+      { scissor_arm: true, scissor_pair: pairIndex + 1, scissor_direction: 'rising-left', scissor_lower_y: lowerY, scissor_initial_height: upperY - lowerY, scissor_travel_m: values.liftM },
+    );
+    builder.rotate(falling, [0, 0, -armAngle]);
+    arms.push(rising, falling);
+    // The crossed arms are reduced-order fixed visual load paths; their center
+    // pin is represented as a mechanical connection instead of an impossible
+    // revolute constraint between two fixed Rapier bodies.
+    builder.connect(rising, falling, 'mechanical', 'scissor_center_hinge');
+    builder.connect(baseDeck, rising, 'mechanical', 'lower_scissor_pin');
+    builder.connect(baseDeck, falling, 'mechanical', 'lower_scissor_pin');
+    builder.connect(rising, platform, 'mechanical', 'upper_scissor_roller');
+    builder.connect(falling, platform, 'mechanical', 'upper_scissor_roller');
+    const pivotPin = builder.component(
+      'shaft',
+      `${side} scissor center pivot pin`,
+      assembly,
+      [0, centerY, z],
+      [.16, .28, .16],
+      'steel',
+      'fixed',
+      { scissor_pivot: true, scissor_pair: pairIndex + 1, scissor_travel_m: values.liftM },
+      1.2,
+    );
+    builder.rotate(pivotPin, [Math.PI / 2, 0, 0]);
+    builder.connect(pivotPin, rising, 'mechanical', 'center_pivot_pin');
+    builder.connect(pivotPin, falling, 'mechanical', 'center_pivot_pin');
+  });
+
+  const cylinder = builder.component(
+    'piston',
+    'hydraulic scissor lift cylinder',
+    assembly,
+    [-.62, .77, 0],
+    [.3, 1.2, .3],
+    'steel',
+    'kinematic',
+    { scissor_actuator: true, bore_m: .12, stroke_m: values.liftM },
+    18,
+  );
+  builder.rotate(cylinder, [0, 0, -.48]);
+  builder.connect(baseDeck, cylinder, 'mechanical', 'hydraulic_lower_clevis');
+  builder.connect(cylinder, arms[0], 'mechanical', 'hydraulic_upper_clevis');
+  const actuator = builder.actuator(
+    cylinder,
+    liftJoint,
+    'piston',
+    Math.max(6000, values.payloadKg * 9.81 * 2.1),
+    .3,
+    values.liftM,
+  );
+
+  const payload = builder.component(
+    'container',
+    'rated platform load',
+    assembly,
+    [0, 1.95, 0],
+    [1.25, .62, 1.05],
+    'steel',
+    'dynamic',
+    { payload_kg: values.payloadKg, scissor_payload: true, scissor_travel_m: values.liftM },
+    values.payloadKg,
+  );
+  // The payload is rigidly carried by the deck in the reduced-order physics
+  // model. A visual-only contact left the 300 kg test mass behind while the
+  // actuator telemetry claimed a successful lift.
+  builder.joint('fixed', platform, payload);
+  builder.connect(platform, payload, 'mechanical', 'rated_load_contact');
+  const levelSensorBody = builder.component(
+    'sensor',
+    'platform level and overload sensor',
+    assembly,
+    [-1.25, 1.7, -.75],
+    [.24, .18, .24],
+    'polymer',
+    'dynamic',
+    { scissor_level_sensor: true, scissor_travel_m: values.liftM },
+    .35,
+  );
+  builder.joint('fixed', platform, levelSensorBody);
+  const levelSensor = builder.sensor(levelSensorBody, 'imu', 'scissor_platform_level', platform, 4);
+  const controller = builder.component(
+    'controller',
+    'scissor lift hydraulic controller',
+    assembly,
+    [-1.35, .62, -.78],
+    [.52, .62, .32],
+    'polymer',
+    'fixed',
+    { scissor_controller: true },
+  );
+  builder.joint('fixed', base, controller);
+  builder.connect(controller, cylinder, 'signal', 'hold_to_run_lift_command');
+  builder.control(
+    'level hydraulic lift',
+    'pid',
+    [levelSensor],
+    [actuator],
+    'raise the platform through the scissor linkage while holding zero roll and stopping on overload',
+    values.liftM,
+  );
+  const levelControl = builder.controls.at(-1);
+  if (levelControl) { levelControl.kp = .92; levelControl.kd = .16; }
+
+  return {
+    id: 'scissor-linkage-lift',
+    mountId: base,
+    editableId: levelSensorBody,
+    handles: ['lift', 'stabilize', 'measure'],
+    driveId: cylinder,
+    outputId: platform,
+  };
 }
 
 function addPatientLift(context: ModuleContext): ModuleResult {
@@ -1218,6 +1661,286 @@ function addFourBar(context: ModuleContext): ModuleResult {
   return { id: 'closed-linkage', mountId: base, editableId: sensorBody, handles: ['rotate'] };
 }
 
+function addBenchVise(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('screw-driven bench vise', 'Bolted swivel base, cast fixed and sliding jaws, replaceable serrated jaw plates, lead screw, thrust collar, and handwheel', rootAssemblyId);
+  const travel = values.supplied.has('strokeM') ? Math.min(.45, Math.max(.04, values.strokeM)) : .18;
+  const base = builder.component('frame', 'bolted vise swivel base', assembly, [0, .2, 0], [3.4, .34, 2.2], 'steel', 'fixed', { vise_base: true }, 24);
+  const fixedJaw = builder.component('support', 'cast fixed vise jaw', assembly, [-.92, 1.03, 0], [.58, 1.35, 1.7], 'steel', 'fixed', { vise_fixed_jaw: true }, 18);
+  const fixedPlate = builder.component('plate', 'replaceable fixed serrated jaw plate', assembly, [-.6, 1.34, 0], [.08, .48, 1.5], 'steel', 'fixed', { vise_jaw_plate: true, jaw_side: 'fixed' }, 1.1);
+  builder.joint('fixed', base, fixedJaw); builder.joint('fixed', fixedJaw, fixedPlate);
+
+  const slide = builder.component('beam', 'rectangular vise slide', assembly, [.32, .63, 0], [1.95, .32, .68], 'steel', 'kinematic', { vise_moving: true, vise_travel_m: travel }, 11);
+  const movingJaw = builder.component('support', 'cast moving vise jaw', assembly, [.38, 1.03, 0], [.62, 1.35, 1.7], 'steel', 'kinematic', { vise_moving: true, vise_moving_jaw: true, vise_travel_m: travel }, 17);
+  const movingPlate = builder.component('plate', 'replaceable moving serrated jaw plate', assembly, [.04, 1.34, 0], [.08, .48, 1.5], 'steel', 'kinematic', { vise_moving: true, vise_jaw_plate: true, jaw_side: 'moving', vise_travel_m: travel }, 1.1);
+  const slideJoint = builder.joint('prismatic', base, slide, [1, 0, 0], { limits: [0, travel] });
+  builder.joint('fixed', slide, movingJaw); builder.joint('fixed', movingJaw, movingPlate);
+
+  const leadScrew = builder.component('shaft', 'Acme-thread lead screw', assembly, [.42, .66, 0], [.15, 2.55, .15], 'steel', 'dynamic', { cad_form: 'shaft', vise_screw: true, operation_spin: 2.4 }, 4.2);
+  builder.rotate(leadScrew, [0, 0, Math.PI / 2]);
+  const screwJoint = builder.joint('revolute', base, leadScrew, [1, 0, 0]);
+  const thrustCollar = builder.component('gear', 'lead-screw thrust collar', assembly, [1.4, .66, 0], [.42, .16, .42], 'steel', 'dynamic', { teeth: 18, vise_screw: true }, 1.4);
+  builder.joint('fixed', leadScrew, thrustCollar);
+  const handwheel = builder.component('wheel', 'sliding vise handwheel', assembly, [1.72, .66, 0], [.8, .14, .8], 'steel', 'dynamic', { vise_screw: true }, 2.1);
+  builder.rotate(handwheel, [0, 0, Math.PI / 2]); builder.joint('fixed', leadScrew, handwheel);
+  const handle = builder.component('beam', 'handwheel tommy bar', assembly, [1.72, .66, 0], [.12, 1.18, .12], 'steel', 'dynamic', { vise_screw: true }, .8);
+  builder.joint('fixed', handwheel, handle);
+  builder.connect(leadScrew, slide, 'mechanical', 'acme_thread_drive');
+  const torqueDriver = builder.component('motor', 'removable lead-screw torque driver', assembly, [1.42, .66, -.42], [.34, .42, .34], 'steel', 'kinematic', { vise_test_drive: true }, 3.2);
+  const actuator = builder.actuator(torqueDriver, slideJoint, 'linear', Math.max(9000, values.forceN * .45), .08, travel);
+  const positionBody = builder.component('sensor', 'vise jaw opening scale', assembly, [-.1, .48, -.62], [.28, .16, .18], 'polymer', 'fixed', { vise_scale: true }, .18);
+  const positionSensor = builder.sensor(positionBody, 'position', 'jaw_opening', movingJaw, travel + .3);
+  builder.control('vise jaw position', 'pid', [positionSensor], [actuator], 'convert handwheel rotation into lead-screw jaw travel without exceeding the slide limit', travel);
+  const jawControl = builder.controls.at(-1);
+  if (jawControl) { jawControl.kp = .9; jawControl.kd = .12; }
+  builder.connect(positionBody, leadScrew, 'signal', 'jaw_position_feedback');
+  // A small removable torque driver makes the manual screw testable in the
+  // deterministic physics lab without replacing the visible handwheel.
+  builder.motor(torqueDriver, screwJoint, 65, 24); builder.connect(torqueDriver, leadScrew, 'power', 'lead_screw_test_torque');
+  return { id: 'bench-vise', mountId: base, editableId: movingPlate, handles: ['structure', 'rotate', 'measure'], driveId: handwheel, outputId: movingJaw };
+}
+
+function addBottleJack(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('hydraulic bottle jack', 'Wide load-rated base, oil reservoir, pump cylinder and handle, guided ram, threaded extension, lifting saddle, release valve, and pressure sensing', rootAssemblyId);
+  const travel = values.supplied.has('liftM') ? Math.min(.65, Math.max(.12, values.liftM)) : .3;
+  const base = builder.component('plate', 'wide bottle-jack base', assembly, [0, .12, 0], [2.1, .22, 1.65], 'steel', 'fixed', { bottle_jack_base: true }, 12);
+  const reservoir = builder.component('frame', 'hydraulic oil reservoir body', assembly, [0, .72, 0], [1.18, 1.2, 1.18], 'steel', 'fixed', { cad_form: 'housing', bottle_jack_body: true }, 14);
+  const cylinder = builder.component('piston', 'main hydraulic cylinder', assembly, [0, 1.25, 0], [.72, 1.7, .72], 'steel', 'fixed', { bottle_jack_cylinder: true, rated_load_kg: values.payloadKg }, 18);
+  builder.joint('fixed', base, reservoir); builder.joint('fixed', reservoir, cylinder);
+  const ram = builder.component('piston', 'guided lifting ram', assembly, [0, 1.86, 0], [.42, 1.26, .42], 'steel', 'kinematic', { bottle_jack_ram: true, bottle_jack_moving: true, operation_travel: travel, payload_kg: values.payloadKg }, 8.5);
+  const ramJoint = builder.joint('prismatic', cylinder, ram, [0, 1, 0], { limits: [0, travel] });
+  const extension = builder.component('shaft', 'threaded saddle extension', assembly, [0, 2.42, 0], [.25, .62, .25], 'steel', 'kinematic', { cad_form: 'shaft', bottle_jack_moving: true, operation_travel: travel }, 2.4);
+  const saddle = builder.component('plate', 'serrated lifting saddle', assembly, [0, 2.78, 0], [.86, .16, .86], 'steel', 'kinematic', { bottle_jack_moving: true, bottle_jack_saddle: true, operation_travel: travel, payload_kg: values.payloadKg }, 4.5);
+  builder.joint('fixed', ram, extension); builder.joint('fixed', extension, saddle);
+
+  const pumpCylinder = builder.component('piston', 'side hydraulic pump cylinder', assembly, [.72, .68, 0], [.28, .74, .28], 'steel', 'fixed', { bottle_jack_pump: true }, 2.8);
+  builder.joint('fixed', base, pumpCylinder);
+  const handle = builder.component('beam', 'removable pump handle', assembly, [1.28, 1.2, 0], [1.85, .16, .16], 'steel', 'dynamic', { bottle_jack_handle: true }, 1.6);
+  builder.rotate(handle, [0, 0, .62]);
+  const handleJoint = builder.joint('revolute', pumpCylinder, handle, [0, 0, 1], { limits: [-.72, .18] });
+  const handleDrive = builder.component('servo', 'manual pump stroke driver', assembly, [.68, .78, -.25], [.3, .28, .3], 'steel', 'kinematic', { bottle_jack_handle_drive: true }, 1.5);
+  builder.actuator(handleDrive, handleJoint, 'servo', 620, .8, .09);
+  const ramActuator = builder.actuator(pumpCylinder, ramJoint, 'piston', Math.max(18000, values.payloadKg * 9.81 * 1.85), .12, travel);
+  const releaseValve = builder.component('wheel', 'hydraulic release valve knob', assembly, [-.62, .55, .42], [.32, .1, .32], 'steel', 'fixed', { bottle_jack_release: true }, .45);
+  builder.connect(releaseValve, reservoir, 'mechanical', 'return_valve');
+  const pressureBody = builder.component('sensor', 'jack pressure and overload sensor', assembly, [-.5, .82, -.45], [.24, .18, .24], 'polymer', 'fixed', { bottle_jack_pressure_sensor: true }, .2);
+  const pressureSensor = builder.sensor(pressureBody, 'load', 'jack_load', saddle, 3);
+  builder.control('hydraulic lift control', 'threshold', [pressureSensor], [ramActuator], 'extend the guided ram only while measured load remains below the jack rating', values.payloadKg);
+  const liftControl = builder.controls.at(-1);
+  if (liftControl) { liftControl.kp = .76; liftControl.kd = .12; }
+  builder.connect(pressureBody, pumpCylinder, 'signal', 'hydraulic_pressure_feedback');
+  return { id: 'bottle-jack', mountId: base, editableId: saddle, handles: ['lift', 'stabilize', 'measure'], driveId: pumpCylinder, outputId: saddle };
+}
+
+function addWindYawDrive(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('wind-turbine yaw system', 'Grounded tower, slewing yaw bearing, nacelle, geared yaw actuator, wind vane feedback, drivetrain shaft, hub, and three aerodynamic blades', rootAssemblyId);
+  const foundation = builder.component('support', 'reinforced turbine foundation', assembly, [0, .16, 0], [2.6, .32, 2.6], 'concrete', 'fixed', { wind_turbine_foundation: true }, 420);
+  const tower = builder.component('beam', 'tapered wind-turbine tower', assembly, [0, 2.15, 0], [.7, 4.05, .7], 'steel', 'fixed', { wind_turbine_tower: true }, 185);
+  builder.joint('fixed', foundation, tower);
+  const yawRing = builder.component('gear', 'slewing yaw bearing ring', assembly, [0, 4.24, 0], [1.45, .22, 1.45], 'steel', 'kinematic', { teeth: 72, wind_yaw_moving: true, wind_yaw_bearing: true, wind_yaw_local_x: 0, wind_yaw_local_z: 0 }, 38);
+  const yawJoint = builder.joint('revolute', tower, yawRing, [0, 1, 0], { limits: [-Math.PI, Math.PI] });
+  const nacelle = builder.component('frame', 'wind-turbine nacelle housing', assembly, [0, 4.58, .22], [2.45, .72, 1.22], 'aluminum', 'kinematic', { cad_form: 'housing', wind_yaw_moving: true, wind_nacelle: true, wind_yaw_local_x: 0, wind_yaw_local_z: .22 }, 92);
+  builder.joint('fixed', yawRing, nacelle);
+  const yawServo = builder.component('servo', 'geared electric yaw drive', assembly, [-.66, 4.15, -.48], [.46, .5, .46], 'steel', 'kinematic', { wind_yaw_moving: true, wind_yaw_drive: true, wind_yaw_local_x: -.66, wind_yaw_local_z: -.48 }, 14);
+  const yawActuator = builder.actuator(yawServo, yawJoint, 'servo', 18000, .32, Math.PI * 2);
+  builder.joint('fixed', yawRing, yawServo);
+  builder.connect(yawServo, yawRing, 'power', 'yaw_ring_torque');
+
+  const rotorShaft = builder.component('shaft', 'main rotor shaft', assembly, [0, 4.58, 1.05], [.22, 1.48, .22], 'steel', 'dynamic', { wind_yaw_moving: true, wind_rotor_shaft: true, wind_yaw_local_x: 0, wind_yaw_local_z: 1.05 }, 18);
+  builder.rotate(rotorShaft, [Math.PI / 2, 0, 0]);
+  const rotorJoint = builder.joint('revolute', nacelle, rotorShaft, [0, 0, 1]);
+  const hub = builder.component('wheel', 'three-blade rotor hub', assembly, [0, 4.58, 1.7], [.82, .28, .82], 'steel', 'dynamic', { cad_form: 'rotor_hub', wind_yaw_moving: true, wind_rotor_hub: true, wind_yaw_local_x: 0, wind_yaw_local_z: 1.7 }, 21);
+  builder.joint('fixed', rotorShaft, hub);
+  for (let index = 0; index < 3; index += 1) {
+    const angle = index / 3 * Math.PI * 2 + Math.PI / 2;
+    const radius = 1.18;
+    const blade = builder.component('beam', `aerodynamic turbine blade ${index + 1}`, assembly, [Math.cos(angle) * radius, 4.58 + Math.sin(angle) * radius, 1.72], [1.95, .2, .34], 'composite', 'dynamic', { cad_form: 'aero_blade', wind_yaw_moving: true, wind_rotor_blade: true, wind_rotor_angle: angle, wind_rotor_radius: radius, wind_yaw_local_x: Math.cos(angle) * radius, wind_yaw_local_z: 1.72, blade_index: index, blade_count: 3 }, 8.5);
+    builder.rotate(blade, [0, 0, angle]); builder.joint('fixed', hub, blade);
+  }
+  const generator = builder.component('motor', 'nacelle generator', assembly, [0, 4.58, -.52], [.62, .86, .62], 'steel', 'kinematic', { wind_yaw_moving: true, wind_generator: true, wind_yaw_local_x: 0, wind_yaw_local_z: -.52 }, 44);
+  builder.rotate(generator, [Math.PI / 2, 0, 0]); builder.motor(generator, rotorJoint, Math.max(120, values.torqueNm * 2.4), Math.max(18, values.rpm));
+  builder.joint('fixed', nacelle, generator);
+  builder.connect(rotorShaft, generator, 'power', 'generator_drive');
+  const vaneBody = builder.component('sensor', 'nacelle wind-direction vane', assembly, [0, 5.15, -.45], [.3, .22, .3], 'polymer', 'kinematic', { wind_yaw_moving: true, wind_vane: true, wind_yaw_local_x: 0, wind_yaw_local_z: -.45 }, .5);
+  builder.joint('fixed', nacelle, vaneBody);
+  const windSensor = builder.sensor(vaneBody, 'angle', 'wind_direction_error', nacelle, 12);
+  builder.control('wind alignment yaw control', 'tracking', [windSensor], [yawActuator], 'rotate the nacelle until rotor heading aligns with the measured wind direction', 0);
+  const yawControl = builder.controls.at(-1);
+  if (yawControl) { yawControl.kp = 1.05; yawControl.kd = .12; }
+  builder.connect(vaneBody, yawServo, 'signal', 'yaw_error');
+  return { id: 'wind-yaw-drive', mountId: foundation, editableId: vaneBody, handles: ['track', 'rotate', 'measure'], driveId: yawServo, outputId: hub };
+}
+
+function addDrillPress(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('bench drill press', 'Bolted base, rigid column, adjustable work table, cast head, sliding quill, motor-driven spindle, chuck, drill bit, feed handle, and depth stop', rootAssemblyId);
+  const stroke = values.supplied.has('strokeM') ? Math.min(.32, Math.max(.04, values.strokeM)) : .16;
+  const base = builder.component('plate', 'cast drill-press base', assembly, [0, .14, 0], [3.15, .28, 2.35], 'steel', 'fixed', { drill_press_base: true }, 34);
+  const column = builder.component('shaft', 'rigid drill-press column', assembly, [-.78, 1.86, 0], [.34, 3.35, .34], 'steel', 'fixed', { drill_press_column: true }, 27);
+  builder.joint('fixed', base, column);
+  const tableArm = builder.component('beam', 'height-adjustable table arm', assembly, [-.18, 1.5, 0], [1.32, .22, .26], 'steel', 'fixed', { drill_press_table_arm: true }, 7);
+  const table = builder.component('plate', 'slotted drill work table', assembly, [.55, 1.48, 0], [1.75, .18, 1.55], 'steel', 'fixed', { fixture_plate: true, drill_press_table: true }, 17);
+  builder.joint('fixed', column, tableArm); builder.joint('fixed', tableArm, table);
+  const head = builder.component('frame', 'cast drill-press head', assembly, [-.12, 3.36, 0], [2.15, .78, 1.18], 'steel', 'fixed', { cad_form: 'housing', drill_press_head: true }, 42);
+  builder.joint('fixed', column, head);
+  const quill = builder.component('frame', 'sliding spindle quill', assembly, [.66, 2.95, 0], [.5, .82, .5], 'steel', 'kinematic', { drill_press_quill: true, drill_press_moving: true, operation_travel: stroke }, 8);
+  const quillJoint = builder.joint('prismatic', head, quill, [0, -1, 0], { limits: [0, stroke] });
+  const spindle = builder.component('shaft', 'precision drill spindle', assembly, [.66, 2.73, 0], [.17, 1.18, .17], 'steel', 'dynamic', { drill_press_spindle: true, drill_press_moving: true, operation_travel: stroke }, 3.8);
+  const spindleJoint = builder.joint('revolute', quill, spindle, [0, 1, 0]);
+  const chuck = builder.component('gear', 'three-jaw drill chuck', assembly, [.66, 2.22, 0], [.48, .38, .48], 'steel', 'dynamic', { teeth: 18, drill_press_chuck: true, drill_press_moving: true, operation_travel: stroke }, 2.2);
+  const bit = builder.component('shaft', 'twist drill bit', assembly, [.66, 1.82, 0], [.1, .78, .1], 'steel', 'dynamic', { cad_form: 'shaft', drill_press_bit: true, drill_press_moving: true, operation_travel: stroke }, .45);
+  builder.joint('fixed', spindle, chuck); builder.joint('fixed', chuck, bit);
+  const driveMotor = builder.component('motor', 'belt-driven drill motor', assembly, [-.65, 3.52, 0], [.68, .9, .68], 'steel', 'kinematic', { drill_press_motor: true }, 18);
+  builder.motor(driveMotor, spindleJoint, Math.max(38, values.torqueNm), Math.max(240, values.rpm)); builder.connect(driveMotor, spindle, 'power', 'spindle_drive');
+  const feedHandle = builder.component('beam', 'three-spoke quill feed handle', assembly, [1.12, 3.0, -.46], [1.15, .12, .12], 'steel', 'dynamic', { drill_press_feed_handle: true }, 1.2);
+  const feedJoint = builder.joint('revolute', head, feedHandle, [0, 0, 1], { limits: [-.8, .35] });
+  const feedServo = builder.component('servo', 'controlled quill feed', assembly, [1.02, 3.0, -.24], [.34, .3, .34], 'steel', 'kinematic', { drill_press_feed_drive: true }, 1.4);
+  builder.actuator(feedServo, feedJoint, 'servo', 240, .9, 1.15);
+  const quillActuator = builder.actuator(feedServo, quillJoint, 'linear', 1800, .12, stroke);
+  const workpiece = builder.component('plate', 'clamped drill workpiece', assembly, [.66, 1.67, 0], [1.0, .18, .82], 'aluminum', 'fixed', { drill_press_workpiece: true }, 3.2);
+  builder.joint('fixed', table, workpiece);
+  const depthBody = builder.component('sensor', 'adjustable drilling depth stop', assembly, [.92, 2.7, -.32], [.18, .34, .18], 'steel', 'fixed', { drill_press_depth_stop: true }, .4);
+  const depthSensor = builder.sensor(depthBody, 'position', 'quill_depth', quill, stroke + .5);
+  builder.control('spindle feed and depth control', 'pid', [depthSensor], [quillActuator], 'feed the rotating drill to the requested depth and retract before the quill limit', stroke);
+  const feedControl = builder.controls.at(-1);
+  if (feedControl) { feedControl.kp = .9; feedControl.kd = .12; }
+  builder.connect(depthBody, feedServo, 'signal', 'depth_feedback');
+  return { id: 'drill-press', mountId: base, editableId: table, handles: ['structure', 'rotate', 'measure'], driveId: driveMotor, outputId: bit };
+}
+
+function addRackSteering(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('rack-and-pinion steering rig', 'Steering wheel and column, pinion, guided toothed rack, power-assist drive, two tie rods, steering knuckles, hubs, wheels, and rack-position feedback', rootAssemblyId);
+  const base = builder.component('frame', 'steering geometry test frame', assembly, [0, .2, 0], [3.7, .36, 3.1], 'steel', 'fixed', { steering_test_frame: true }, 72);
+  const housing = builder.component('frame', 'steering rack housing', assembly, [.28, .8, 0], [2.25, .48, .68], 'aluminum', 'fixed', { cad_form: 'housing', steering_rack_housing: true }, 11);
+  builder.joint('fixed', base, housing);
+  const rack = builder.component('shaft', 'toothed steering rack', assembly, [.28, .83, 0], [.16, 2.75, .16], 'steel', 'kinematic', { cad_form: 'shaft', steering_rack: true, steering_rack_moving: true }, 5.8);
+  builder.rotate(rack, [Math.PI / 2, 0, 0]);
+  const rackJoint = builder.joint('prismatic', housing, rack, [0, 0, 1], { limits: [-.18, .18] });
+  const pinion = builder.component('gear', 'steering pinion gear', assembly, [.28, 1.14, 0], [.48, .18, .48], 'steel', 'dynamic', { teeth: 18, steering_pinion: true }, 1.4);
+  const pinionJoint = builder.joint('revolute', housing, pinion, [1, 0, 0]);
+  builder.connect(pinion, rack, 'mechanical', 'rack_and_pinion_mesh');
+  const column = builder.component('shaft', 'collapsible steering column', assembly, [-.48, 1.75, 0], [.15, 1.65, .15], 'steel', 'dynamic', { steering_column: true }, 3.2);
+  builder.rotate(column, [0, 0, -.55]); builder.joint('fixed', pinion, column);
+  const wheel = builder.component('wheel', 'driver steering wheel', assembly, [-.92, 2.33, 0], [.78, .1, .78], 'polymer', 'dynamic', { steering_input_wheel: true }, 1.1);
+  builder.rotate(wheel, [0, 0, -.55]); builder.joint('fixed', column, wheel);
+  const assist = builder.component('motor', 'electric power-steering assist motor', assembly, [.56, 1.18, -.38], [.42, .46, .42], 'steel', 'kinematic', { steering_assist: true }, 6.2);
+  builder.motor(assist, pinionJoint, Math.max(45, values.torqueNm), 36);
+  const rackActuator = builder.actuator(assist, rackJoint, 'linear', 5200, .28, .36);
+  builder.connect(assist, pinion, 'power', 'pinion_assist_torque');
+  for (const side of [-1, 1]) {
+    const sideName = side < 0 ? 'left' : 'right';
+    const tie = builder.member('beam', `${sideName} steering tie rod`, assembly, [.28, .83, side * .9], [1.12, .72, side * 1.25], .11, 'steel', 'fixed', { steering_tie_rod: true, steering_side: sideName });
+    const knuckle = builder.component('support', `${sideName} steering knuckle`, assembly, [1.25, .72, side * 1.32], [.28, .62, .28], 'steel', 'fixed', { steering_knuckle: true, steering_side: sideName }, 4.8);
+    const roadWheel = builder.component('wheel', `${sideName} steered road wheel`, assembly, [1.35, .62, side * 1.5], [.9, .24, .9], 'rubber', 'dynamic', { steering_road_wheel: true, steering_side: sideName }, 7.5);
+    builder.joint('fixed', base, tie); builder.joint('fixed', base, knuckle); builder.joint('revolute', knuckle, roadWheel, [0, 0, 1]);
+    builder.connect(rack, tie, 'mechanical', `${sideName}_rack_ball_joint`); builder.connect(tie, knuckle, 'mechanical', `${sideName}_outer_ball_joint`);
+  }
+  const positionBody = builder.component('sensor', 'steering rack position sensor', assembly, [.28, .44, -.44], [.24, .18, .24], 'polymer', 'fixed', { steering_rack_sensor: true }, .2);
+  const positionSensor = builder.sensor(positionBody, 'position', 'rack_travel', rack, 2);
+  builder.control('steering position assist', 'pid', [positionSensor], [rackActuator], 'translate steering-wheel angle into bounded rack travel and coordinated left-right road-wheel angles', 0);
+  const steeringControl = builder.controls.at(-1);
+  if (steeringControl) { steeringControl.kp = .9; steeringControl.kd = .12; }
+  builder.connect(positionBody, assist, 'signal', 'rack_position_feedback');
+  return { id: 'rack-steering', mountId: base, editableId: wheel, handles: ['structure', 'rotate', 'measure'], driveId: assist, outputId: rack };
+}
+
+function addBicycleBrake(context: ModuleContext): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly('bicycle disc brake', 'Fork test stand, rotating wheel and rotor, rigid caliper bridge, opposed pistons and pads, cable lever, force sensing, and closed-loop clamp control', rootAssemblyId);
+  const stand = builder.component('frame', 'bicycle brake fork test stand', assembly, [0, .28, 0], [2.55, .42, 2.25], 'steel', 'fixed', { bicycle_brake_stand: true }, 32);
+  const leftFork = builder.component('beam', 'left bicycle fork leg', assembly, [-.52, 1.48, -.42], [.22, 2.35, .22], 'aluminum', 'fixed', { bicycle_brake_fork: true }, 3.2);
+  const rightFork = builder.component('beam', 'right bicycle fork leg', assembly, [-.52, 1.48, .42], [.22, 2.35, .22], 'aluminum', 'fixed', { bicycle_brake_fork: true }, 3.2);
+  builder.joint('fixed', stand, leftFork); builder.joint('fixed', stand, rightFork);
+  const axle = builder.component('shaft', 'bicycle wheel axle', assembly, [-.52, 1.18, 0], [.16, 1.22, .16], 'steel', 'dynamic', { bicycle_brake_axle: true }, 1.1);
+  builder.rotate(axle, [Math.PI / 2, 0, 0]);
+  const axleJoint = builder.joint('revolute', stand, axle, [0, 0, 1]);
+  const rim = builder.component('wheel', 'spoked bicycle test wheel', assembly, [-.52, 1.18, 0], [1.8, .12, 1.8], 'rubber', 'dynamic', { bicycle_brake_wheel: true }, 2.8);
+  const rotor = builder.component('gear', 'ventilated bicycle brake rotor', assembly, [-.52, 1.18, -.12], [.72, .035, .72], 'steel', 'dynamic', { teeth: 28, bicycle_brake_rotor: true, road_vehicle_brake: true }, .32);
+  builder.joint('fixed', axle, rim); builder.joint('fixed', axle, rotor);
+  const spinMotor = builder.component('motor', 'wheel spin test motor', assembly, [-.52, .58, .62], [.38, .48, .38], 'steel', 'kinematic', { bicycle_brake_test_motor: true }, 4.2);
+  builder.motor(spinMotor, axleJoint, 28, 90); builder.connect(spinMotor, axle, 'power', 'wheel_test_drive');
+  const caliper = builder.component('frame', 'rigid bicycle brake caliper', assembly, [.02, 1.3, -.12], [.72, .68, .42], 'aluminum', 'fixed', { cad_form: 'housing', bicycle_brake_caliper: true }, 1.4);
+  builder.joint('fixed', leftFork, caliper);
+  const actuators: string[] = [];
+  for (const side of [-1, 1]) {
+    const sideName = side < 0 ? 'inboard' : 'outboard';
+    const pad = builder.component('plate', `${sideName} bicycle brake pad`, assembly, [.02, 1.3, -.12 + side * .075], [.34, .38, .045], 'composite', 'kinematic', { bicycle_brake_pad: true, brake_pad_side: sideName }, .08);
+    const padJoint = builder.joint('prismatic', caliper, pad, [0, 0, -side], { limits: [0, .045] });
+    const piston = builder.component('piston', `${sideName} caliper piston`, assembly, [.02, 1.3, -.12 + side * .17], [.18, .28, .18], 'steel', 'kinematic', { bicycle_brake_piston: true, brake_pad_side: sideName }, .12);
+    builder.rotate(piston, [Math.PI / 2, 0, 0]);
+    actuators.push(builder.actuator(piston, padJoint, 'piston', 1200, .12, .045));
+    builder.connect(piston, pad, 'mechanical', `${sideName}_pad_clamp`);
+  }
+  const leverMount = builder.component('support', 'handlebar lever mount', assembly, [1.1, 2.2, 0], [.36, .52, .36], 'aluminum', 'fixed', { bicycle_brake_lever_mount: true }, .6);
+  builder.joint('fixed', stand, leverMount);
+  const lever = builder.component('beam', 'bicycle brake hand lever', assembly, [1.45, 2.2, 0], [.82, .12, .16], 'aluminum', 'dynamic', { bicycle_brake_lever: true }, .22);
+  builder.joint('revolute', leverMount, lever, [0, 0, 1], { limits: [-.48, .08] });
+  const cable = builder.member('cable', 'bicycle brake control cable', assembly, [1.45, 2.2, 0], [.22, 1.62, -.12], .025, 'steel', 'kinematic', { bicycle_brake_cable: true });
+  builder.connect(lever, cable, 'mechanical', 'lever_cable_pull'); builder.connect(cable, caliper, 'mechanical', 'caliper_input');
+  const forceBody = builder.component('sensor', 'caliper clamp-force sensor', assembly, [.2, 1.58, -.32], [.2, .16, .2], 'polymer', 'fixed', { bicycle_brake_force_sensor: true }, .12);
+  const forceSensor = builder.sensor(forceBody, 'force', 'brake_clamp_force', rotor, 2);
+  builder.control('bicycle brake clamp control', 'threshold', [forceSensor], actuators, 'move both pads equally toward the rotor when the hand lever pulls the cable', 850);
+  const brakeControl = builder.controls.at(-1);
+  if (brakeControl) { brakeControl.kp = .9; brakeControl.kd = .12; }
+  builder.connect(forceBody, lever, 'signal', 'brake_force_feedback');
+  return { id: 'bicycle-brake', mountId: stand, editableId: lever, handles: ['structure', 'rotate', 'measure'], driveId: spinMotor, outputId: rotor };
+}
+
+function addGrainRollerMill(context: ModuleContext): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly(
+    'pedal-powered grain roller mill',
+    'A rigid food-processing stand with a feed hopper, paired counter-rotating grinding rollers, pedal crank and flywheel, guards, bearings, and a collection chute',
+    rootAssemblyId,
+  );
+  const base = builder.component('frame', 'grain mill floor stand', assembly, [0, .22, 0], [3.7, .36, 2.75], 'steel', 'fixed', { grain_mill_frame: true }, 76);
+  const leftPedestal = builder.component('support', 'left roller bearing pedestal', assembly, [-.58, 1.18, 0], [.48, 1.72, 1.76], 'steel', 'fixed', { grain_mill_bearing: true }, 18);
+  const rightPedestal = builder.component('support', 'right roller bearing pedestal', assembly, [.58, 1.18, 0], [.48, 1.72, 1.76], 'steel', 'fixed', { grain_mill_bearing: true }, 18);
+  builder.joint('fixed', base, leftPedestal); builder.joint('fixed', base, rightPedestal);
+
+  const leftRoller = builder.component('roller', 'left fluted grinding roller', assembly, [-.28, 1.48, 0], [.52, 1.44, .52], 'steel', 'dynamic', { grain_mill_roller: true, roller_side: 'left', operation_spin: 2.6 }, 11.5);
+  const rightRoller = builder.component('roller', 'right fluted grinding roller', assembly, [.28, 1.48, 0], [.52, 1.44, .52], 'steel', 'dynamic', { grain_mill_roller: true, roller_side: 'right', operation_spin: -2.6 }, 11.5);
+  builder.joint('revolute', leftPedestal, leftRoller, [0, 0, 1]);
+  builder.joint('revolute', rightPedestal, rightRoller, [0, 0, 1]);
+  builder.joint('gear', leftRoller, rightRoller, [0, 0, 1], { ratio: 1 });
+
+  const hopper = builder.component('container', 'grain feed hopper', assembly, [0, 2.42, 0], [1.52, 1.15, 1.5], 'aluminum', 'fixed', { recycling_hopper: true, grain_hopper: true }, 16);
+  builder.joint('fixed', leftPedestal, hopper);
+  const nipGuard = builder.component('frame', 'transparent roller nip guard', assembly, [0, 1.55, .92], [1.55, .72, .12], 'polymer', 'fixed', { cad_form: 'housing', grain_roller_guard: true }, 3.2);
+  builder.joint('fixed', rightPedestal, nipGuard);
+  const outlet = builder.component('ramp', 'ground grain collection chute', assembly, [.12, .78, .08], [1.45, .18, 1.28], 'aluminum', 'fixed', { grain_outlet: true, route_color: 'orange' }, 7.5);
+  builder.rotate(outlet, [0, 0, -.22]); builder.joint('fixed', base, outlet);
+
+  const flywheelSupport = builder.component('support', 'flywheel outboard bearing bracket', assembly, [-1.22, 1.22, -.84], [.34, 1.5, .34], 'steel', 'fixed', { grain_flywheel_support: true }, 9.5);
+  builder.joint('fixed', base, flywheelSupport);
+  const flywheel = builder.component('wheel', 'large pedal drive flywheel', assembly, [-1.22, 1.52, -1.02], [1.34, .18, 1.34], 'steel', 'dynamic', { grain_mill_flywheel: true, operation_spin: -2.2 }, 24);
+  const flywheelJoint = builder.joint('revolute', flywheelSupport, flywheel, [0, 0, 1]);
+  builder.joint('belt', flywheel, leftRoller, [0, 0, 1], { ratio: 1.8 });
+  const crank = builder.component('beam', 'pedal crank arm', assembly, [-1.22, 1.22, -1.18], [.82, .1, .12], 'steel', 'dynamic', { grain_pedal_crank: true }, 1.8);
+  builder.joint('fixed', flywheel, crank);
+  const pedal = builder.component('plate', 'non-slip pedal tread', assembly, [-.82, 1.22, -1.18], [.46, .12, .22], 'rubber', 'dynamic', { grain_pedal: true }, .8);
+  builder.joint('fixed', crank, pedal);
+
+  const inputDriver = builder.component('servo', 'instrumented pedal input driver', assembly, [-1.58, .62, -.72], [.42, .52, .42], 'steel', 'kinematic', { grain_pedal_driver: true }, 4.8);
+  builder.joint('fixed', base, inputDriver);
+  builder.connect(inputDriver, flywheel, 'power', 'pedal_torque_input');
+  const drive = builder.actuator(inputDriver, flywheelJoint, 'rotary-motor', 520, 2.2, Math.PI * 2);
+  // A second motor registration is unnecessary: the guarded rotary actuator
+  // is the test-lab equivalent of a person pedaling and avoids two competing
+  // velocity commands on the same physical joint.
+  const speedBody = builder.component('sensor', 'grinding roller speed guard', assembly, [.82, 1.82, .7], [.22, .18, .22], 'polymer', 'fixed', { grain_speed_sensor: true }, .24);
+  builder.joint('fixed', rightPedestal, speedBody);
+  const speedSensor = builder.sensor(speedBody, 'speed', 'grinding_roller_rpm', leftRoller, 3);
+  builder.control('grain mill roller interlock', 'threshold', [speedSensor], [drive], 'counter-rotate both guarded rollers only while the hopper and nip guard are in place', 60);
+  const control = builder.controls.at(-1);
+  if (control) { control.kp = .92; control.kd = .12; }
+
+  return { id: 'grain-roller-mill', mountId: base, editableId: hopper, handles: ['structure', 'rotate', 'contain', 'measure'], driveId: inputDriver, outputId: outlet };
+}
+
 function addGenericMotion(context: ModuleContext): ModuleResult {
   const { builder, capabilities, values, rootAssemblyId } = context;
   const assembly = builder.assembly('constructed motion stage', 'Foundation, support, moving link, actuator, sensor, and controller assembled from primitives', rootAssemblyId);
@@ -1237,10 +1960,95 @@ function addGenericMotion(context: ModuleContext): ModuleResult {
   return { id: 'constructed-motion', mountId: base, editableId: sensorBody, handles: rotary ? ['rotate', 'measure'] : ['measure'] };
 }
 
+function addCentrifugalPump(context: ModuleContext): ModuleResult {
+  const { builder, text, values, rootAssemblyId } = context;
+  const assembly = builder.assembly(
+    'centrifugal process pump',
+    'Skid-mounted volute casing with a visible motor-driven impeller, axial suction, tangential discharge, supported shaft, and duty-point instrumentation',
+    rootAssemblyId,
+  );
+  const scale = Math.min(1.3, Math.max(.82, Math.pow(Math.max(5, values.flowRateLpm) / 50, .2)));
+  const pumpRpm = values.supplied.has('rpm') ? Math.max(300, values.rpm) : 1800;
+  const sx = (value: number) => Number((value * scale).toFixed(4));
+
+  const base = builder.component('frame', 'pump and motor skid base', assembly, [0, .16, 0], [sx(4.2), .26, sx(3.8)], 'steel', 'fixed', { pump_skid: true, design_flow_lpm: values.flowRateLpm }, 44 * scale);
+  const rearBearing = builder.component('support', 'rear shaft bearing pedestal', assembly, [0, sx(.92), sx(-.88)], [sx(.58), sx(1.5), sx(.66)], 'steel', 'fixed', { pump_bearing_support: true }, 11 * scale);
+  builder.connect(base, rearBearing, 'mechanical', 'bearing_pedestal_mount');
+
+  const casingBackplate = builder.component('plate', 'circular pump casing backplate', assembly, [0, sx(1.68), sx(-.22)], [sx(2.42), sx(2.42), .16], 'steel', 'fixed', { cad_form: 'flange', pump_casing: true, feature_holes: 8 }, 19 * scale);
+  const volute = builder.component('frame', 'spiral volute pump casing', assembly, [0, sx(1.68), sx(.03)], [sx(2.72), sx(2.72), .34], 'steel', 'fixed', { cad_form: 'rotor_shroud', pump_volute: true, pump_casing: true, design_flow_lpm: values.flowRateLpm }, 26 * scale);
+  const frontBearing = builder.component('frame', 'casing-side shaft bearing ring', assembly, [0, sx(1.68), sx(-.1)], [sx(.66), sx(.66), .14], 'steel', 'fixed', { cad_form: 'rotor_shroud', pump_bearing_support: true }, 2.4 * scale);
+  builder.connect(base, casingBackplate, 'mechanical', 'casing_foot_mount');
+  builder.connect(casingBackplate, volute, 'mechanical', 'volute_casing_joint');
+  builder.connect(casingBackplate, frontBearing, 'mechanical', 'front_bearing_mount');
+
+  const outletNeck = builder.component('frame', 'volute tangential discharge neck', assembly, [sx(.88), sx(2.56), sx(.03)], [sx(.62), sx(.76), sx(.54)], 'steel', 'fixed', { pump_volute_transition: true }, 7.5 * scale);
+  const inlet = builder.component('shaft', 'axial suction inlet pipe', assembly, [0, sx(1.68), sx(.8)], [sx(.52), sx(.96), sx(.52)], 'steel', 'fixed', { pump_flow_path: 'suction', pump_inlet: true }, 5.2 * scale);
+  builder.rotate(inlet, [Math.PI / 2, 0, 0]);
+  const inletFlange = builder.component('plate', 'suction inlet flange', assembly, [0, sx(1.68), sx(1.3)], [sx(.9), sx(.9), .16], 'steel', 'fixed', { cad_form: 'flange', pump_inlet: true, feature_holes: 6 }, 3.4 * scale);
+  const outlet = builder.component('shaft', 'tangential discharge outlet pipe', assembly, [sx(1.02), sx(3.02), sx(.03)], [sx(.5), sx(1.12), sx(.5)], 'steel', 'fixed', { pump_flow_path: 'discharge', pump_outlet: true }, 5.4 * scale);
+  const outletFlange = builder.component('plate', 'discharge outlet flange', assembly, [sx(1.02), sx(3.61), sx(.03)], [sx(.84), sx(.84), .16], 'steel', 'fixed', { cad_form: 'flange', pump_outlet: true, feature_holes: 6 }, 3.1 * scale);
+  builder.rotate(outletFlange, [Math.PI / 2, 0, 0]);
+  builder.connect(volute, outletNeck, 'mechanical', 'volute_discharge_transition');
+  builder.connect(volute, inlet, 'mechanical', 'axial_suction_path');
+  builder.connect(inlet, inletFlange, 'mechanical', 'suction_flange_joint');
+  builder.connect(outletNeck, outlet, 'mechanical', 'tangential_discharge_path');
+  builder.connect(outlet, outletFlange, 'mechanical', 'discharge_flange_joint');
+
+  const shaft = builder.component('shaft', 'bearing-supported centrifugal pump impeller shaft', assembly, [0, sx(1.68), sx(-.52)], [sx(.17), sx(1.8), sx(.17)], 'steel', 'kinematic', { pump_shaft: true, operation_spin: 3.2 }, 3.8 * scale);
+  builder.rotate(shaft, [Math.PI / 2, 0, 0]);
+  const hub = builder.component('wheel', 'multi-vane centrifugal pump impeller hub', assembly, [0, sx(1.68), sx(.16)], [sx(.58), sx(.58), .24], 'aluminum', 'dynamic', { cad_form: 'rotor_hub', pump_impeller: true, design_flow_lpm: values.flowRateLpm }, 2.6 * scale);
+  // The revolute constraint is placed directly at the impeller center. The
+  // long shaft remains a kinematic concentric visual/drive member so its
+  // catalog-axis rotation cannot introduce an off-axis Rapier bearing frame.
+  const shaftJoint = builder.joint('revolute', rearBearing, hub, [0, 0, 1], { anchorA: [0, sx(.76), sx(1.04)], anchorB: [0, 0, 0] });
+  builder.connect(shaft, hub, 'mechanical', 'keyed_impeller_shaft');
+  const bladeCount = countBefore(text, 'vane', countBefore(text, 'blade', 6, 4, 10), 4, 10);
+  for (let index = 0; index < bladeCount; index += 1) {
+    const angle = index / bladeCount * Math.PI * 2;
+    const vane = builder.component('beam', `centrifugal impeller vane ${index + 1}`, assembly, [Math.cos(angle) * sx(.54), sx(1.68) + Math.sin(angle) * sx(.54), sx(.16)], [sx(1.02), sx(.16), .18], 'aluminum', 'dynamic', { cad_form: 'aero_blade', pump_impeller_vane: true, blade_index: index, blade_count: bladeCount }, .34 * scale);
+    const vaneRotation = ((angle + Math.PI / 2 + Math.PI) % (Math.PI * 2)) - Math.PI;
+    builder.rotate(vane, [0, 0, vaneRotation]);
+    builder.joint('fixed', hub, vane);
+  }
+
+  const motor = builder.component('motor', 'close-coupled electric pump motor', assembly, [0, sx(1.68), sx(-1.58)], [sx(.78), sx(.94), sx(.78)], 'steel', 'kinematic', { pump_motor: true, rated_rpm: pumpRpm }, 24 * scale);
+  builder.rotate(motor, [Math.PI / 2, 0, 0]);
+  builder.motor(motor, shaftJoint, Math.max(120, values.flowRateLpm * 3), pumpRpm);
+  const speedActuator = builder.actuator(motor, shaftJoint, 'rotary-motor', Math.max(120, values.flowRateLpm * 3), pumpRpm * Math.PI / 30, Math.PI * 2);
+  builder.connect(base, motor, 'mechanical', 'motor_skid_mount');
+  builder.connect(motor, shaft, 'power', 'close_coupled_impeller_drive');
+
+  const speedSensorBody = builder.component('sensor', 'pump shaft speed encoder', assembly, [sx(.42), sx(1.68), sx(-.7)], [.22, .2, .22], 'polymer', 'fixed', { pump_speed_sensor: true }, .32);
+  const flowSensorBody = builder.component('sensor', 'discharge flow sensor', assembly, [sx(1.38), sx(3.02), sx(.34)], [.26, .22, .26], 'polymer', 'fixed', { pump_flow_sensor: true, design_flow_lpm: values.flowRateLpm }, .38);
+  const speedSensor = builder.sensor(speedSensorBody, 'speed', 'pump_shaft_speed', hub, 3);
+  const flowSensor = builder.sensor(flowSensorBody, 'speed', 'discharge_flow_lpm', outlet, Math.max(4, values.flowRateLpm / 10));
+  const controller = builder.component('controller', 'pump duty-point controller', assembly, [sx(-1.42), sx(.62), sx(-.72)], [.58, .64, .38], 'polymer', 'fixed', { pump_controller: true }, 2.4);
+  builder.connect(volute, speedSensorBody, 'mechanical', 'encoder_bracket');
+  builder.connect(outlet, flowSensorBody, 'mechanical', 'flow_sensor_mount');
+  builder.connect(base, controller, 'mechanical', 'controller_skid_mount');
+  builder.connect(speedSensorBody, controller, 'signal', 'shaft_speed_feedback');
+  builder.connect(flowSensorBody, controller, 'signal', 'discharge_flow_feedback');
+  builder.connect(controller, motor, 'signal', 'variable_speed_command');
+  builder.control('centrifugal pump duty point', 'pid', [flowSensor, speedSensor], [speedActuator], 'trim impeller speed to maintain requested discharge flow while observing shaft speed', values.flowRateLpm);
+  const dutyControl = builder.controls.at(-1);
+  if (dutyControl) { dutyControl.kp = .72; dutyControl.ki = .05; dutyControl.kd = .11; }
+
+  return {
+    id: 'centrifugal-pump',
+    mountId: base,
+    editableId: flowSensorBody,
+    handles: ['structure', 'rotate', 'measure', 'contain'],
+    inputId: inlet,
+    outputId: outlet,
+    driveId: motor,
+  };
+}
+
 function addParametricCadPart(context: ModuleContext): ModuleResult {
   const { builder, text, values, rootAssemblyId } = context;
   const assembly = builder.assembly('parametric cad part', 'Feature-driven part recipe composed from revolved, extruded, swept, and patterned primitive bodies', rootAssemblyId);
-  const rotatingBlade = /impeller|propeller|fan\b|turbine|rotor|centrifugal pump/.test(text);
+  const rotatingBlade = /impeller|propeller|fan\b|turbine|rotor/.test(text);
   if (rotatingBlade) {
     const base = builder.component('frame', 'rotor inspection stand', assembly, [0, .18, 0], [3.2, .3, 2.4], 'steel', 'fixed');
     const support = builder.component('beam', 'rotor bearing pedestal', assembly, [0, 1.35, -.42], [.36, 2.25, .36], 'steel', 'fixed');
@@ -1273,12 +2081,13 @@ function addParametricCadPart(context: ModuleContext): ModuleResult {
   }
 
   const base = builder.component('frame', 'cad inspection base', assembly, [0, .16, 0], [2.8, .25, 2.1], 'steel', 'fixed');
-  const form = /bearing/.test(text) ? 'bearing' : /flange/.test(text) ? 'flange' : /coupling/.test(text) ? 'coupling' : /sprocket/.test(text) ? 'sprocket' : /cam\b/.test(text) ? 'cam' : /bracket/.test(text) ? 'angle_bracket' : /housing|enclosure|casing/.test(text) ? 'housing' : /manifold|duct|pipe/.test(text) ? 'manifold' : 'machined_part';
-  const primitive: PrimitiveKind = ['bearing', 'flange'].includes(form) ? 'wheel' : form === 'coupling' || form === 'manifold' ? 'shaft' : ['sprocket', 'cam'].includes(form) ? 'gear' : form === 'housing' ? 'frame' : 'plate';
-  const dimensions: Vec3 = form === 'housing' ? [2.1, 1.5, 1.65] : form === 'angle_bracket' ? [1.65, 1.25, 1.25] : form === 'manifold' ? [.72, 1.8, .72] : ['bearing', 'flange', 'sprocket', 'cam'].includes(form) ? [1.6, .32, 1.6] : [.82, 1.35, .82];
-  const part = builder.component(primitive, form.replaceAll('_', ' '), assembly, [0, 1.28, 0], dimensions, form === 'angle_bracket' ? 'aluminum' : 'steel', ['bearing', 'flange', 'coupling', 'sprocket', 'cam'].includes(form) ? 'dynamic' : 'fixed', { cad_form: form, feature_holes: 6, wall_thickness: .08 });
+  const form = /bearing/.test(text) ? 'bearing' : /\bseal\b/.test(text) ? 'seal' : /flange/.test(text) ? 'flange' : /\bshaft\b/.test(text) ? 'shaft' : /\bcover\b/.test(text) ? 'cover' : /coupling/.test(text) ? 'coupling' : /sprocket/.test(text) ? 'sprocket' : /cam\b/.test(text) ? 'cam' : /bracket/.test(text) ? 'angle_bracket' : /housing|enclosure|casing/.test(text) ? 'housing' : /manifold|duct|pipe/.test(text) ? 'manifold' : 'machined_part';
+  const primitive: PrimitiveKind = ['bearing', 'seal', 'flange'].includes(form) ? 'wheel' : ['shaft', 'coupling', 'manifold'].includes(form) ? 'shaft' : ['sprocket', 'cam'].includes(form) ? 'gear' : form === 'housing' ? 'frame' : 'plate';
+  const dimensions: Vec3 = form === 'housing' ? [2.1, 1.5, 1.65] : form === 'angle_bracket' ? [1.65, 1.25, 1.25] : form === 'manifold' ? [.72, 1.8, .72] : form === 'shaft' ? [.34, 1.9, .34] : form === 'cover' ? [1.8, .18, 1.8] : form === 'seal' ? [1.35, .22, 1.35] : ['bearing', 'flange', 'sprocket', 'cam'].includes(form) ? [1.6, .32, 1.6] : [.82, 1.35, .82];
+  const rotatingForms = ['bearing', 'seal', 'flange', 'shaft', 'coupling', 'sprocket', 'cam'];
+  const part = builder.component(primitive, form.replaceAll('_', ' '), assembly, [0, 1.28, 0], dimensions, form === 'angle_bracket' ? 'aluminum' : 'steel', rotatingForms.includes(form) ? 'dynamic' : 'fixed', { cad_form: form, feature_holes: 6, wall_thickness: .08 });
   builder.connect(base, part, 'mechanical', 'inspection_fixture');
-  if (['bearing', 'flange', 'coupling', 'sprocket', 'cam'].includes(form)) {
+  if (rotatingForms.includes(form)) {
     const joint = builder.joint('revolute', base, part, [0, 1, 0], { limits: [-Math.PI, Math.PI] });
     const motor = builder.component('motor', 'inspection turntable motor', assembly, [0, .52, 0], [.42, .48, .42], 'steel', 'kinematic');
     builder.motor(motor, joint, Math.max(22, values.torqueNm * .4), Math.max(30, values.rpm * .35));
@@ -1367,7 +2176,7 @@ function addBrazedPlateHeatExchanger(context: ModuleContext): ModuleResult {
 }
 
 const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
-  ['beam', /\bbeams?\b/], ['plate', /\bplates?\b/], ['frame', /\bframes?\b/], ['wheel', /\bwheels?\b/],
+  ['beam', /\bbeams?\b/], ['plate', /\bplates?\b/], ['frame', /\bframes?\b/], ['wheel', /\b(?:fly[- ]?wheels?|wheels?)\b/],
   ['shaft', /\bshafts?\b/], ['gear', /\bgears?\b/], ['pulley', /\bpulleys?\b/], ['belt', /\bbelts?\b/],
   ['motor', /\bmotors?\b/], ['servo', /\bservos?\b/], ['piston', /\bpistons?\b/], ['spring', /\bsprings?\b/],
   ['sensor', /\bsensors?\b/], ['camera', /\bcameras?\b/], ['conveyor', /\bconveyors?\b/], ['ramp', /\bramps?\b/],
@@ -1381,9 +2190,9 @@ function requestedPrimitiveCounts(text: string) {
   for (const [kind, noun] of requestedPrimitivePatterns) {
     const source = noun.source.replace(/^\\b|\\b$/g, '');
     const wordPattern = Object.keys(NUMBER_WORDS).join('|');
-    const match = text.match(new RegExp(`(?:(${wordPattern}|\\d+)\\s*[- ]?\\s*)?${source}\\b`));
+    const match = text.match(new RegExp(`(?:(${wordPattern}|\\d+)\\s+(?:[a-z-]+\\s+){0,2})?${source}\\b`));
     if (!match) continue;
-    result.set(kind, match[1] ? NUMBER_WORDS[match[1]] ?? Number(match[1]) : 1);
+    result.set(kind, match[1] ? Math.min(12, NUMBER_WORDS[match[1]] ?? Number(match[1])) : 1);
   }
   return result;
 }
@@ -1394,11 +2203,17 @@ function addRequestedPrimitiveBodies(context: ModuleContext, missing: Array<[Pri
   const created: string[] = [];
   const actuators: string[] = [];
   const sensors: string[] = [];
+  const mount = builder.components.find((item) => item.id === mountId);
+  const mountPosition = mount?.position ?? [0, 0, 0];
   let offset = 0;
   for (const [kind, count] of missing) for (let index = 0; index < count; index += 1) {
     offset += 1;
     const dynamic = ['gear', 'wheel', 'pulley', 'piston', 'servo', 'gripper', 'hook', 'spring'].includes(kind);
-    const body = builder.component(kind, `requested ${kind} ${index + 1}`, assembly, [1.2 + offset * .62, 1.05 + (offset % 2) * .5, (offset % 3 - 1) * .55], undefined, undefined, dynamic ? 'dynamic' : undefined);
+    const body = builder.component(kind, `requested ${kind} ${index + 1}`, assembly, [
+      mountPosition[0] + .55 + offset * .48,
+      Math.max(.9, mountPosition[1] + .75 + (offset % 2) * .42),
+      mountPosition[2] + (offset % 3 - 1) * .48,
+    ], undefined, undefined, dynamic ? 'dynamic' : undefined);
     created.push(body);
     if (kind === 'gear' || kind === 'wheel' || kind === 'pulley') builder.joint('revolute', mountId, body, [0, 1, 0]);
     else if (kind === 'piston') {
@@ -1417,24 +2232,36 @@ function addRequestedPrimitiveBodies(context: ModuleContext, missing: Array<[Pri
 const moduleRules: ModuleRule[] = [
   { id: 'hvac-brazing-fixture', matches: ({ text }) => /(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/.test(text), compose: addBrazingFixture },
   { id: 'brazed-plate-heat-exchanger', matches: ({ text }) => /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text), compose: addBrazedPlateHeatExchanger },
+  { id: 'bench-vise', matches: ({ text }) => isBenchViseGoal(text), compose: addBenchVise },
+  { id: 'bottle-jack', matches: ({ text }) => isBottleJackGoal(text), compose: addBottleJack },
+  { id: 'grain-roller-mill', matches: ({ text }) => isGrainMillGoal(text), compose: addGrainRollerMill },
+  { id: 'wind-yaw-drive', matches: ({ text }) => isWindYawGoal(text), compose: addWindYawDrive },
+  { id: 'drill-press', matches: ({ text }) => isDrillPressGoal(text), compose: addDrillPress },
+  { id: 'rack-steering', matches: ({ text }) => isRackSteeringGoal(text), compose: addRackSteering },
+  { id: 'bicycle-brake', matches: ({ text }) => isBicycleBrakeGoal(text), compose: addBicycleBrake },
+  { id: 'hydraulic-press', matches: ({ text }) => isHydraulicPressGoal(text), compose: addHydraulicPress },
+  { id: 'drum-winch', matches: ({ text }) => isStandaloneWinchGoal(text), compose: addDrumWinch },
   { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
   { id: 'single-track-vehicle', matches: ({ text }) => isBicycleGoal(text), compose: addSingleTrackVehicle },
   { id: 'automotive-suspension', matches: ({ text }) => /suspension|coil[- ]?over|wishbone/.test(text), compose: addAutomotiveSuspension },
   { id: 'low-profile-road-vehicle', matches: ({ text }) => isRoadVehicleGoal(text) && !/suspension|coil[- ]?over|wishbone/.test(text), compose: addLowProfileRoadVehicle },
   { id: 'rolling-support', matches: ({ text, capabilities }) => capabilities.includes('mobile') && !isBicycleGoal(text) && !isRoadVehicleGoal(text) && !/suspension|coil[- ]?over|wishbone/.test(text), compose: addRollingSupport },
-  { id: 'rotary-transmission', matches: ({ capabilities }) => capabilities.includes('transmit'), compose: addRotaryTransmission },
+  { id: 'planetary-differential', matches: ({ text }) => isPlanetaryDifferentialGoal(text), compose: addPlanetaryDifferential },
+  { id: 'rotary-transmission', matches: ({ text, capabilities }) => capabilities.includes('transmit') && !isPlanetaryDifferentialGoal(text), compose: addRotaryTransmission },
   { id: 'serial-linkage', matches: ({ capabilities }) => capabilities.includes('manipulate'), compose: addSerialLinkage },
-  { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !/bridge|truss/.test(text), compose: addCableSuspension },
+  { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !isStandaloneWinchGoal(text) && !/bridge|truss/.test(text), compose: addCableSuspension },
   { id: 'patient-lift', matches: ({ text }) => /patient/.test(text), compose: addPatientLift },
-  { id: 'parallel-guides', matches: ({ text, capabilities }) => capabilities.includes('lift') && !capabilities.includes('suspend') && !/bridge|truss|patient/.test(text), compose: addParallelGuides },
+  { id: 'scissor-linkage-lift', matches: ({ text }) => isScissorLiftGoal(text), compose: addScissorLift },
+  { id: 'parallel-guides', matches: ({ text, capabilities }) => capabilities.includes('lift') && !capabilities.includes('suspend') && !isBottleJackGoal(text) && !isHydraulicPressGoal(text) && !isStandaloneWinchGoal(text) && !/bridge|truss|patient|scissor/.test(text), compose: addParallelGuides },
   { id: 'warehouse-buffer', matches: ({ text }) => /warehouse|accumulation|buffer/.test(text), compose: addWarehouseBuffer },
   { id: 'tomato-grader', matches: ({ text }) => /tomato|\bproduce\s+(?:grader|sorting|line)\b|fruit.*grad|grader.*fruit/.test(text), compose: addTomatoGrader },
   { id: 'recycling-separator', matches: ({ text }) => /recycl|metal cans?|plastic bottles?/.test(text), compose: addRecyclingSeparator },
   { id: 'material-flow', matches: ({ capabilities, text }) => capabilities.includes('transport') && !/warehouse|accumulation|buffer|tomato|\bproduce\s+(?:grader|sorting|line)\b|fruit|recycl|metal cans?|plastic bottles?/.test(text), compose: addMaterialFlow },
-  { id: 'tracking-axis', matches: ({ capabilities }) => capabilities.includes('track'), compose: addTrackingAxis },
+  { id: 'tracking-axis', matches: ({ text, capabilities }) => capabilities.includes('track') && !isWindYawGoal(text), compose: addTrackingAxis },
+  { id: 'centrifugal-pump', matches: ({ text }) => isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text), compose: addCentrifugalPump },
   { id: 'reciprocating-linkage', matches: ({ text }) => /reciprocat|piston pump|plunger pump/.test(text), compose: addReciprocatingLinkage },
   { id: 'closed-linkage', matches: ({ text }) => /four[- ]bar|linkage/.test(text), compose: addFourBar },
-  { id: 'parametric-cad-part', matches: ({ text }) => /\b(?:bearing|flange|coupling|sprocket|cam|impeller|propeller|fan|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe)\b|centrifugal pump/.test(text) && !/heat exchanger|braz/.test(text), compose: addParametricCadPart },
+  { id: 'parametric-cad-part', matches: ({ text }) => /\b(?:bearing|seal|flange|shaft|cover|coupling|sprocket|cam|impeller|propeller|fan|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe)\b/.test(text) && !isWindYawGoal(text) && !isPlanetaryDifferentialGoal(text) && (!isCentrifugalPumpGoal(text) || isCentrifugalPumpPartGoal(text)) && !/heat exchanger|braz/.test(text), compose: addParametricCadPart },
 ];
 
 export function compileDesignBrief(raw: string): CompiledWorldPlan {
@@ -1477,7 +2304,7 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
     modules.push(builder.at([modules.length ? Math.max(4.8, spacing) * modules.length / 2 : 0, 0, 0], () => addGenericMotion({ builder, text, capabilities, values, rootAssemblyId })));
   }
   const missing = [...requested.entries()].map(([kind, count]) => [kind, Math.max(0, count - builder.components.filter((item) => item.primitive === kind).length)] as [PrimitiveKind, number]).filter(([, count]) => count > 0);
-  if (missing.length) modules.push(builder.at([Math.max(4.8, spacing || 4.8) * modules.length / 2, 0, 0], () => addRequestedPrimitiveBodies({ builder, text, capabilities, values, rootAssemblyId }, missing, modules[0].mountId)));
+  if (missing.length) modules.push(addRequestedPrimitiveBodies({ builder, text, capabilities, values, rootAssemblyId }, missing, modules[0].mountId));
   for (let index = 1; index < modules.length; index += 1) builder.connect(modules[0].mountId, modules[index].mountId, 'mechanical', 'module_interface');
   const transmission = modules.find((module) => module.id === 'rotary-transmission');
   const drivenModule = modules.find((module) => ['cable-suspension', 'span-members'].includes(module.id) && module.driveId);
@@ -1504,11 +2331,14 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
     editableComponentId: editable,
     editableLabel: builder.components.find((component) => component.id === editable)?.role ?? 'selected primitive',
   };
+  const simulationDuration = isStandaloneWinchGoal(text)
+    ? Math.min(30, Math.max(6, values.liftM / Math.max(.01, values.linearSpeedMps), values.supplied.has('durationS') ? values.durationS : 0))
+    : Math.min(12, Math.max(6, Math.min(values.durationS, 12)));
 
   return {
     brief,
     goal,
-    world: { ...worldDefaults, duration: Math.min(12, Math.max(6, Math.min(values.durationS, 12))), bounds: modules.length > 1 ? [22, 10, 14] : [...worldDefaults.bounds] },
+    world: { ...worldDefaults, duration: simulationDuration, bounds: modules.length > 1 ? [22, 10, 14] : [...worldDefaults.bounds] },
     assemblies: builder.assemblies,
     components: builder.components,
     connections: builder.connections,

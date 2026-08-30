@@ -62,4 +62,13 @@ describe('model-authored world compilation', () => {
     plan.joints = [{ id: 'rotor-bearing', joint_type: 'revolute', component_a: 'base', component_b: 'subject', axis: [1, 0, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 }];
     expect(compileAgentPlan('Build a continuous test rotor.', plan).joints[0].limits).toBeUndefined();
   });
+
+  it('preserves a user-authored component cap instead of inflating the compiled budget', () => {
+    const plan = twoBodyPlan('Concept carrier', { role: 'carrier subject body' });
+    plan.requirements = [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 3, unit: '', source: 'user' }];
+    expect(compileAgentPlan('Build a concept carrier with no more than 3 components.', plan).goal.maxComponents).toBe(3);
+
+    plan.requirements = [{ ...plan.requirements[0], target: 1 }];
+    expect(() => compileAgentPlan('Build a concept carrier with no more than 1 component.', plan)).toThrow(/explicit component-count limit of 1/i);
+  });
 });

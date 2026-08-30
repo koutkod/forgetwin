@@ -7,6 +7,7 @@ export const SUPPORTED_METRIC_KEYS = [
   'assembly_integrity', 'component_count', 'flow_rate', 'angular_travel',
   'alignment_error', 'clamp_force',
   'plate_count', 'port_count',
+  'pressing_force', 'stroke', 'platen_parallelism', 'line_speed', 'cable_safety_factor',
 ] as const;
 
 export type SupportedMetricKey = (typeof SUPPORTED_METRIC_KEYS)[number];

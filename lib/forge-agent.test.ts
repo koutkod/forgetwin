@@ -78,6 +78,60 @@ function validCranePlan(): AgentPlan {
   };
 }
 
+function validPressPlan(): AgentPlan {
+  const source = validPlan();
+  return {
+    ...source,
+    normalized_prompt: 'Design a hydraulic press that applies 50 kN over a 300 mm stroke.', machine_name: '50 kN hydraulic press', domain: 'Forming machinery',
+    reasoning_summary: 'Use a rigid press frame, work bed, guided moving platen, and force-rated hydraulic cylinder.',
+    architecture: ['rigid press frame', 'work bed and anvil', 'guided hydraulic ram'], capabilities: ['structure', 'lift'],
+    requirements: [
+      { metric: 'pressing_force', label: 'Available pressing force', operator: 'min', target: 50_000, unit: 'N', source: 'user' },
+      { metric: 'stroke', label: 'Ram stroke', operator: 'min', target: .3, unit: 'm', source: 'user' },
+    ],
+    components: [
+      ...source.components,
+      { id: 'press-frame', primitive: 'frame', assembly_id: 'rover', role: 'rigid hydraulic press frame', position: [2.5, 1.5, 0], rotation: [0, 0, 0], dimensions: [1.6, 2.8, 1.1], material_id: 'steel', body_type: 'fixed', mass: 120, color: '#475569', semantic_tags: [] },
+      { id: 'press-anvil', primitive: 'plate', assembly_id: 'rover', role: 'press work bed and anvil', position: [2.5, .45, 0], rotation: [0, 0, 0], dimensions: [1.2, .2, .9], material_id: 'steel', body_type: 'fixed', mass: 35, color: '#64748b', semantic_tags: [] },
+      { id: 'press-ram', primitive: 'piston', assembly_id: 'rover', role: 'hydraulic press ram and moving platen', position: [2.5, 1.7, 0], rotation: [0, 0, 0], dimensions: [.45, .9, .45], material_id: 'steel', body_type: 'dynamic', mass: 18, color: '#ef4444', semantic_tags: [] },
+    ],
+    joints: [...source.joints, { id: 'press-slide', joint_type: 'prismatic', component_a: 'press-frame', component_b: 'press-ram', axis: [0, -1, 0], limits: [0, .3], ratio: 0, stiffness: 0, damping: 0 }],
+    actuators: [{ id: 'press-cylinder', component_id: 'press-ram', joint_id: 'press-slide', actuator_type: 'piston', max_force: 50_000, max_speed: .12, travel: .3 }], editable_component_id: 'press-ram',
+  };
+}
+
+function validWinchPlan(): AgentPlan {
+  return {
+    normalized_prompt: 'Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.', machine_name: 'Electric cable winch', domain: 'Lifting equipment',
+    reasoning_summary: 'Use a grounded skid, bearing-supported powered cable drum, load line, and rated suspended payload.',
+    architecture: ['grounded winch skid', 'powered winding drum', 'cable load path'], assumptions: ['Concept-scale guarded test'], capabilities: ['structure', 'lift', 'rotate'],
+    requirements: [
+      { metric: 'payload_capacity', label: 'Rated payload', operator: 'min', target: 200, unit: 'kg', source: 'user' },
+      { metric: 'lift_height', label: 'Lift height', operator: 'min', target: 3, unit: 'm', source: 'user' },
+      { metric: 'line_speed', label: 'Cable line speed', operator: 'exact', target: .2, unit: 'm/s', source: 'user' },
+    ],
+    assemblies: [{ id: 'winch', name: 'Winch', purpose: 'Grounded electric cable winch', parent_id: '' }],
+    components: [
+      { id: 'winch-base', primitive: 'frame', assembly_id: 'winch', role: 'grounded winch skid base', position: [0, .2, 0], rotation: [0, 0, 0], dimensions: [2.4, .4, 1.6], material_id: 'steel', body_type: 'fixed', mass: 80, color: '#334155', semantic_tags: [] },
+      { id: 'winch-drum', primitive: 'pulley', assembly_id: 'winch', role: 'supported cable winding drum', position: [0, 1.1, 0], rotation: [Math.PI / 2, 0, 0], dimensions: [1, .8, 1], material_id: 'steel', body_type: 'dynamic', mass: 35, color: '#64748b', semantic_tags: ['rotor'] },
+      { id: 'winch-motor', primitive: 'motor', assembly_id: 'winch', role: 'electric winch drum motor', position: [-.8, 1.1, 0], rotation: [Math.PI / 2, 0, 0], dimensions: [.6, .5, .5], material_id: 'steel', body_type: 'fixed', mass: 14, color: '#0ea5e9', semantic_tags: [] },
+      { id: 'load-line', primitive: 'cable', assembly_id: 'winch', role: 'winch lifting cable', position: [1, 1.8, 0], rotation: [0, 0, 0], dimensions: [.04, 3, .04], material_id: 'steel', body_type: 'dynamic', mass: 2, color: '#94a3b8', semantic_tags: [] },
+      { id: 'winch-payload', primitive: 'container', assembly_id: 'winch', role: '200 kg winch payload', position: [1, .35, 0], rotation: [0, 0, 0], dimensions: [1, .6, .8], material_id: 'steel', body_type: 'dynamic', mass: 200, color: '#ef4444', semantic_tags: ['payload'] },
+    ],
+    connections: [
+      { id: 'motor-mount', source_id: 'winch-base', target_id: 'winch-motor', connection_type: 'mechanical', channel: 'motor_mount' },
+      { id: 'drum-power', source_id: 'winch-motor', target_id: 'winch-drum', connection_type: 'power', channel: 'winch_power' },
+    ],
+    joints: [
+      { id: 'drum-bearing', joint_type: 'revolute', component_a: 'winch-base', component_b: 'winch-drum', axis: [0, 0, 1], limits: null, ratio: 0, stiffness: 0, damping: 0 },
+      { id: 'drum-line', joint_type: 'fixed', component_a: 'winch-drum', component_b: 'load-line', axis: [0, 1, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 },
+      { id: 'payload-line', joint_type: 'rope', component_a: 'load-line', component_b: 'winch-payload', axis: [0, 1, 0], limits: [0, 3], ratio: 0, stiffness: 6000, damping: 220 },
+    ],
+    motors: [{ id: 'drum-drive', component_id: 'winch-motor', joint_id: 'drum-bearing', max_torque: 1800, max_rpm: 4, direction: 1 }],
+    sensors: [], actuators: [], controls: [], editable_component_id: 'winch-drum',
+  };
+}
+
 function fixedPartPlan(machineName: string, parts: Array<{ primitive: AgentPlan['components'][number]['primitive']; role: string }>): AgentPlan {
   return {
     normalized_prompt: `Build a concept ${machineName} from recognizable physical primitives.`, machine_name: machineName, domain: 'Mechanical component design',
@@ -165,6 +219,15 @@ describe('ForgeTwin model-agent boundary', () => {
     const crane = validCranePlan();
     crane.requirements = crane.requirements.map((item) => item.metric === 'payload_capacity' ? { ...item, target: 50 } : item);
     expect(() => validateAgentPlanSemantics(crane, 'Build a 200 kg crane that lifts 50 kg.')).not.toThrow();
+  });
+
+  it('rejects an agent graph that exceeds the user component-count cap', () => {
+    const capped = validPlan({ requirements: [
+      { metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 6, unit: '', source: 'user' },
+    ] });
+    expect(() => validateAgentPlanSemantics(capped, 'Build a four-wheel rover using no more than 6 components.')).toThrow(/explicit component-count limit of 6/i);
+    const withinBudget = { ...capped, requirements: [{ ...capped.requirements[0], target: 7 }] };
+    expect(() => validateAgentPlanSemantics(withinBudget, 'Build a four-wheel rover using no more than 7 components.')).not.toThrow();
   });
 
   it.each([
@@ -269,22 +332,40 @@ describe('ForgeTwin model-agent boundary', () => {
   });
 
   it('normalizes an explicit press-force target into newtons', () => {
-    const source = validPlan();
-    const press: AgentPlan = {
-      ...source,
-      normalized_prompt: 'Build a 20 kN hydraulic press mechanism.', machine_name: '20 kN hydraulic press mechanism', domain: 'Forming machinery',
-      architecture: ['rigid press frame', 'work bed and anvil', 'guided hydraulic ram'], capabilities: ['structure', 'lift'],
-      requirements: [{ metric: 'clamp_force', label: 'Press force', operator: 'min', target: 20_000, unit: 'N', source: 'user' }],
-      components: [
-        ...source.components,
-        { id: 'press-frame', primitive: 'frame', assembly_id: 'rover', role: 'rigid hydraulic press frame', position: [2.5, 1.5, 0], rotation: [0, 0, 0], dimensions: [1.6, 2.8, 1.1], material_id: 'steel', body_type: 'fixed', mass: 120, color: '#475569', semantic_tags: [] },
-        { id: 'press-anvil', primitive: 'plate', assembly_id: 'rover', role: 'press work bed and anvil', position: [2.5, .45, 0], rotation: [0, 0, 0], dimensions: [1.2, .2, .9], material_id: 'steel', body_type: 'fixed', mass: 35, color: '#64748b', semantic_tags: [] },
-        { id: 'press-ram', primitive: 'piston', assembly_id: 'rover', role: 'hydraulic press ram and moving platen', position: [2.5, 1.7, 0], rotation: [0, 0, 0], dimensions: [.45, .9, .45], material_id: 'steel', body_type: 'dynamic', mass: 18, color: '#ef4444', semantic_tags: [] },
-      ],
-      joints: [...source.joints, { id: 'press-slide', joint_type: 'prismatic', component_a: 'press-frame', component_b: 'press-ram', axis: [0, 1, 0], limits: [0, .8], ratio: 0, stiffness: 0, damping: 0 }],
-      actuators: [{ id: 'press-cylinder', component_id: 'press-ram', joint_id: 'press-slide', actuator_type: 'piston', max_force: 25_000, max_speed: .12, travel: .8 }], editable_component_id: 'press-ram',
-    };
+    const press = validPressPlan();
     expect(() => validateAgentPlanSemantics(press, press.normalized_prompt)).not.toThrow();
+    expect(() => validateAgentPlanSemantics(press, 'Build a hydraulic press that applies 50,000 N over a 300 mm stroke.')).not.toThrow();
+    const legacyClampMetric = { ...press, requirements: press.requirements.map((item) => item.metric === 'pressing_force' ? { ...item, metric: 'clamp_force' as const } : item) };
+    expect(() => validateAgentPlanSemantics(legacyClampMetric, press.normalized_prompt)).not.toThrow();
+    const understated = { ...press, requirements: press.requirements.map((item) => item.metric === 'pressing_force' ? { ...item, target: 20_000 } : item) };
+    expect(() => validateAgentPlanSemantics(understated, press.normalized_prompt)).toThrow(/press or clamp force/i);
+    const dropped = { ...press, requirements: press.requirements.filter((item) => item.metric !== 'pressing_force') };
+    expect(() => validateAgentPlanSemantics(dropped, press.normalized_prompt)).toThrow(/press or clamp force/i);
+  });
+
+  it.each([
+    'Design a hydraulic press that applies 50 kN over a 300 mm stroke.',
+    'Build a hydraulic press with 50 kN pressing force and a stroke of 30 cm.',
+    'Build a 50 kN hydraulic press with a 0.3 m ram stroke.',
+  ])('normalizes an explicit press stroke into meters: %s', (prompt) => {
+    const press = validPressPlan();
+    expect(() => validateAgentPlanSemantics(press, prompt)).not.toThrow();
+    const misstated = { ...press, requirements: press.requirements.map((item) => item.metric === 'stroke' ? { ...item, target: 3 } : item) };
+    expect(() => validateAgentPlanSemantics(misstated, prompt)).toThrow(/stroke length/i);
+    const dropped = { ...press, requirements: press.requirements.filter((item) => item.metric !== 'stroke') };
+    expect(() => validateAgentPlanSemantics(dropped, prompt)).toThrow(/stroke length/i);
+  });
+
+  it.each([
+    'Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.',
+    'Build a cable winch with a line speed of 0.2 meters per second.',
+  ])('preserves an exact winch line-speed target: %s', (prompt) => {
+    const winch = validWinchPlan();
+    expect(() => validateAgentPlanSemantics(winch, prompt)).not.toThrow();
+    const misstated = { ...winch, requirements: winch.requirements.map((item) => item.metric === 'line_speed' ? { ...item, target: .3 } : item) };
+    expect(() => validateAgentPlanSemantics(misstated, prompt)).toThrow(/winch line speed/i);
+    const dropped = { ...winch, requirements: winch.requirements.filter((item) => item.metric !== 'line_speed') };
+    expect(() => validateAgentPlanSemantics(dropped, prompt)).toThrow(/winch line speed/i);
   });
 
   it('accepts guarded in-place chat edits and rejects arbitrary tools', () => {
@@ -432,6 +513,7 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(url).toBe('https://api.openai.com/v1/responses');
     expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${visitorKey}`);
     expect(String(init.body)).not.toContain(visitorKey);
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-sol', reasoning: { effort: 'high' }, store: false });
     expect(JSON.stringify(await response.json())).not.toContain(visitorKey);
 
     const rejected = await POST(new Request('http://localhost/api/agent', {

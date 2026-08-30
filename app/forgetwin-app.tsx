@@ -144,6 +144,10 @@ export function ForgeTwinApp() {
     if (requestedPrompt.length < 12) { setPromptError('Describe a physical goal with at least one requirement.'); return; }
     const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true);
     setBusy(true); setError(null); setPromptError(null);
+    // A new machine starts a new edit conversation. Keeping chat from the
+    // previous world made unrelated winch edits appear beside a scissor lift
+    // or steering assembly and gave the impression that context was leaking.
+    setEditMessages([]); setEditPrompt('');
     setGenerationVisual({
       phase: 'interpreting', goal: requestedPrompt, progress: 4,
       headline: 'Reading the engineering intent',
@@ -456,6 +460,20 @@ export function ForgeTwinApp() {
       sensor: ['sensor', 'camera', 'pickup', 'encoder'], gripper: ['gripper'], 'final arm link': ['final arm link', 'wrist link', 'serial link'], arm: ['serial link', 'link'],
       platform: ['platform'], 'bridge deck': ['bridge deck', 'span deck', 'deck'], 'span deck': ['span deck', 'bridge deck', 'deck'], bridge: ['span', 'deck'],
       'output gear': ['output gear'], gear: ['gear', 'sprocket'], 'powered conveyor': ['powered conveyor', 'conveyor', 'transport surface'], conveyor: ['conveyor', 'transport surface'],
+      'winding drum': ['grooved cable winding drum', 'winding drum'], 'cable drum': ['grooved cable winding drum', 'cable drum'], fairlead: ['overhead cable fairlead', 'fairlead'],
+      'cable load cell': ['winch cable load cell', 'cable load cell'], 'winch controller': ['winch speed and overload controller'],
+      'discharge outlet': ['tangential discharge outlet pipe', 'volute tangential discharge neck', 'discharge outlet'], 'flow sensor': ['discharge flow sensor', 'flow sensor'],
+      'pump base': ['pump and motor skid base', 'pump base'], 'planet gear': ['planet gear'], 'differential housing': ['compact differential bench housing', 'open differential housing ring'],
+      'press bed': ['adjustable press bed', 'press bed'], platen: ['moving press platen', 'platen'], 'force sensor': ['platen force and position transducer', 'force sensor'],
+      'press controller': ['two-hand press safety controller', 'press controller'],
+      'moving jaw': ['cast moving vise jaw', 'moving vise jaw'], 'vise jaw': ['cast moving vise jaw', 'cast fixed vise jaw', 'vise jaw'],
+      handwheel: ['sliding vise handwheel', 'handwheel'], 'lead screw': ['Acme-thread lead screw', 'lead screw'],
+      'lifting saddle': ['serrated lifting saddle', 'lifting saddle'], 'pump handle': ['removable pump handle', 'pump handle'],
+      nacelle: ['wind-turbine nacelle housing', 'nacelle'], 'yaw ring': ['slewing yaw bearing ring', 'yaw bearing ring'], 'wind vane': ['nacelle wind-direction vane', 'wind-direction vane'],
+      'work table': ['slotted drill work table', 'drill work table'], spindle: ['precision drill spindle', 'drill spindle'], 'drill bit': ['twist drill bit', 'drill bit'],
+      'steering rack': ['toothed steering rack', 'steering rack'], 'tie rod': ['steering tie rod', 'tie rod'], 'steering wheel': ['driver steering wheel', 'steering wheel'],
+      'brake rotor': ['ventilated bicycle brake rotor', 'brake rotor'], 'brake pad': ['bicycle brake pad', 'brake pad'], caliper: ['rigid bicycle brake caliper', 'brake caliper'], 'hand lever': ['cable hand lever', 'hand lever'],
+      'grinding roller': ['left fluted grinding roller', 'right fluted grinding roller'], flywheel: ['drive flywheel', 'flywheel'],
       'aerodynamic blade': ['aerodynamic blade', 'blade'], 'primary support': ['primary support', 'main support', 'support'], support: ['support', 'outrigger', 'stay'],
     };
     const namedEntry = Object.entries(aliases)
@@ -517,16 +535,16 @@ export function ForgeTwinApp() {
       const degrees = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:°|degrees?)/)?.[1] ?? 15);
       return editTargets.map((item) => ({ tool: 'rotate_component', input: { component_id: item.id, rotation: [item.rotation[0], item.rotation[1], item.rotation[2] + degrees * Math.PI / 180] }, label: `Rotate ${item.role}` }));
     }
-    const resizeIntent = /\b(longer|shorter|larger|bigger|smaller|wider|narrower|taller|height|width|lengthen|enlarge|resize|scale|reduce|shrink|stabilize|stabilise|outrigger)\b/.test(text);
+    const resizeIntent = /\b(longer|shorter|larger|bigger|smaller|wider|narrower|taller|thicker|thinner|height|width|thickness|lengthen|enlarge|resize|scale|reduce|shrink|stabilize|stabilise|outrigger)\b/.test(text);
     if (!resizeIntent) throw new Error('The local chat editor cannot map that request safely. Name the component and action, or connect your OpenAI key for a generative in-place edit.');
-    const reducing = /\b(shorter|smaller|narrower|reduce|shrink)\b/.test(text);
+    const reducing = /\b(shorter|smaller|narrower|thinner|reduce|shrink)\b/.test(text);
     const requestedPercent = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:%|percent)/)?.[1] ?? 0);
     const scale = requestedPercent > 0
       ? (reducing ? Math.max(.1, 1 - requestedPercent / 100) : 1 + requestedPercent / 100)
       : reducing ? .8 : /\b(much|significantly)\b/.test(text) ? 1.4 : 1.2;
     return editTargets.map((item) => {
       const dimensions = [...item.dimensions] as [number, number, number];
-      if (/\b(taller|height)\b/.test(text)) dimensions[1] *= scale;
+      if (/\b(taller|height|thicker|thinner|thickness)\b/.test(text)) dimensions[1] *= scale;
       else if (/\b(wider|width|stabil|outrigger)\b/.test(text)) { dimensions[0] *= scale; dimensions[2] *= scale; }
       else {
         const axis = dimensions.indexOf(Math.max(...dimensions)); dimensions[axis] *= scale;
@@ -783,6 +801,17 @@ function ComponentInspector({ component, state, onMove, onUpdate, busy }: { comp
 
 function wholeMachineChatExamples(state: ForgeState) {
   const roles = state.components.map((item) => item.role).join(' ');
+  if (/hydraulic press|press platen|press column/.test(roles)) return ['Make the press bed 10% thicker', 'Move the force sensor left 0.1 m', 'Use aluminum for the press controller'];
+  if (/winch|winding drum|cable fairlead/.test(roles)) return ['Make the winding drum 10% larger', 'Move the cable load cell up 0.2 m', 'Use aluminum for the winch controller'];
+  if (/vise jaw|vise handwheel|acme-thread lead screw/i.test(roles)) return ['Make the moving jaw 10% wider', 'Make the handwheel 15% larger', 'Use steel for the lead screw'];
+  if (/bottle-jack|lifting saddle|hydraulic pump cylinder/.test(roles)) return ['Make the lifting saddle 10% larger', 'Lengthen the pump handle by 15%', 'Use aluminum for the jack pressure sensor'];
+  if (/yaw bearing|wind-turbine nacelle|wind-direction vane/.test(roles)) return ['Make the yaw ring 10% larger', 'Move the wind vane up 0.2 m', 'Use aluminum for the nacelle'];
+  if (/drill-press|drill spindle|drill work table|twist drill bit/.test(roles)) return ['Make the work table 15% wider', 'Lengthen the drill bit by 10%', 'Move the speed sensor up 0.2 m'];
+  if (/steering rack|steering tie rod|steering pinion/.test(roles)) return ['Make the steering rack 10% wider', 'Lengthen both tie rods by 10%', 'Make the steering wheel 10% larger'];
+  if (/bicycle brake rotor|bicycle brake pad|brake caliper/.test(roles)) return ['Make the brake rotor 10% larger', 'Make both brake pads 10% thicker', 'Use aluminum for the caliper'];
+  if (/grain hopper|grinding roller|grain outlet|drive flywheel/.test(roles)) return ['Make both grinding rollers 10% larger', 'Make the hopper 15% wider', 'Make the flywheel 10% larger'];
+  if (/centrifugal pump|pump volute|discharge flow/.test(roles)) return ['Make the discharge outlet 15% wider', 'Move the flow sensor up 0.2 m', 'Use aluminum for the pump base'];
+  if (/planetary differential|planet carrier|planet gear/.test(roles)) return ['Make every planet gear 10% larger', 'Move the left output speed sensor up 0.2 m', 'Use aluminum for the differential housing'];
   if (/trommel|material recovery|recovered cans|recovered bottles/.test(roles)) return ['Make the metal recovery chute 20% wider', 'Increase the trommel drum diameter by 10%', 'Move the optical sensor up 0.3 m'];
   if (/conveyor|sorting|chute|bin/.test(roles)) return ['Lengthen the powered conveyor by 15%', 'Move the vision portal upstream 0.5 m', 'Widen both output chutes by 20%'];
   if (/crane|boom|counterweight|outrigger/.test(roles)) return ['Widen the crane carrier base by 20%', 'Increase the rear counterweight mass by 25%', 'Lengthen the lifting boom by 15%'];

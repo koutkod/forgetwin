@@ -95,7 +95,35 @@ export function componentMass(kind: PrimitiveKind, dimensions: Vec3, materialId:
     : item.shape === 'sphere'
       ? 4 / 3 * Math.PI * Math.pow(Math.max(.01, dimensions[0]) / 2, 3)
       : dimensions.reduce((product, value) => product * Math.max(.01, value), 1);
-  const fill = kind === 'light' ? .007 : ['beam', 'frame', 'support', 'ramp', 'conveyor'].includes(kind) ? .12 : ['gear', 'wheel', 'pulley'].includes(kind) ? .42 : .72;
+  // Dimensions describe the visible envelope, not a solid billet. Motors,
+  // controllers, sensors, rollers, and end effectors contain substantial air,
+  // electronics, windings, or thin shells, so using the enclosing-box volume
+  // made small accessories weigh hundreds of kilograms. These conservative
+  // envelope fill factors keep concept telemetry recognizable while explicit
+  // payload/counterweight masses remain authoritative.
+  const envelopeFill: Partial<Record<PrimitiveKind, number>> = {
+    light: .007,
+    sensor: .04,
+    camera: .04,
+    controller: .03,
+    motor: .025,
+    servo: .04,
+    piston: .05,
+    spring: .06,
+    roller: .04,
+    gripper: .04,
+    container: .08,
+    belt: .12,
+    beam: .12,
+    frame: .12,
+    support: .12,
+    ramp: .12,
+    conveyor: .12,
+    gear: .42,
+    wheel: .42,
+    pulley: .42,
+  };
+  const fill = envelopeFill[kind] ?? .72;
   return Number(Math.max(.05, volume * material.density * fill).toFixed(2));
 }
 

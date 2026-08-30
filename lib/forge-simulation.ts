@@ -40,6 +40,7 @@ export function assertRunnableDesign(state: ForgeState) {
 
   const assemblyIds = new Set(state.assemblies.map((item) => item.id));
   const componentIds = new Set(state.components.map((item) => item.id));
+  const componentById = new Map(state.components.map((item) => [item.id, item]));
   const jointIds = new Set(state.joints.map((item) => item.id));
   const sensorIds = new Set(state.sensors.map((item) => item.id));
   const actuatorIds = new Set(state.actuators.map((item) => item.id));
@@ -50,15 +51,40 @@ export function assertRunnableDesign(state: ForgeState) {
     if (!item.dimensions.every((value) => Number.isFinite(value) && value > 0) || !Number.isFinite(item.mass) || item.mass <= 0) throw new Error(`INVALID_DESIGN: ${item.id} has invalid physical properties.`);
   }
   for (const item of state.connections) if (item.sourceId === item.targetId || !componentIds.has(item.sourceId) || !componentIds.has(item.targetId)) throw new Error(`INVALID_DESIGN: connection ${item.id} has invalid endpoints.`);
+  const jointPairs = new Set<string>();
   for (const item of state.joints) {
     if (item.componentA === item.componentB || !componentIds.has(item.componentA) || !componentIds.has(item.componentB)) throw new Error(`INVALID_DESIGN: joint ${item.id} has invalid endpoints.`);
+    const pair = [item.componentA, item.componentB].sort().join('\u0000');
+    if (jointPairs.has(pair)) throw new Error(`INVALID_DESIGN: joint ${item.id} duplicates a joint between the same body pair.`);
+    jointPairs.add(pair);
+    if (item.type !== 'fixed' && componentById.get(item.componentA)?.bodyType === 'fixed' && componentById.get(item.componentB)?.bodyType === 'fixed') throw new Error(`INVALID_DESIGN: motion joint ${item.id} connects two fixed bodies.`);
     if (!item.axis.every(Number.isFinite) || Math.hypot(...item.axis) < .5) throw new Error(`INVALID_DESIGN: joint ${item.id} has an invalid axis.`);
   }
+  const validDrivenJoint = (jointId: string | undefined) => {
+    if (!jointId) return false;
+    const drivenJoint = state.joints.find((item) => item.id === jointId);
+    return Boolean(drivenJoint && drivenJoint.type !== 'fixed' && componentById.get(drivenJoint.componentB)?.bodyType !== 'fixed');
+  };
+  const hasUnboundMotorOutput = (componentId: string) => state.connections.some((item) => ['mechanical', 'power'].includes(item.type)
+    && (item.sourceId === componentId || item.targetId === componentId));
+  const validMotorDrive = state.motors.some((item) => componentById.get(item.componentId)?.primitive === 'motor'
+    && (item.jointId ? validDrivenJoint(item.jointId) : hasUnboundMotorOutput(item.componentId)));
+  const validActuatorDrive = state.actuators.some((item) => ['motor', 'servo', 'piston'].includes(componentById.get(item.componentId)?.primitive ?? '')
+    && validDrivenJoint(item.jointId));
   const moving = state.goal.capabilities.some((capability) => ['transport', 'lift', 'mobile', 'manipulate', 'transmit', 'track', 'rotate'].includes(capability));
-  if (moving && !state.motors.length && !state.actuators.length) throw new Error('INVALID_DESIGN: the requested motion has no motor or actuator.');
-  for (const item of state.motors) if (!componentIds.has(item.componentId) || (item.jointId && !jointIds.has(item.jointId))) throw new Error(`INVALID_DESIGN: motor ${item.id} has a dangling reference.`);
+  if (moving && !validMotorDrive && !validActuatorDrive) throw new Error('INVALID_DESIGN: the requested motion has no valid driven path.');
+  for (const item of state.motors) {
+    if (!componentIds.has(item.componentId) || (item.jointId && !jointIds.has(item.jointId))) throw new Error(`INVALID_DESIGN: motor ${item.id} has a dangling reference.`);
+    if (componentById.get(item.componentId)?.primitive !== 'motor') throw new Error(`INVALID_DESIGN: motor ${item.id} is not registered on a motor body.`);
+    if (item.jointId && !validDrivenJoint(item.jointId)) throw new Error(`INVALID_DESIGN: motor ${item.id} does not reference a movable drive joint.`);
+    if (!item.jointId && !hasUnboundMotorOutput(item.componentId)) throw new Error(`INVALID_DESIGN: motor ${item.id} has no joint or physical output interface.`);
+  }
   for (const item of state.sensors) if (!componentIds.has(item.componentId) || (item.targetId && !componentIds.has(item.targetId))) throw new Error(`INVALID_DESIGN: sensor ${item.id} has a dangling reference.`);
-  for (const item of state.actuators) if (!componentIds.has(item.componentId) || !jointIds.has(item.jointId)) throw new Error(`INVALID_DESIGN: actuator ${item.id} has a dangling reference.`);
+  for (const item of state.actuators) {
+    if (!componentIds.has(item.componentId) || !jointIds.has(item.jointId)) throw new Error(`INVALID_DESIGN: actuator ${item.id} has a dangling reference.`);
+    if (!['motor', 'servo', 'piston'].includes(componentById.get(item.componentId)?.primitive ?? '')) throw new Error(`INVALID_DESIGN: actuator ${item.id} is not registered on an actuator body.`);
+    if (!validDrivenJoint(item.jointId)) throw new Error(`INVALID_DESIGN: actuator ${item.id} does not reference a movable drive joint.`);
+  }
   for (const item of state.controls) {
     if (item.sensorIds.some((id) => !sensorIds.has(id)) || item.actuatorIds.some((id) => !actuatorIds.has(id))) throw new Error(`INVALID_DESIGN: control ${item.id} has a dangling channel.`);
     if (![item.setpoint, item.kp, item.ki, item.kd, item.calibrationX].every(Number.isFinite)) throw new Error(`INVALID_DESIGN: control ${item.id} has non-finite gains.`);
@@ -137,6 +163,13 @@ function worldAnalysis(state: ForgeState) {
   const calibrationError = calibrationErrors.length ? Math.max(...calibrationErrors) : 0;
   const baseControl = state.controls.length ? state.controls.reduce((sum, item) => sum + item.kp + item.kd * .35, 0) / state.controls.length : .55;
   const controlQuality = clamp(baseControl / (1 + calibrationError * 3.5), .08, 1.7);
+  const pressRam = state.components.find((item) => item.parameters.hydraulic_ram);
+  const pressActuator = pressRam ? state.actuators.find((item) => item.componentId === pressRam.id) : undefined;
+  const pressControl = state.controls.find((item) => /press/i.test(item.name));
+  const pressSensor = pressControl ? state.sensors.find((item) => pressControl.sensorIds.includes(item.id)) : undefined;
+  const pressSensorBody = pressSensor ? state.components.find((item) => item.id === pressSensor.componentId) : undefined;
+  const pressCalibrationError = pressControl && pressSensorBody ? Math.abs(pressSensorBody.position[0] - pressControl.calibrationX) : 0;
+  const pressControlQuality = pressControl ? clamp((pressControl.kp + pressControl.kd * .35) / (1 + pressCalibrationError * 3.5), .08, 1.7) : 0;
   const gearRelations = state.joints.filter((item) => item.type === 'gear' || item.type === 'belt');
   const gearRatio = gearRelations.reduce((product, item) => product * (item.ratio ?? 1), 1);
   const gears = state.components.filter((item) => item.primitive === 'gear');
@@ -155,12 +188,66 @@ function worldAnalysis(state: ForgeState) {
   const continuousTravel = Math.max(0, ...state.motors.map((motor) => {
     const drivenJoint = motor.jointId ? state.joints.find((item) => item.id === motor.jointId) : undefined;
     return drivenJoint?.type === 'revolute' && !drivenJoint.limits ? motor.maxRpm * 6 * state.world.duration : 0;
+  }), ...state.actuators.map((actuator) => {
+    const drivenJoint = state.joints.find((item) => item.id === actuator.jointId);
+    return drivenJoint?.type === 'revolute' && !drivenJoint.limits && ['rotary-motor', 'servo'].includes(actuator.type)
+      ? actuator.maxSpeed * state.world.duration * 180 / Math.PI
+      : 0;
   }));
   const angularTravel = Math.max(continuousTravel, ...state.joints.filter((item) => item.type === 'revolute' && item.limits).map((item) => Math.abs(item.limits![1] - item.limits![0]) * 180 / Math.PI), 0);
-  const piston = state.components.find((item) => item.primitive === 'piston' && Number(item.parameters.bore_m) > 0);
+  const piston = state.components.find((item) => item.primitive === 'piston' && Number(item.parameters.bore_m) > 0 && /reciprocating|pump plunger/.test(item.role));
   const bore = Number(piston?.parameters.bore_m ?? 0);
   const stroke = Number(piston?.parameters.stroke_m ?? 0);
-  const flowRate = bore && stroke ? Math.PI * Math.pow(bore / 2, 2) * stroke * motorRpm * meshEfficiency * 1000 : 0;
+  const crankShaft = state.components.find((item) => /crank shaft/.test(item.role));
+  const crankJoint = crankShaft ? state.joints.find((item) => item.type === 'revolute' && item.componentB === crankShaft.id) : undefined;
+  const pistonMotor = crankJoint ? state.motors.find((item) => item.jointId === crankJoint.id) : undefined;
+  const pistonRpm = pistonMotor?.maxRpm ?? 0;
+  const pistonEfficiency = clamp(Number(piston?.parameters.volumetric_efficiency ?? .82), .2, 1);
+  const pistonFlowRate = bore && stroke && pistonRpm ? Math.PI * Math.pow(bore / 2, 2) * stroke * pistonRpm * pistonEfficiency * 1000 : 0;
+  const pumpImpeller = state.components.find((item) => item.parameters.pump_impeller);
+  const pumpMotorBody = state.components.find((item) => item.parameters.pump_motor);
+  const pumpMotor = pumpMotorBody ? state.motors.find((item) => item.componentId === pumpMotorBody.id) : undefined;
+  const pumpRpm = pumpMotor?.maxRpm ?? 0;
+  const pumpControl = state.controls.find((item) => /centrifugal pump duty point/i.test(item.name));
+  // A pump loop commonly has sensors on both suction and discharge. Their
+  // physical separation is intentional, so treating the farthest sensor as a
+  // calibration error incorrectly derates a healthy rated-point design. The
+  // first sensor is the controller's reference pickup, matching the generic
+  // control-quality convention used elsewhere in this model.
+  const pumpReferenceSensor = pumpControl
+    ? state.sensors.find((item) => item.id === pumpControl.sensorIds[0])
+    : undefined;
+  const pumpReferenceBody = pumpReferenceSensor
+    ? state.components.find((item) => item.id === pumpReferenceSensor.componentId)
+    : undefined;
+  const pumpCalibrationError = pumpControl && pumpReferenceBody
+    ? Math.abs(pumpReferenceBody.position[0] - pumpControl.calibrationX)
+    : 0;
+  const pumpControlQuality = pumpControl ? clamp((pumpControl.kp + pumpControl.kd * .35) / (1 + pumpCalibrationError * 3.5), .08, 1.7) : .55;
+  const pumpHasFlowPath = state.components.some((item) => item.parameters.pump_volute)
+    && state.components.some((item) => item.parameters.pump_flow_path === 'suction')
+    && state.components.some((item) => item.parameters.pump_flow_path === 'discharge');
+  const designFlow = Number(pumpImpeller?.parameters.design_flow_lpm ?? 0);
+  const ratedRpm = Number(pumpMotorBody?.parameters.rated_rpm ?? 0);
+  // Centrifugal-pump affinity law at concept fidelity: the authored duty-point
+  // flow scales linearly with achieved shaft speed, but only when the impeller,
+  // volute, suction, and discharge path all exist in the shared physical graph.
+  const centrifugalFlowRate = pumpImpeller && pumpMotor && pumpHasFlowPath && designFlow > 0 && ratedRpm > 0
+    ? designFlow * pumpRpm / ratedRpm * clamp(.96 + pumpControlQuality * .08, .96, 1.08)
+    : 0;
+  const flowRate = Math.max(pistonFlowRate, centrifugalFlowRate);
+  const winchDrum = state.components.find((item) => item.parameters.winch_drum);
+  const winchMotorBody = state.components.find((item) => item.parameters.electric_winch_motor);
+  const winchMotor = winchMotorBody ? state.motors.find((item) => item.componentId === winchMotorBody.id) : undefined;
+  const winchPayload = state.components.find((item) => item.parameters.winch_payload);
+  const drumRadius = Number(winchDrum?.parameters.drum_radius_m ?? 0);
+  const lineSpeed = drumRadius > 0 && winchMotor ? drumRadius * winchMotor.maxRpm * Math.PI * 2 / 60 : 0;
+  const ratedCableLoad = Math.max(0, ...state.components.filter((item) => item.parameters.winch_cable).map((item) => Number(item.parameters.rated_breaking_load_n ?? 0)));
+  const winchPayloadMass = Number(winchPayload?.parameters.payload_kg ?? winchPayload?.mass ?? 0);
+  const cableSafetyFactor = ratedCableLoad / Math.max(winchPayloadMass * 9.81, 1);
+  const platenParallelism = pressControl ? 2.4 / Math.max(1, 1 + pressControlQuality * 2 + (pressControl.sensorIds.length || 1) * .5) : 0;
+  const pressingForce = pressActuator?.maxForce ?? 0;
+  const pressStroke = pressActuator?.travel ?? 0;
   const conveyor = state.components.find((item) => item.primitive === 'conveyor');
   const ramps = state.components.filter((item) => item.primitive === 'ramp');
   const dropHeight = conveyor && ramps.length ? Math.max(...ramps.map((item) => Math.abs((conveyor.position[1] + conveyor.dimensions[1] / 2) - (item.position[1] + item.dimensions[1] / 2)) * 100)) : 0;
@@ -168,7 +255,7 @@ function worldAnalysis(state: ForgeState) {
     totalMass, payloadMass, footprintX, footprintZ, centerHeight, counterMass, motorTorque, motorRpm,
     actuatorForce, actuatorSpeed, springCount: springs.length, springStiffness, springDamping, wheelCount,
     sensorCount, actuatorCount, controlQuality, calibrationError, gearRatio, meshEfficiency, reach, span,
-    liftHeight, wheelRadius, tireFriction, structuralCapacity, angularTravel, flowRate, dropHeight,
+    liftHeight, wheelRadius, tireFriction, structuralCapacity, angularTravel, flowRate, lineSpeed, cableSafetyFactor, platenParallelism, pressingForce, pressStroke, dropHeight,
     connectivity: connectivityRatio(state),
   };
 }
@@ -199,11 +286,16 @@ function source(metric: string) {
     sorting_accuracy: 'classification sensor count and calibrated routing-control quality', collisions: 'harmful Rapier contact episodes only',
     drop_height: 'vertical difference between active transport and transfer surfaces', control_error: 'controller gain and current sensor calibration offset',
     assembly_integrity: 'largest mechanically connected graph component', component_count: 'physical body count in the shared world',
-    flow_rate: 'piston swept volume × crank rpm × volumetric efficiency', angular_travel: 'continuous motor travel or bounded revolute-joint envelope over simulated time',
+    flow_rate: 'piston swept volume or centrifugal duty-point affinity law × achieved shaft speed, with a complete inlet-volute-outlet path', angular_travel: 'continuous motor travel or bounded revolute-joint envelope over simulated time',
     alignment_error: 'vision and position sensor coverage combined with fixture-controller calibration',
     clamp_force: 'sum of registered hold-down actuator force limits',
     plate_count: 'count of individually modeled corrugated heat-transfer plates',
     port_count: 'count of modeled hot- and cold-side process connections',
+    pressing_force: 'registered hydraulic ram force limit',
+    stroke: 'registered ram actuator travel and prismatic guide limit',
+    platen_parallelism: 'platen feedback coverage and closed-loop control quality',
+    line_speed: 'measured winding-drum circumference × registered shaft speed',
+    cable_safety_factor: 'modeled cable breaking load divided by suspended design load',
   };
   return sources[metric];
 }
@@ -248,6 +340,11 @@ function rawMetric(metric: string, state: ForgeState, a: ReturnType<typeof world
     clamp_force: a.actuatorForce,
     plate_count: state.components.filter((item) => item.parameters.bphe_plate).length,
     port_count: state.components.filter((item) => item.parameters.bphe_port).length,
+    pressing_force: a.pressingForce,
+    stroke: a.pressStroke,
+    platen_parallelism: a.platenParallelism,
+    line_speed: a.lineSpeed,
+    cable_safety_factor: a.cableSafetyFactor,
   };
   const value = values[metric];
   if (value === undefined) throw new Error(`UNSUPPORTED_MEASUREMENT: “${metric}” has no registered evaluator.`);
@@ -281,6 +378,55 @@ function objective(measures: MetricReading[]) {
 function recommendations(state: ForgeState, failed: MetricReading[]): OptimizationAction[] {
   const actions: OptimizationAction[] = [];
   const add = (targetId: string, field: string, before: number | string, after: number | string, reason: string) => actions.push({ targetId, field, before, after, reason });
+  const satisfyingValue = (reading: MetricReading) => reading.operator === 'min'
+    ? reading.target * 1.02
+    : reading.operator === 'max'
+      ? reading.target * .98
+      : reading.target;
+  const pressRam = state.components.find((item) => item.parameters.hydraulic_ram);
+  const pressActuator = pressRam ? state.actuators.find((item) => item.componentId === pressRam.id) : undefined;
+  const pressControl = state.controls.find((item) => /press/i.test(item.name));
+  const forceReading = failed.find((item) => item.metric === 'pressing_force');
+  if (forceReading && pressActuator) {
+    const requestedForce = round(Math.max(1, satisfyingValue(forceReading)), 1);
+    add(pressActuator.id, 'maxForce', pressActuator.maxForce, requestedForce, 'Resize the hydraulic ram from the measured press-force shortfall.');
+    const barrel = state.components.find((item) => item.parameters.hydraulic_barrel);
+    if (barrel) add(barrel.id, 'rated_force_n', Number(barrel.parameters.rated_force_n ?? 0), requestedForce, 'Match the cylinder pressure-vessel rating to the redesigned ram force.');
+  }
+  const strokeReading = failed.find((item) => item.metric === 'stroke');
+  if (strokeReading && pressActuator) {
+    const requestedStroke = round(Math.max(.001, satisfyingValue(strokeReading)), 4);
+    add(pressActuator.id, 'travel', pressActuator.travel, requestedStroke, 'Set hydraulic actuator travel from the measured ram-stroke error.');
+    const guide = state.joints.find((item) => item.id === pressActuator.jointId);
+    if (guide) add(guide.id, 'upper travel limit', guide.limits?.[1] ?? 0, requestedStroke, 'Match the platen guide limit to the redesigned hydraulic stroke.');
+  }
+  const parallelismReading = failed.find((item) => item.metric === 'platen_parallelism');
+  if (parallelismReading && pressControl) {
+    const desiredError = Math.max(.001, satisfyingValue(parallelismReading));
+    const sensorCount = Math.max(1, pressControl.sensorIds.length);
+    const sensor = state.sensors.find((item) => pressControl.sensorIds.includes(item.id));
+    const sensorBody = sensor ? state.components.find((item) => item.id === sensor.componentId) : undefined;
+    const calibrationError = sensorBody ? Math.abs(sensorBody.position[0] - pressControl.calibrationX) : 0;
+    const desiredQuality = clamp((2.4 / desiredError - 1 - sensorCount * .5) / 2, .08, 1.7);
+    const nextKp = round(clamp(desiredQuality * (1 + calibrationError * 3.5) - pressControl.kd * .35, .01, 10), 3);
+    add(pressControl.id, 'kp', pressControl.kp, nextKp, 'Retune the platen feedback loop from the measured parallelism error.');
+  }
+  const lineSpeedReading = failed.find((item) => item.metric === 'line_speed');
+  const winchDrum = state.components.find((item) => item.parameters.winch_drum);
+  const winchMotorBody = state.components.find((item) => item.parameters.electric_winch_motor);
+  const winchMotor = winchMotorBody ? state.motors.find((item) => item.componentId === winchMotorBody.id) : undefined;
+  const drumRadius = Number(winchDrum?.parameters.drum_radius_m ?? 0);
+  if (lineSpeedReading && winchMotor && drumRadius > 0) {
+    const requestedSpeed = Math.max(.001, satisfyingValue(lineSpeedReading));
+    add(winchMotor.id, 'maxRpm', winchMotor.maxRpm, round(requestedSpeed / (2 * Math.PI * drumRadius) * 60, 3), 'Set drum speed from measured cable speed and winding radius.');
+  }
+  const cableReading = failed.find((item) => item.metric === 'cable_safety_factor');
+  if (cableReading) {
+    const payload = state.components.find((item) => item.parameters.winch_payload);
+    const payloadMass = Number(payload?.parameters.payload_kg ?? payload?.mass ?? 0);
+    const ratedLoad = round(Math.max(.001, satisfyingValue(cableReading)) * Math.max(payloadMass * 9.81, 1), 1);
+    state.components.filter((item) => item.parameters.winch_cable).forEach((item) => add(item.id, 'rated_breaking_load_n', Number(item.parameters.rated_breaking_load_n ?? 0), ratedLoad, 'Select cable capacity from suspended load and the measured safety-factor requirement.'));
+  }
   if (failed.some((item) => ['payload_capacity', 'output_torque', 'joint_margin', 'traction_margin', 'clamp_force'].includes(item.metric))) {
     state.actuators.slice(0, 2).forEach((item) => add(item.id, 'maxForce', item.maxForce, round(item.maxForce * 1.5, 1), 'Increase force from measured load margin.'));
     state.motors.slice(0, 2).forEach((item) => add(item.id, 'maxTorque', item.maxTorque, round(item.maxTorque * 1.5, 1), 'Increase torque from measured drive margin.'));
@@ -315,15 +461,18 @@ function jointData(RAPIER: typeof import('@dimforge/rapier3d-compat'), item: Joi
   return null;
 }
 
-type ReplayBody = { translation(): { x: number; y: number; z: number }; linvel(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } };
+type ReplayBody = { translation(): { x: number; y: number; z: number }; linvel(): { x: number; y: number; z: number }; angvel(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } };
 
 function bodySensorValue(state: ForgeState, bodyById: Map<string, ReplayBody>, sensorId: string, progress: number) {
   const sensor = state.sensors.find((item) => item.id === sensorId)!;
   const body = bodyById.get(sensor.targetId ?? sensor.componentId);
   const p = body?.translation() ?? { x: 0, y: 0, z: 0 };
   const v = body?.linvel() ?? { x: 0, y: 0, z: 0 };
+  const w = body?.angvel() ?? { x: 0, y: 0, z: 0 };
   const q = body?.rotation() ?? { x: 0, y: 0, z: 0, w: 1 };
   if (sensor.type === 'position' || sensor.type === 'distance') return Math.hypot(p.x, p.y, p.z);
+  if (sensor.channel === 'discharge_flow_lpm') return worldAnalysis(state).flowRate;
+  if (sensor.type === 'speed' && /(?:rpm|shaft|rotor|wheel)/.test(sensor.channel)) return Math.hypot(w.x, w.y, w.z) * 30 / Math.PI;
   if (sensor.type === 'speed') return Math.hypot(v.x, v.y, v.z);
   if (sensor.type === 'angle' || sensor.type === 'imu') return 2 * Math.acos(clamp(Math.abs(q.w), 0, 1)) * 180 / Math.PI;
   if (sensor.type === 'load' || sensor.type === 'force') return state.components.find((item) => item.id === sensor.targetId)?.mass ?? 0;
@@ -398,7 +547,12 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     // colliders on the hub below instead of independent bodies connected by a
     // stiff constraint network, which is both more accurate and more stable.
     if (rotorBladeIds.has(item.id)) continue;
-    const descriptor = item.bodyType === 'fixed' ? RAPIER.RigidBodyDesc.fixed() : item.bodyType === 'kinematic' ? RAPIER.RigidBodyDesc.kinematicVelocityBased() : RAPIER.RigidBodyDesc.dynamic();
+    const positionDriven = Boolean(item.parameters.press_platen || item.parameters.winch_hook || item.parameters.scissor_platform);
+    const descriptor = item.bodyType === 'fixed'
+      ? RAPIER.RigidBodyDesc.fixed()
+      : item.bodyType === 'kinematic'
+        ? positionDriven ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.kinematicVelocityBased()
+        : RAPIER.RigidBodyDesc.dynamic();
     descriptor.setTranslation(item.position[0], item.position[1], item.position[2]).setRotation(eulerQuaternion(item.rotation)).setLinearDamping(.28).setAngularDamping(.38);
     if (item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel || item.parameters.bicycle_sprocket) descriptor.setAdditionalSolverIterations(10);
     const body = world.createRigidBody(descriptor);
@@ -414,7 +568,12 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     if (item.parameters.cad_form === 'rotor_hub' || item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel) colliderDescriptor.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
     // The duct shroud is represented by a torus in the editor. A solid box
     // collider would incorrectly fill its opening and jam the rotor.
-    if (item.parameters.cad_form !== 'rotor_shroud' && !item.parameters.bicycle_chain) {
+    const reducedOrderVisual = Boolean(
+      item.parameters.scissor_arm || item.parameters.scissor_pivot || item.parameters.scissor_actuator
+      || item.parameters.planetary_carrier || item.parameters.planetary_carrier_pad || item.parameters.planetary_sun || item.parameters.planetary_ring || item.parameters.planetary_planet
+      || item.parameters.hydraulic_barrel || item.parameters.hydraulic_ram || item.parameters.press_load_cell,
+    );
+    if (item.parameters.cad_form !== 'rotor_shroud' && !item.parameters.bicycle_chain && !reducedOrderVisual) {
       const collider = world.createCollider(colliderDescriptor, body);
       colliderOwner.set(collider.handle, item.id);
     }
@@ -532,7 +691,34 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     for (const actuator of state.actuators) {
       const targetJoint = state.joints.find((item) => item.id === actuator.jointId);
       const driven = targetJoint ? bodyById.get(targetJoint.componentB) : null;
+      const drivenComponent = targetJoint ? state.components.find((item) => item.id === targetJoint.componentB) : undefined;
+      const operationCycle = progress < .5 ? progress * 2 : (1 - progress) * 2;
+      // Reduced-order press, winch, and scissor-lift outputs are commanded as kinematic load
+      // carriers inside the same Rapier world. Their attached tooling/payload
+      // still participates in contacts and joints, but the requested stroke is
+      // exact and cannot inject unbounded velocity through a rope constraint.
+      if (driven && drivenComponent?.bodyType === 'kinematic' && (drivenComponent.parameters.press_platen || drivenComponent.parameters.winch_hook || drivenComponent.parameters.scissor_platform)) {
+        const direction = drivenComponent.parameters.press_platen ? -1 : 1;
+        const oneWaySeconds = actuator.travel / Math.max(.001, actuator.maxSpeed);
+        const cycleSeconds = oneWaySeconds * 2;
+        const cycleTime = cycleSeconds > 0 ? time % cycleSeconds : 0;
+        const speedLimitedTravel = Math.min(actuator.travel, Math.max(0, (cycleTime <= oneWaySeconds ? cycleTime : cycleSeconds - cycleTime) * actuator.maxSpeed));
+        const commandedTravel = drivenComponent.parameters.winch_hook || drivenComponent.parameters.scissor_platform
+          ? speedLimitedTravel
+          : actuator.travel * operationCycle;
+        driven.setNextKinematicTranslation({
+          x: drivenComponent.position[0],
+          y: drivenComponent.position[1] + direction * commandedTravel,
+          z: drivenComponent.position[2],
+        });
+        peakControlledAcceleration = Math.max(peakControlledAcceleration, actuator.maxSpeed / Math.max(DT, .001));
+        continue;
+      }
       if (!driven?.isDynamic()) continue;
+      // A rope joint is a tension limit, not a prismatic rail. The paired drum
+      // motor winds the line; directly assigning hook velocity would inject
+      // energy through the rope and let the suspended assembly explode.
+      if (targetJoint?.type === 'rope') continue;
       const control = state.controls.find((item) => item.actuatorIds.includes(actuator.id));
       const sensor = control ? state.sensors.find((item) => item.id === control.sensorIds[0]) : undefined;
       const sensorBody = sensor ? state.components.find((item) => item.id === sensor.componentId) : undefined;
@@ -601,7 +787,12 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
         }
         const speed = Math.hypot(...replayVelocity);
         peakSpeed = Math.max(peakSpeed, speed); peakHeight = Math.max(peakHeight, replayPosition[1]);
-        if (![...replayPosition, replayRotation.x, replayRotation.y, replayRotation.z, replayRotation.w, ...replayVelocity].every(Number.isFinite)) physicsHealthy = false;
+        const finite = [...replayPosition, replayRotation.x, replayRotation.y, replayRotation.z, replayRotation.w, ...replayVelocity].every(Number.isFinite);
+        const insideWorld = Math.abs(replayPosition[0]) <= state.world.bounds[0] / 2 + 1
+          && replayPosition[1] >= -1 && replayPosition[1] <= state.world.bounds[1] + 1
+          && Math.abs(replayPosition[2]) <= state.world.bounds[2] / 2 + 1;
+        const boundedEvidenceBody = Boolean(item.parameters.winch_hook || item.parameters.winch_payload || item.parameters.press_platen);
+        if (!finite || (boundedEvidenceBody && !insideWorld)) physicsHealthy = false;
         items.push({ id: item.id, label: item.role, color: item.color, shape: item.shape, size: item.dimensions, position: replayPosition.map((value) => round(value, 3)) as Vec3, rotation: [round(replayRotation.x, 4), round(replayRotation.y, 4), round(replayRotation.z, 4), round(replayRotation.w, 4)], velocity: replayVelocity.map((value) => round(value, 3)) as Vec3, state: replayPosition[1] < -.3 ? 'failed' : progress > .97 ? 'delivered' : 'moving' });
       }
       const routedPackages = state.goal!.capabilities.includes('classify') ? sortingPackages(state, progress) : [];

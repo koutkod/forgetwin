@@ -116,6 +116,33 @@ function joint(state: ForgeState, value: unknown) {
   return found;
 }
 
+function driveBodyInterfacesWithJoint(
+  state: ForgeState,
+  driveComponentId: string,
+  targetJoint: Pick<ForgeState['joints'][number], 'id' | 'componentA' | 'componentB'>,
+) {
+  const endpoints = new Set([targetJoint.componentA, targetJoint.componentB]);
+  if (endpoints.has(driveComponentId)) return true;
+  const interfacesEndpoint = (left: string, right: string) => (left === driveComponentId && endpoints.has(right))
+    || (right === driveComponentId && endpoints.has(left));
+  return state.connections.some((item) => ['mechanical', 'power'].includes(item.type) && interfacesEndpoint(item.sourceId, item.targetId))
+    || state.joints.some((item) => item.id !== targetJoint.id && interfacesEndpoint(item.componentA, item.componentB));
+}
+
+function driveBodyHasOutputInterface(state: ForgeState, driveComponentId: string) {
+  return state.connections.some((item) => ['mechanical', 'power'].includes(item.type)
+    && (item.sourceId === driveComponentId || item.targetId === driveComponentId));
+}
+
+function assertDrivenJoint(state: ForgeState, targetJoint: ForgeState['joints'][number], driveComponentId: string, actor: Actor) {
+  const driven = component(state, targetJoint.componentB);
+  if (targetJoint.type === 'fixed') throw new Error('INVALID_TOPOLOGY: a drive cannot actuate a fixed joint.');
+  if (driven.bodyType === 'fixed') throw new Error('INVALID_TOPOLOGY: a drive joint must have a movable component_b endpoint.');
+  if (actor === 'WebMCP' && !driveBodyInterfacesWithJoint(state, driveComponentId, targetJoint)) {
+    throw new Error('INVALID_TOPOLOGY: connect the drive body to the driven joint support or moving child before attaching the drive.');
+  }
+}
+
 function runFor(state: ForgeState, value: unknown) {
   const found = value === undefined ? state.runs.at(-1) : state.runs.find((item) => item.id === value);
   if (!found) throw new Error('INVALID_PHASE: run the simulation before inspecting evidence.');
@@ -173,6 +200,109 @@ function optimizationActions(state: ForgeState, run: SimulationRun) {
   const metrics = new Set(failed.map((reading) => reading.metric));
   const factorFor = (...keys: string[]) => Math.min(4, Math.max(1.12, ...failed.filter((item) => keys.includes(item.metric)).map(failedFactor)));
   const controlMetrics = ['placement_error', 'platform_tilt', 'tracking_error', 'response_time', 'sorting_accuracy', 'control_error', 'peak_acceleration', 'collisions', 'alignment_error'];
+  const satisfyingValue = (reading: SimulationRun['metrics']['measures'][number]) => reading.operator === 'min'
+    ? reading.target * 1.02
+    : reading.operator === 'max'
+      ? reading.target * .98
+      : reading.target;
+  const pressRam = state.components.find((item) => item.parameters.hydraulic_ram);
+  const pressActuator = pressRam ? state.actuators.find((item) => item.componentId === pressRam.id) : undefined;
+  const pressControl = state.controls.find((item) => /press/i.test(item.name));
+  const winchDrum = state.components.find((item) => item.parameters.winch_drum);
+  const winchMotorBody = state.components.find((item) => item.parameters.electric_winch_motor);
+  const winchMotor = winchMotorBody ? state.motors.find((item) => item.componentId === winchMotorBody.id) : undefined;
+  const winchActuator = state.actuators.find((item) => item.type === 'winch' && state.joints.some((jointItem) => jointItem.id === item.jointId && state.components.find((componentItem) => componentItem.id === jointItem.componentB)?.parameters.winch_hook));
+  const winchControl = state.controls.find((item) => /winch/i.test(item.name));
+
+  const forceReading = failed.find((item) => item.metric === 'pressing_force');
+  if (forceReading && pressActuator) {
+    const before = pressActuator.maxForce;
+    pressActuator.maxForce = Number(Math.max(1, satisfyingValue(forceReading)).toFixed(1));
+    if (pressActuator.maxForce !== before) actions.push({ targetId: pressActuator.id, field: 'maxForce', before, after: pressActuator.maxForce, reason: 'Resize the hydraulic ram force limit from the measured press-force shortfall.' });
+    const barrel = state.components.find((item) => item.parameters.hydraulic_barrel);
+    if (barrel) {
+      const ratingBefore = Number(barrel.parameters.rated_force_n ?? 0);
+      barrel.parameters.rated_force_n = pressActuator.maxForce;
+      if (ratingBefore !== pressActuator.maxForce) actions.push({ targetId: barrel.id, field: 'rated_force_n', before: ratingBefore, after: pressActuator.maxForce, reason: 'Match the cylinder pressure-vessel rating to the redesigned ram force.' });
+    }
+    if (pressControl && pressControl.setpoint !== forceReading.target) {
+      const setpointBefore = pressControl.setpoint;
+      pressControl.setpoint = forceReading.target;
+      actions.push({ targetId: pressControl.id, field: 'setpoint', before: setpointBefore, after: pressControl.setpoint, reason: 'Align the press controller setpoint with the requested force envelope.' });
+    }
+  }
+
+  const strokeReading = failed.find((item) => item.metric === 'stroke');
+  if (strokeReading && pressActuator) {
+    const requestedStroke = Number(Math.max(.001, satisfyingValue(strokeReading)).toFixed(4));
+    const before = pressActuator.travel;
+    pressActuator.travel = requestedStroke;
+    if (before !== pressActuator.travel) actions.push({ targetId: pressActuator.id, field: 'travel', before, after: pressActuator.travel, reason: 'Set the hydraulic actuator travel from the measured ram-stroke error.' });
+    const guide = state.joints.find((item) => item.id === pressActuator.jointId);
+    if (guide) {
+      const lower = guide.limits?.[0] ?? 0;
+      const limitBefore = guide.limits?.[1] ?? 0;
+      guide.limits = [lower, Math.max(lower + .001, requestedStroke)];
+      if (guide.limits[1] !== limitBefore) actions.push({ targetId: guide.id, field: 'upper travel limit', before: limitBefore, after: guide.limits[1], reason: 'Match the physical platen guide limit to the redesigned hydraulic stroke.' });
+    }
+    for (const item of state.components.filter((componentItem) => componentItem.parameters.hydraulic_ram || componentItem.parameters.press_platen || componentItem.parameters.press_tooling === 'upper' || componentItem.parameters.press_load_cell)) {
+      if (typeof item.parameters.operation_travel === 'number') {
+        const travelBefore = item.parameters.operation_travel;
+        item.parameters.operation_travel = requestedStroke;
+        if (travelBefore !== requestedStroke) actions.push({ targetId: item.id, field: 'operation_travel', before: travelBefore, after: requestedStroke, reason: 'Keep the visible press tooling motion synchronized with the redesigned stroke.' });
+      }
+      if (item.parameters.hydraulic_ram) {
+        const strokeBefore = Number(item.parameters.stroke_m ?? 0);
+        item.parameters.stroke_m = requestedStroke;
+        if (strokeBefore !== requestedStroke) actions.push({ targetId: item.id, field: 'stroke_m', before: strokeBefore, after: requestedStroke, reason: 'Update the hydraulic ram specification to the redesigned physical travel.' });
+      }
+    }
+  }
+
+  const parallelismReading = failed.find((item) => item.metric === 'platen_parallelism');
+  if (parallelismReading && pressControl) {
+    const desiredError = Math.max(.001, satisfyingValue(parallelismReading));
+    const sensorCount = Math.max(1, pressControl.sensorIds.length);
+    const sensor = state.sensors.find((item) => pressControl.sensorIds.includes(item.id));
+    const sensorBody = sensor ? state.components.find((item) => item.id === sensor.componentId) : undefined;
+    const calibrationError = sensorBody ? Math.abs(sensorBody.position[0] - pressControl.calibrationX) : 0;
+    const desiredQuality = Math.max(.08, Math.min(1.7, (2.4 / desiredError - 1 - sensorCount * .5) / 2));
+    const before = pressControl.kp;
+    pressControl.kp = Number(Math.min(10, Math.max(.01, desiredQuality * (1 + calibrationError * 3.5) - pressControl.kd * .35)).toFixed(3));
+    if (pressControl.kp !== before) actions.push({ targetId: pressControl.id, field: 'kp', before, after: pressControl.kp, reason: 'Retune the platen feedback loop from the measured parallelism error.' });
+  }
+
+  const lineSpeedReading = failed.find((item) => item.metric === 'line_speed');
+  const drumRadius = Number(winchDrum?.parameters.drum_radius_m ?? 0);
+  if (lineSpeedReading && winchMotor && drumRadius > 0) {
+    const requestedSpeed = Math.max(.001, satisfyingValue(lineSpeedReading));
+    const requestedRpm = Number((requestedSpeed / (2 * Math.PI * drumRadius) * 60).toFixed(3));
+    const before = winchMotor.maxRpm;
+    winchMotor.maxRpm = requestedRpm;
+    if (winchMotor.maxRpm !== before) actions.push({ targetId: winchMotor.id, field: 'maxRpm', before, after: winchMotor.maxRpm, reason: 'Set drum speed from the measured cable speed and the modeled winding radius.' });
+    if (winchActuator && winchActuator.maxSpeed !== requestedSpeed) {
+      const speedBefore = winchActuator.maxSpeed;
+      winchActuator.maxSpeed = Number(requestedSpeed.toFixed(4));
+      actions.push({ targetId: winchActuator.id, field: 'maxSpeed', before: speedBefore, after: winchActuator.maxSpeed, reason: 'Keep the hook command synchronized with the redesigned drum line speed.' });
+    }
+    if (winchControl && winchControl.setpoint !== lineSpeedReading.target) {
+      const setpointBefore = winchControl.setpoint;
+      winchControl.setpoint = lineSpeedReading.target;
+      actions.push({ targetId: winchControl.id, field: 'setpoint', before: setpointBefore, after: winchControl.setpoint, reason: 'Align the winch controller setpoint with the requested cable speed.' });
+    }
+  }
+
+  const cableReading = failed.find((item) => item.metric === 'cable_safety_factor');
+  if (cableReading) {
+    const payload = state.components.find((item) => item.parameters.winch_payload);
+    const payloadMass = Number(payload?.parameters.payload_kg ?? payload?.mass ?? 0);
+    const ratedLoad = Number((Math.max(.001, satisfyingValue(cableReading)) * Math.max(payloadMass * 9.81, 1)).toFixed(1));
+    for (const cable of state.components.filter((item) => item.parameters.winch_cable)) {
+      const before = Number(cable.parameters.rated_breaking_load_n ?? 0);
+      cable.parameters.rated_breaking_load_n = ratedLoad;
+      if (ratedLoad !== before) actions.push({ targetId: cable.id, field: 'rated_breaking_load_n', before, after: ratedLoad, reason: 'Select cable capacity from the suspended design load and measured safety-factor requirement.' });
+    }
+  }
 
   if (failed.some((reading) => controlMetrics.includes(reading.metric))) for (const control of state.controls) {
     const before = control.kp;
@@ -366,18 +496,26 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   }
   if (name === 'set_dimensions') {
     const target = component(state, input.component_id); lockField(state, target, 'dimensions', actor);
+    const previousDimensions = [...target.dimensions] as Vec3;
+    const previousMass = target.mass;
     target.dimensions = dimensions(input.dimensions);
-    if (!target.humanLockedFields.includes('mass')) target.mass = componentMass(target.primitive, target.dimensions, target.materialId);
+    if (!target.humanLockedFields.includes('mass')) {
+      const previousEnvelopeMass = componentMass(target.primitive, previousDimensions, target.materialId);
+      const nextEnvelopeMass = componentMass(target.primitive, target.dimensions, target.materialId);
+      target.mass = Number(Math.max(.05, previousMass * nextEnvelopeMass / Math.max(.05, previousEnvelopeMass)).toFixed(2));
+    }
     state = designMutation(state, name, `${target.role} resized`, actor, `Set ${target.id} dimensions to ${target.dimensions.join(' × ')} m.`);
     return { state, result: success(state, 'Dimensions updated.', target) };
   }
   if (name === 'set_material') {
     const target = component(state, input.component_id); lockField(state, target, 'material', actor);
+    const previousMaterial = materialFor(target.materialId);
+    const previousMass = target.mass;
     const materialId = String(input.material_id ?? ''); const material = materialFor(materialId);
     if (material.id !== materialId) throw new Error('INVALID_INPUT: unknown material.');
     target.materialId = materialId; target.color = material.color;
-    if (!target.humanLockedFields.includes('mass')) target.mass = componentMass(target.primitive, target.dimensions, materialId);
-    state = designMutation(state, name, `${target.role} material changed`, actor, `Set ${target.id} to ${material.name}; mass recalculated to ${target.mass} kg.`);
+    if (!target.humanLockedFields.includes('mass')) target.mass = Number(Math.max(.05, previousMass * material.density / Math.max(1, previousMaterial.density)).toFixed(2));
+    state = designMutation(state, name, `${target.role} material changed`, actor, `Set ${target.id} to ${material.name}; mass scaled by material density to ${target.mass} kg.`);
     return { state, result: success(state, 'Material updated.', target) };
   }
   if (name === 'set_mass') {
@@ -434,10 +572,14 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   if (name === 'create_joint') {
     const a = component(state, input.component_a); const b = component(state, input.component_b);
     if (a.id === b.id) throw new Error('INVALID_TOPOLOGY: a joint needs two different bodies.');
+    if (state.joints.some((item) => (item.componentA === a.id && item.componentB === b.id) || (item.componentA === b.id && item.componentB === a.id))) {
+      throw new Error('INVALID_TOPOLOGY: the same body pair already has a joint; replace or edit that joint instead of overconstraining it.');
+    }
     const id = idValue(input.joint_id, 'joint_id');
     if (state.joints.some((item) => item.id === id)) throw new Error('CONSTRAINT_VIOLATION: joint_id already exists.');
     const type = String(input.joint_type ?? '') as JointType;
     if (!['fixed', 'revolute', 'prismatic', 'spherical', 'spring', 'rope', 'gear', 'belt'].includes(type)) throw new Error('INVALID_INPUT: unsupported joint_type.');
+    if (type !== 'fixed' && a.bodyType === 'fixed' && b.bodyType === 'fixed') throw new Error('INVALID_TOPOLOGY: a motion joint cannot connect two fixed bodies.');
     const rawAxis = vector(input.axis ?? [0, 1, 0], 'axis', [-1, 1]);
     const axisLength = Math.hypot(...rawAxis);
     if (axisLength < .5) throw new Error('INVALID_INPUT: joint axis must be non-zero.');
@@ -455,8 +597,12 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     return { state, result: success(state, 'Joint created.', value) };
   }
   if (name === 'add_motor') {
-    const target = component(state, input.component_id); const jointId = input.joint_id ? joint(state, input.joint_id).id : undefined;
+    const target = component(state, input.component_id);
+    const targetJoint = input.joint_id ? joint(state, input.joint_id) : undefined;
+    const jointId = targetJoint?.id;
     if (target.primitive !== 'motor') throw new Error('INVALID_INPUT: add_motor targets a motor primitive.');
+    if (targetJoint) assertDrivenJoint(state, targetJoint, target.id, actor);
+    else if (actor === 'WebMCP' && !driveBodyHasOutputInterface(state, target.id)) throw new Error('INVALID_TOPOLOGY: connect an unbound motor to its physical output before registering the drive.');
     const value = { id: idValue(input.motor_id, 'motor_id'), componentId: target.id, jointId, maxTorque: Number(input.max_torque), maxRpm: Number(input.max_rpm), direction: Number(input.direction ?? 1) };
     if (state.motors.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: motor_id already exists.');
     if (![value.maxTorque, value.maxRpm, value.direction].every(Number.isFinite) || value.maxTorque <= 0 || value.maxRpm <= 0) throw new Error('INVALID_INPUT: motor torque and rpm must be positive finite values.');
@@ -497,6 +643,7 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   if (name === 'add_actuator') {
     const target = component(state, input.component_id); const targetJoint = joint(state, input.joint_id);
     if (!['motor', 'servo', 'piston'].includes(target.primitive)) throw new Error('INVALID_INPUT: actuator body must be motor, servo, or piston.');
+    assertDrivenJoint(state, targetJoint, target.id, actor);
     const value = { id: idValue(input.actuator_id, 'actuator_id'), componentId: target.id, jointId: targetJoint.id, type: String(input.actuator_type ?? 'servo') as 'rotary-motor' | 'servo' | 'linear' | 'piston' | 'winch', maxForce: Number(input.max_force), maxSpeed: Number(input.max_speed), travel: Number(input.travel) };
     if (state.actuators.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: actuator_id already exists.');
     if (![value.maxForce, value.maxSpeed, value.travel].every(Number.isFinite) || value.maxForce <= 0 || value.maxSpeed <= 0 || value.travel <= 0) throw new Error('INVALID_INPUT: actuator limits must be positive finite values.');

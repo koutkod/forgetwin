@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { componentMass, engineeringExamples } from './forge-data';
 import { compileDesignBrief } from './forge-prompt';
+import { simulateDesign } from './forge-simulation';
+import { assemblePlan } from './forge-test-utils';
 
 const briefs = {
   crane: 'Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.',
@@ -43,6 +45,63 @@ describe('ForgeTwin world-first brief compiler', () => {
     const forbidden = new Set(['crane', 'rover', 'gearbox', 'lift', 'robotic-arm', 'bridge']);
     for (const prompt of Object.values(briefs)) expect(compileDesignBrief(prompt).components.some((item) => forbidden.has(item.primitive))).toBe(false);
   });
+
+  it('builds a recognizable, controlled scissor lift instead of a generic guided elevator', () => {
+    const plan = compileDesignBrief('Build a scissor lift that raises a 300 kg load by 1.5 meters and keeps the platform level.');
+    expect(plan.goal.machineName).toBe('Scissor lift');
+    expect(plan.goal.summary).toContain('scissor-linkage-lift');
+    expect(plan.goal.summary).not.toContain('parallel-guides');
+    expect(plan.assemblies.some((item) => item.name === 'hydraulic scissor lift')).toBe(true);
+    expect(plan.components.find((item) => item.parameters?.scissor_base)?.mass).toBeLessThan(500);
+    expect(plan.components.find((item) => item.parameters?.scissor_base_deck)?.mass).toBeLessThan(200);
+    expect(plan.components.some((item) => item.parameters?.scissor_platform)).toBe(true);
+    const arms = plan.components.filter((item) => item.parameters?.scissor_arm);
+    expect(arms).toHaveLength(4);
+    expect(new Set(arms.map((item) => item.parameters?.scissor_pair))).toEqual(new Set([1, 2]));
+    expect(arms.some((item) => item.rotation[2] > 0)).toBe(true);
+    expect(arms.some((item) => item.rotation[2] < 0)).toBe(true);
+    expect(plan.components.filter((item) => item.parameters?.scissor_pivot)).toHaveLength(2);
+    expect(plan.joints.filter((item) => item.type !== 'fixed' && plan.components.find((body) => body.id === item.componentA)?.bodyType === 'fixed' && plan.components.find((body) => body.id === item.componentB)?.bodyType === 'fixed')).toHaveLength(0);
+    expect(plan.connections.filter((item) => item.channel === 'scissor_center_hinge')).toHaveLength(2);
+
+    const platform = plan.components.find((item) => item.parameters?.scissor_platform)!;
+    const liftJoint = plan.joints.find((item) => item.type === 'prismatic' && item.componentB === platform.id)!;
+    expect(liftJoint.axis).toEqual([0, 1, 0]);
+    expect(liftJoint.limits).toEqual([0, 1.5]);
+    const cylinder = plan.components.find((item) => item.parameters?.scissor_actuator)!;
+    const actuator = plan.actuators.find((item) => item.componentId === cylinder.id)!;
+    expect(actuator).toMatchObject({ jointId: liftJoint.id, type: 'piston', travel: 1.5 });
+    expect(actuator.maxForce).toBeGreaterThan(300 * 9.81);
+    const payload = plan.components.find((item) => item.parameters?.scissor_payload)!;
+    expect(payload.mass).toBe(300);
+    expect(plan.controls.some((item) => item.actuatorIds.includes(actuator.id) && item.sensorIds.length === 1 && /level/i.test(item.name))).toBe(true);
+    expect(plan.goal.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'payload_capacity', target: 300, source: 'user' }),
+      expect.objectContaining({ metric: 'lift_height', target: 1.5, source: 'user' }),
+      expect.objectContaining({ metric: 'platform_tilt', operator: 'max' }),
+    ]));
+    expect(plan.components.some((item) => /linear guide/.test(item.role))).toBe(false);
+  });
+
+  it('animates the scissor-lift actuator without unstable platform motion', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a scissor lift that raises a 300 kg load by 1.5 meters and keeps the platform level.'));
+    const run = await simulateDesign(state);
+    const platform = state.components.find((item) => item.parameters.scissor_platform)!;
+    const payload = state.components.find((item) => item.parameters.scissor_payload)!;
+    const actuator = state.actuators.find((item) => state.components.find((component) => component.id === item.componentId)?.parameters.scissor_actuator)!;
+    const platformFrames = run.replay.map((frame) => frame.items.find((item) => item.id === platform.id)).filter((item) => item !== undefined);
+    const heights = platformFrames.map((item) => item.position[1]);
+    const payloadFrames = run.replay.map((frame) => frame.items.find((item) => item.id === payload.id)).filter((item) => item !== undefined);
+    const payloadHeights = payloadFrames.map((item) => item.position[1]);
+    const actuatorTravel = run.replay.map((frame) => frame.actuatorValues[actuator.id]);
+    expect(run.physics).toMatchObject({ engine: 'Rapier', timestepHz: 60 });
+    expect(run.failures.some((item) => item.type === 'physics-health')).toBe(false);
+    expect(Math.max(...actuatorTravel) - Math.min(...actuatorTravel)).toBeGreaterThan(.8);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(1.4);
+    expect(Math.max(...payloadHeights) - Math.min(...payloadHeights)).toBeGreaterThan(1.4);
+    expect(platformFrames.every((item, index) => Math.abs((payloadFrames[index]?.position[1] ?? 0) - item.position[1] - .43) < .06)).toBe(true);
+    expect(platformFrames.every((item) => Math.abs(item.rotation[0]) < .05 && Math.abs(item.rotation[2]) < .05)).toBe(true);
+  }, 30_000);
 
   it('builds the exact red-blue sorter as a readable two-route industrial line', () => {
     const plan = compileDesignBrief('Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.');
@@ -105,6 +164,58 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(sevenBlade.components.some((item) => item.parameters?.cad_form === 'rotor_shroud' && item.role === 'ventilation duct shroud')).toBe(true);
   });
 
+  it('builds a recognizable instrumented centrifugal pump instead of a generic rotor stand', () => {
+    const plan = compileDesignBrief('Build a centrifugal water pump that delivers 50 liters per minute with a visible impeller, inlet, and outlet.');
+    expect(plan.goal).toMatchObject({ machineName: 'Centrifugal process pump', domain: 'Fluid machinery' });
+    expect(plan.goal.summary).toContain('centrifugal-pump');
+    expect(plan.goal.summary).not.toContain('parametric-rotor');
+    expect(plan.assemblies.some((item) => item.name === 'centrifugal process pump')).toBe(true);
+
+    const volute = plan.components.find((item) => item.parameters?.pump_volute);
+    const inlet = plan.components.find((item) => item.parameters?.pump_inlet && /pipe/.test(item.role));
+    const outlet = plan.components.find((item) => item.parameters?.pump_outlet && /pipe/.test(item.role));
+    const shaft = plan.components.find((item) => item.parameters?.pump_shaft);
+    const hub = plan.components.find((item) => item.parameters?.pump_impeller);
+    expect(volute).toMatchObject({ primitive: 'frame', role: 'spiral volute pump casing' });
+    expect(inlet).toMatchObject({ primitive: 'shaft', role: 'axial suction inlet pipe', rotation: [Math.PI / 2, 0, 0] });
+    expect(outlet).toMatchObject({ primitive: 'shaft', role: 'tangential discharge outlet pipe' });
+    expect(inlet?.id).not.toBe(outlet?.id);
+    expect(outlet!.position[0]).not.toBe(inlet!.position[0]);
+    expect(outlet!.position[1]).toBeGreaterThan(inlet!.position[1]);
+    expect(plan.components.filter((item) => item.parameters?.pump_bearing_support)).toHaveLength(2);
+    expect(shaft).toMatchObject({ primitive: 'shaft', bodyType: 'kinematic' });
+    expect(hub).toMatchObject({ primitive: 'wheel', bodyType: 'dynamic' });
+    expect(plan.components.filter((item) => item.parameters?.pump_impeller_vane)).toHaveLength(6);
+
+    const shaftJoint = plan.joints.find((item) => item.type === 'revolute' && item.componentB === hub?.id);
+    expect(shaftJoint?.limits).toBeUndefined();
+    expect(plan.motors).toHaveLength(1);
+    expect(plan.motors[0]).toMatchObject({ jointId: shaftJoint?.id, maxRpm: 1800 });
+    expect(plan.components.some((item) => item.parameters?.pump_motor)).toBe(true);
+    expect(plan.sensors.map((item) => item.channel)).toEqual(expect.arrayContaining(['pump_shaft_speed', 'discharge_flow_lpm']));
+    expect(plan.controls.some((item) => item.name === 'centrifugal pump duty point')).toBe(true);
+    expect(plan.goal.constraints.find((item) => item.metric === 'flow_rate')).toMatchObject({ target: 50, unit: 'L/min', source: 'user' });
+    expect(plan.goal.constraints.find((item) => item.metric === 'output_speed')).toMatchObject({ target: 1800, unit: 'rpm' });
+    expect(plan.components.some((item) => item.role === 'rotor inspection stand')).toBe(false);
+    expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+
+    const impellerPart = compileDesignBrief('Build a centrifugal pump impeller with six blades.');
+    expect(impellerPart.goal.summary).toContain('parametric-rotor');
+    expect(impellerPart.goal.summary).not.toContain('centrifugal-pump');
+  });
+
+  it('keeps the centrifugal-pump shaft centered while the physics replay rotates its impeller', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a centrifugal water pump that delivers 50 liters per minute with a visible impeller, inlet, and outlet.'));
+    const run = await simulateDesign(state);
+    const impeller = state.components.find((item) => item.parameters.pump_impeller)!;
+    const frames = run.replay.map((frame) => frame.items.find((item) => item.id === impeller.id)).filter((item) => item !== undefined);
+    const displacement = Math.max(...frames.map((item) => Math.hypot(item.position[0] - impeller.position[0], item.position[1] - impeller.position[1], item.position[2] - impeller.position[2])));
+    const orientations = new Set(frames.map((item) => item.rotation.map((value) => value.toFixed(2)).join(',')));
+    expect(run.failures.some((item) => item.type === 'physics-health')).toBe(false);
+    expect(displacement).toBeLessThan(.08);
+    expect(orientations.size).toBeGreaterThan(3);
+  }, 30_000);
+
   it('keeps a compact high-ratio gearbox at a credible bench-scale mass and size', () => {
     const gearbox = compileDesignBrief('Build a compact 12:1 reduction gearbox with two supported shafts, meshing gears, a motor, and an output speed sensor.');
     const housing = gearbox.components.find((item) => item.role === 'open gearbox housing')!;
@@ -112,6 +223,67 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(housing.dimensions[0]).toBeLessThan(.6);
     expect(outputGear.dimensions[0]).toBeLessThan(.5);
     expect(gearbox.components.reduce((total, item) => total + (item.mass ?? componentMass(item.primitive, item.dimensions, item.materialId)), 0)).toBeLessThan(25);
+  });
+
+  it('builds a compact planetary differential instead of an ordinary two-gear reduction', () => {
+    const plan = compileDesignBrief('Build a compact planetary differential with a sun gear, ring gear, three planet gears, carrier, input shaft, and two output shafts.');
+    expect(plan.goal).toMatchObject({ machineName: 'Compact planetary differential', domain: 'Power transmission' });
+    expect(plan.goal.summary).toContain('planetary-differential');
+    expect(plan.goal.summary).not.toContain('rotary-transmission');
+    expect(plan.goal.summary).not.toContain('requested-primitives');
+    expect(plan.assemblies.some((item) => item.name === 'planetary differential gearset')).toBe(true);
+    expect(plan.components.filter((item) => item.primitive === 'gear')).toHaveLength(5);
+    expect(plan.components.filter((item) => item.parameters?.planetary_sun)).toHaveLength(1);
+    expect(plan.components.filter((item) => item.parameters?.planetary_ring)).toHaveLength(1);
+    expect(plan.components.filter((item) => item.parameters?.planetary_planet)).toHaveLength(3);
+    const carrier = plan.components.find((item) => item.parameters?.planetary_carrier)!;
+    expect(carrier.bodyType).toBe('dynamic');
+    expect(plan.components.filter((item) => item.parameters?.planetary_input_shaft)).toHaveLength(1);
+    expect(plan.components.filter((item) => item.parameters?.planetary_output_shaft)).toHaveLength(2);
+    expect(plan.components.filter((item) => item.primitive === 'shaft')).toHaveLength(3);
+    expect(new Set(plan.components.filter((item) => item.parameters?.planetary_output_shaft).map((item) => item.parameters?.output_side))).toEqual(new Set(['left', 'right']));
+    expect(plan.joints.filter((item) => item.type === 'fixed' && plan.components.some((gear) => gear.parameters?.planetary_planet && gear.id === item.componentB))).toHaveLength(3);
+    expect(plan.joints.some((item) => item.type === 'gear' && item.componentA === carrier.id)).toBe(true);
+    expect(plan.joints.some((item) => item.type === 'belt' && item.componentA === carrier.id)).toBe(true);
+    const carrierJoint = plan.joints.find((item) => item.type === 'revolute' && item.componentB === carrier.id)!;
+    expect(carrierJoint.limits).toBeUndefined();
+    expect(plan.motors).toHaveLength(1);
+    expect(plan.motors[0].jointId).toBe(carrierJoint.id);
+    expect(plan.sensors.map((item) => item.channel)).toEqual(expect.arrayContaining(['left_output_rpm', 'right_output_rpm']));
+    expect(plan.components.some((item) => item.role === 'input gear' || item.role === 'output gear')).toBe(false);
+  });
+
+  it('preserves an arbitrary planetary ratio instead of accidentally squaring it', () => {
+    const plan = compileDesignBrief('Build a compact 6:1 planetary differential with a sun gear, ring gear, three planet gears, and two outputs at 120 rpm.');
+    const couplings = plan.joints.filter((item) => item.type === 'gear' || item.type === 'belt');
+    expect(plan.goal.capabilities).toContain('transmit');
+    expect(couplings).toHaveLength(2);
+    expect(couplings.reduce((product, item) => product * (item.ratio ?? 1), 1)).toBeCloseTo(6, 6);
+    expect(plan.goal.constraints).toEqual(expect.arrayContaining([expect.objectContaining({ metric: 'speed_ratio', target: 6, source: 'user' })]));
+  });
+
+  it('recognizes common scissor-lift wording and comma-formatted press force', () => {
+    expect(compileDesignBrief('Build a scissor-type lift that raises 250 kg by 1 meter.').goal.summary).toContain('scissor-linkage-lift');
+    const press = compileDesignBrief('Build a hydraulic shop press that applies 50,000 N through a guided ram over a 300 mm stroke.');
+    expect(press.goal.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'pressing_force', target: 50000, source: 'user' }),
+      expect.objectContaining({ metric: 'stroke', target: .3, source: 'user' }),
+    ]));
+  });
+
+  it('keeps centrifugal-pump subparts in the CAD-part path', () => {
+    const prompts = [
+      'Build a centrifugal pump housing with a removable cover.',
+      'Build an impeller and housing for a centrifugal pump.',
+      'Build a centrifugal pump shaft.',
+      'Build a centrifugal pump seal.',
+      'Build a centrifugal pump cover.',
+    ];
+    for (const prompt of prompts) {
+      const plan = compileDesignBrief(prompt);
+      expect(plan.goal.summary).toContain('parametric-');
+      expect(plan.goal.summary).not.toContain('centrifugal-pump');
+    }
   });
 
   it('changes physical sizing when numeric requirements change', () => {
@@ -341,7 +513,8 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(turbine.goal.summary).not.toContain('tracking-axis');
 
     const centrifugal = compileDesignBrief('Build a centrifugal pump for 20 liters per minute.');
-    expect(centrifugal.goal.summary).toContain('parametric-rotor');
+    expect(centrifugal.goal.summary).toContain('centrifugal-pump');
+    expect(centrifugal.goal.summary).not.toContain('parametric-rotor');
     expect(centrifugal.goal.summary).not.toContain('reciprocating-linkage');
 
     const housing = compileDesignBrief('Build a sealed pump housing.');
@@ -355,8 +528,52 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(jack.goal.summary).toContain('parallel-guides');
     expect(jack.components.some((item) => item.parameters?.road_vehicle_wheel)).toBe(false);
 
-    expect(() => compileDesignBrief('Build a bench vise with a screw drive.')).toThrow(/could not identify a faithful/i);
-    expect(() => compileDesignBrief('Build a bench vise with a screw drive and replaceable jaw plates.')).toThrow(/could not identify a faithful/i);
+    const vise = compileDesignBrief('Build a bench vise with a screw drive and replaceable jaw plates.');
+    expect(vise.goal.summary).toContain('bench-vise');
+    expect(vise.components.some((item) => item.role === 'Acme-thread lead screw')).toBe(true);
+    expect(vise.components.filter((item) => item.parameters?.vise_jaw_plate)).toHaveLength(2);
+    expect(vise.goal.summary).not.toContain('constructed-motion');
     expect(() => compileDesignBrief('Build an assorted tool tray.')).toThrow(/could not identify a faithful/i);
+  });
+
+  it('builds a force-rated hydraulic press with a millimeter-scale driven ram', () => {
+    const plan = compileDesignBrief('Design a hydraulic press that applies 50 kN over a 300 mm stroke.');
+    expect(plan.goal.machineName).toBe('Hydraulic press');
+    expect(plan.goal.summary).toContain('hydraulic-press');
+    expect(plan.goal.summary).not.toContain('constructed-motion');
+    expect(plan.components.filter((item) => item.parameters?.press_column)).toHaveLength(2);
+    expect(plan.components.some((item) => item.parameters?.press_bed)).toBe(true);
+    const platen = plan.components.find((item) => item.parameters?.press_platen)!;
+    const ram = plan.components.find((item) => item.parameters?.hydraulic_ram)!;
+    const motion = plan.joints.find((item) => item.type === 'prismatic' && item.componentB === platen.id)!;
+    expect(motion.axis).toEqual([0, -1, 0]);
+    expect(motion.limits).toEqual([0, .3]);
+    expect(plan.actuators.find((item) => item.componentId === ram.id)).toMatchObject({ jointId: motion.id, type: 'piston', travel: .3, maxForce: 50000 });
+    expect(plan.goal.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'pressing_force', target: 50000, source: 'user' }),
+      expect.objectContaining({ metric: 'stroke', target: .3, source: 'user' }),
+    ]));
+  });
+
+  it('builds an electric drum winch whose drum spins while the cable lifts the hook', () => {
+    const plan = compileDesignBrief('Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.');
+    expect(plan.goal.machineName).toBe('Electric cable winch');
+    expect(plan.goal.summary).toContain('drum-winch');
+    expect(plan.goal.summary).not.toContain('parallel-guides');
+    expect(plan.goal.summary).not.toContain('cable-suspension');
+    expect(plan.components.some((item) => item.parameters?.winch_drum)).toBe(true);
+    expect(plan.components.filter((item) => item.parameters?.winch_cable)).toHaveLength(2);
+    expect(plan.components.some((item) => item.parameters?.winch_hook)).toBe(true);
+    const shaft = plan.components.find((item) => item.parameters?.winch_shaft)!;
+    const hook = plan.components.find((item) => item.parameters?.winch_hook)!;
+    const shaftJoint = plan.joints.find((item) => item.type === 'revolute' && item.componentB === shaft.id)!;
+    const ropeJoint = plan.joints.find((item) => item.type === 'rope' && item.componentB === hook.id)!;
+    expect(plan.motors.some((item) => item.jointId === shaftJoint.id)).toBe(true);
+    expect(plan.actuators.find((item) => item.jointId === ropeJoint.id)).toMatchObject({ type: 'winch', travel: 3, maxSpeed: .2 });
+    expect(plan.goal.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'payload_capacity', target: 200, source: 'user' }),
+      expect.objectContaining({ metric: 'lift_height', target: 3, source: 'user' }),
+      expect.objectContaining({ metric: 'line_speed', target: .2, source: 'user' }),
+    ]));
   });
 });

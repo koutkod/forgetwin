@@ -86,17 +86,121 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     rotation = [...mechanismPose.rotation];
   }
 
+  // Closed scissor linkages are reduced to one stable prismatic guide in the
+  // Rapier model. Reconstruct the visible X-link geometry from that same lift
+  // travel so Animate mode shows the platform, load, pivots, and arms moving as
+  // one understandable mechanism instead of only pulsing the cylinder rod.
+  if (!jointPoseApplied && (component.parameters.scissor_platform || component.parameters.scissor_payload || component.parameters.scissor_level_sensor)) {
+    position[1] += wave * Math.min(1.6, Number(component.parameters.scissor_travel_m ?? 1));
+  }
+  if (!jointPoseApplied && component.parameters.scissor_pivot) {
+    position[1] += wave * Math.min(1.6, Number(component.parameters.scissor_travel_m ?? 1)) * .5;
+  }
+  if (!jointPoseApplied && component.parameters.scissor_arm) {
+    const length = Math.max(.1, Number(component.parameters.member_length ?? component.dimensions[0]));
+    const initialHeight = Math.max(.1, Number(component.parameters.scissor_initial_height ?? .8));
+    const lowerY = Number(component.parameters.scissor_lower_y ?? .44);
+    const travel = Math.min(1.6, Number(component.parameters.scissor_travel_m ?? 1));
+    const height = Math.min(length * .92, initialHeight + wave * travel);
+    position[1] = lowerY + height / 2;
+    rotation[2] = (component.parameters.scissor_direction === 'rising-left' ? -1 : 1) * Math.asin(height / length);
+  }
+
+  // Deterministic planetary designs use a readable cutaway choreography. The
+  // carrier advances all three pin centers, while the sun, ring, and planets
+  // spin at distinct rates so the two simultaneous motions remain obvious.
+  const planetaryCarrierAngle = elapsed * .82;
+  if (component.parameters.planetary_carrier) rotation[2] += planetaryCarrierAngle;
+  if (component.parameters.planetary_carrier_pad || component.parameters.planetary_planet) {
+    const radius = Number(component.parameters.planetary_orbit_radius ?? .47);
+    const initialAngle = Number(component.parameters.planetary_orbit_angle ?? 0);
+    const centerX = Number(component.parameters.nominal_x ?? component.position[0]) - Math.cos(initialAngle) * radius;
+    const centerY = Number(component.parameters.nominal_y ?? component.position[1]) - Math.sin(initialAngle) * radius;
+    const orbitAngle = initialAngle + planetaryCarrierAngle;
+    position[0] = centerX + Math.cos(orbitAngle) * radius;
+    position[1] = centerY + Math.sin(orbitAngle) * radius;
+    rotation[2] += component.parameters.planetary_planet ? -elapsed * 3.35 : planetaryCarrierAngle;
+  }
+  if (component.parameters.planetary_sun) rotation[2] -= elapsed * 2.15;
+  if (component.parameters.planetary_ring) rotation[2] += elapsed * .48;
+
+  if (!jointPoseApplied && component.parameters.vise_moving) {
+    position[0] += wave * Number(component.parameters.vise_travel_m ?? .18);
+  }
+  if (!jointPoseApplied && component.parameters.vise_screw) rotation[0] += elapsed * 2.4;
+
+  if (!jointPoseApplied && component.parameters.bottle_jack_moving) {
+    position[1] += wave * Number(component.parameters.operation_travel ?? .3);
+  }
+  if (!jointPoseApplied && component.parameters.bottle_jack_handle) rotation[2] += signed * .42;
+
+  if (!jointPoseApplied && component.parameters.wind_yaw_moving) {
+    const yawAngle = Math.sin(elapsed * .42) * .48;
+    const localX = Number(component.parameters.wind_yaw_local_x ?? 0);
+    const localZ = Number(component.parameters.wind_yaw_local_z ?? 0);
+    const centerX = Number(component.parameters.nominal_x ?? component.position[0]) - localX;
+    const centerZ = Number(component.parameters.nominal_z ?? component.position[2]) - localZ;
+    if (component.parameters.wind_rotor_blade) {
+      const initialAngle = Number(component.parameters.wind_rotor_angle ?? 0);
+      const radius = Number(component.parameters.wind_rotor_radius ?? 1.18);
+      const hubY = Number(component.parameters.nominal_y ?? component.position[1]) - Math.sin(initialAngle) * radius;
+      const rotorAngle = initialAngle + elapsed * 1.7;
+      const spinningX = Math.cos(rotorAngle) * radius;
+      const spinningZ = localZ;
+      position[0] = centerX + spinningX * Math.cos(yawAngle) + spinningZ * Math.sin(yawAngle);
+      position[1] = hubY + Math.sin(rotorAngle) * radius;
+      position[2] = centerZ - spinningX * Math.sin(yawAngle) + spinningZ * Math.cos(yawAngle);
+      rotation[2] += elapsed * 1.7;
+    } else {
+      position[0] = centerX + localX * Math.cos(yawAngle) + localZ * Math.sin(yawAngle);
+      position[2] = centerZ - localX * Math.sin(yawAngle) + localZ * Math.cos(yawAngle);
+    }
+    rotation[1] += yawAngle;
+    if (component.parameters.wind_rotor_hub || component.parameters.wind_rotor_shaft) rotation[2] += elapsed * 1.7;
+  }
+
+  if (!jointPoseApplied && component.parameters.drill_press_moving) {
+    position[1] -= wave * Number(component.parameters.operation_travel ?? .16);
+  }
+  if (!jointPoseApplied && (component.parameters.drill_press_spindle || component.parameters.drill_press_chuck || component.parameters.drill_press_bit)) rotation[1] += elapsed * 5.8;
+  if (!jointPoseApplied && component.parameters.drill_press_feed_handle) rotation[2] -= wave * .78;
+
+  if (!jointPoseApplied && component.parameters.steering_rack_moving) position[2] += signed * .16;
+  if (!jointPoseApplied && component.parameters.steering_pinion) rotation[0] += signed * 1.05;
+  if (!jointPoseApplied && component.parameters.steering_input_wheel) rotation[0] += signed * .72;
+  if (!jointPoseApplied && component.parameters.steering_tie_rod) {
+    position[2] += signed * .08;
+    rotation[1] += signed * (component.parameters.steering_side === 'left' ? .09 : -.09);
+  }
+  if (!jointPoseApplied && (component.parameters.steering_knuckle || component.parameters.steering_road_wheel)) {
+    const side = component.parameters.steering_side === 'left' ? -1 : 1;
+    const inside = signed * side < 0 ? 1.12 : .92;
+    rotation[1] += signed * .34 * inside;
+  }
+
+  if (!jointPoseApplied && (component.parameters.bicycle_brake_rotor || component.parameters.bicycle_brake_axle)) rotation[2] -= elapsed * 3.2;
+  if (!jointPoseApplied && component.parameters.bicycle_brake_pad) {
+    position[2] += (component.parameters.brake_pad_side === 'inboard' ? 1 : -1) * wave * .045;
+  }
+  if (!jointPoseApplied && component.parameters.bicycle_brake_lever) rotation[2] -= wave * .42;
+
   const independentlyRollingWheel = (component.primitive === 'wheel' || component.parameters.bicycle_wheel || component.parameters.rover_wheel)
     && !component.parameters.road_vehicle_wheel
-    && !component.parameters.road_vehicle_steering_wheel;
-  if (!jointPoseApplied && independentlyRollingWheel) rotation[2] -= elapsed * 3.4;
-  if (!jointPoseApplied && (component.primitive === 'gear' || component.parameters.bicycle_sprocket) && !component.parameters.road_vehicle_brake) {
+    && !component.parameters.road_vehicle_steering_wheel
+    && !component.parameters.vise_screw;
+  if (!jointPoseApplied && independentlyRollingWheel) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? -3.4);
+  const planetaryGear = Boolean(component.parameters.planetary_sun || component.parameters.planetary_ring || component.parameters.planetary_planet);
+  if (!jointPoseApplied && !planetaryGear && (component.primitive === 'gear' || component.parameters.bicycle_sprocket) && !component.parameters.road_vehicle_brake) {
     const direction = /output/.test(role) ? -1 : 1;
     const teeth = Math.max(12, Number(component.parameters.teeth ?? 18));
     rotation[2] += elapsed * (40.5 / teeth) * direction;
   }
   if (!jointPoseApplied && component.parameters.recycling_drum) rotation[0] += elapsed * 1.85;
-  else if (!jointPoseApplied && (component.primitive === 'pulley' || component.parameters.operation_spin)) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? 1.85);
+  // ShaftBody spins around its own local cylinder axis. Applying the same
+  // operation_spin to this outer world transform makes a shaft tumble end over
+  // end (especially obvious on planetary outputs) instead of rotating in its
+  // bearings. Pulleys do not have an internal animation and still rotate here.
+  else if (!jointPoseApplied && (component.primitive === 'pulley' || (component.parameters.operation_spin && component.primitive !== 'shaft'))) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? 1.85);
   if (component.parameters.road_vehicle_steering_rack) position[2] += roadVehicleRackTravel(elapsed);
 
   if (!jointPoseApplied && /solar|tracking/.test(context.machine)) {
@@ -121,6 +225,13 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   } else if (!jointPoseApplied && /crane/.test(context.machine)) {
     if (/hook|suspended payload|load cable/.test(role)) position[1] += wave * 1.05;
     if (role.includes('boom head pulley')) rotation[2] += elapsed * 1.35;
+  }
+
+  if (!jointPoseApplied && /\bwinch\b/.test(context.machine) && (component.parameters.winch_hook || component.parameters.winch_payload)) {
+    position[1] += wave * Math.min(1.6, Number(component.parameters.winch_travel_m ?? 1));
+  }
+  if (!jointPoseApplied && /\bpress\b/.test(context.machine) && (component.parameters.press_platen || component.parameters.hydraulic_ram || component.parameters.press_load_cell || component.parameters.press_tooling === 'upper')) {
+    position[1] -= wave * Math.min(.8, Number(component.parameters.operation_travel ?? .3));
   }
 
   if (!jointPoseApplied && /robotic arm|three-axis/.test(context.machine)) {
@@ -421,7 +532,10 @@ function RollerBody({ component, color, xray, selected, operating }: { component
   const radius = component.dimensions[0] / 2, length = component.dimensions[1];
   const rollerRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (rollerRef.current && operating) rollerRef.current.rotation.y = operationTime.current * 2.6; });
+  useFrame(() => {
+    if (!rollerRef.current || !operating) return;
+    rollerRef.current.rotation.y = operationTime.current * Number(component.parameters.operation_spin ?? 2.6);
+  });
   return <group rotation={[Math.PI / 2, 0, 0]}><group ref={rollerRef}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 28]} /><StandardMaterial color="#9ba8ae" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .51, 0]}><cylinderGeometry args={[radius * .42, radius * .42, length * .08, 20]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.24} /></mesh>)}</group></group>;
 }
 
@@ -637,7 +751,11 @@ function LinearActuator({ component, color, xray, selected, actuatorValue, opera
   const [diameter, length] = component.dimensions;
   const rodRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (rodRef.current && operating) rodRef.current.position.y = length * (.18 + operatingValue(operationTime.current) * .2); });
+  useFrame(() => {
+    if (!rodRef.current || !operating) return;
+    const cycle = component.parameters.scissor_actuator ? .5 - Math.cos(operationTime.current * 1.45) * .5 : operatingValue(operationTime.current);
+    rodRef.current.position.y = length * (.18 + cycle * .2);
+  });
   return <group><mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .58, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.75} roughness={.24} /></mesh><group ref={rodRef} position={[0, length * (.18 + actuatorValue * .2), 0]}><mesh><cylinderGeometry args={[diameter * .24, diameter * .24, length * .72, 22]} /><StandardMaterial color="#d8e1e4" xray={xray} selected={selected} metalness={.95} roughness={.1} /></mesh></group>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .37, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[diameter * .48, diameter * .13, 9, 24]} /><StandardMaterial color="#3c4a51" xray={xray} selected={selected} /></mesh>)}</group>;
 }
 
@@ -661,6 +779,30 @@ function ParametricCadPart({ component, color, xray, selected }: { component: Ma
       <mesh castShadow><torusGeometry args={[radius * .68, radius * .22, 14, 42]} />{faceMaterial('#aebbc0')}</mesh>
       <mesh><torusGeometry args={[radius * .33, radius * .12, 12, 36]} />{faceMaterial('#d5dde0')}</mesh>
       {!xray && Array.from({ length: 10 }, (_, index) => { const angle = index / 10 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .5, Math.sin(angle) * radius * .5, z * .2]}><sphereGeometry args={[radius * .085, 12, 12]} /><meshStandardMaterial color="#66757c" metalness={.94} roughness={.12} /></mesh>; })}
+    </group>;
+  }
+  if (form === 'seal') {
+    const radius = Math.max(x, z) / 2;
+    return <group>
+      <mesh castShadow><torusGeometry args={[radius * .62, radius * .2, 18, 48]} />{faceMaterial('#26343a')}</mesh>
+      <mesh position={[0, 0, y * .35]}><torusGeometry args={[radius * .4, radius * .08, 12, 42]} />{faceMaterial('#b8c5c9')}</mesh>
+      {!xray && <mesh position={[0, 0, y * .5]}><torusGeometry args={[radius * .72, radius * .035, 9, 44]} /><meshStandardMaterial color="#d9a44b" metalness={.7} roughness={.28} /></mesh>}
+    </group>;
+  }
+  if (form === 'shaft') {
+    const radius = Math.max(x, z) / 2;
+    return <group>
+      <mesh castShadow><cylinderGeometry args={[radius * .58, radius * .58, y, 36]} />{faceMaterial('#aebbc0')}</mesh>
+      {[-1, 1].map((side) => <mesh key={side} position={[0, side * y * .36, 0]}><cylinderGeometry args={[radius, radius, y * .18, 36]} />{faceMaterial(color)}</mesh>)}
+      <group position={[radius * .52, 0, 0]}><BoxBody size={[radius * .24, y * .42, radius * .18]} color="#263138" xray={xray} selected={selected} radius={.008} /></group>
+    </group>;
+  }
+  if (form === 'cover') {
+    const radius = Math.max(x, z) / 2;
+    return <group>
+      <mesh castShadow><cylinderGeometry args={[radius, radius, y, 48]} />{faceMaterial(color)}</mesh>
+      <mesh position={[0, y * .56, 0]}><cylinderGeometry args={[radius * .42, radius * .42, y * .22, 36]} />{faceMaterial('#809097')}</mesh>
+      {!xray && Array.from({ length: 8 }, (_, index) => { const angle = index / 8 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .76, y * .58, Math.sin(angle) * radius * .76]}><cylinderGeometry args={[radius * .055, radius * .055, y * .28, 14]} /><meshStandardMaterial color="#27343a" metalness={.84} /></mesh>; })}
     </group>;
   }
   if (form === 'flange') {

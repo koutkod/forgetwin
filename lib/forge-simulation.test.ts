@@ -72,6 +72,187 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
   }, 30_000);
 
+  it('measures centrifugal flow from the driven impeller and complete hydraulic path', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a centrifugal water pump that delivers 50 liters per minute with a visible impeller, inlet, and outlet.'));
+    const run = await simulateDesign(state);
+    const flow = run.metrics.measures.find((item) => item.metric === 'flow_rate')!;
+    expect(flow.value).toBeGreaterThanOrEqual(50);
+    expect(flow.provenance).toMatch(/centrifugal duty-point affinity law/i);
+    const flowSensor = state.sensors.find((item) => item.channel === 'discharge_flow_lpm')!;
+    const speedSensor = state.sensors.find((item) => item.channel === 'pump_shaft_speed')!;
+    expect(Math.max(...run.replay.map((frame) => frame.sensorValues[flowSensor.id]))).toBeGreaterThanOrEqual(50);
+    expect(Math.max(...run.replay.map((frame) => frame.sensorValues[speedSensor.id]))).toBeGreaterThan(20);
+
+    const outlet = state.components.find((item) => item.parameters.pump_outlet)!;
+    const withoutOutlet = testCommand(state, 'remove_component', { component_id: outlet.id });
+    const brokenRun = await simulateDesign(withoutOutlet);
+    expect(brokenRun.metrics.measures.find((item) => item.metric === 'flow_rate')?.value).toBe(0);
+    expect(brokenRun.status).toBe('failed');
+  }, 30_000);
+
+  it('does not inflate pump flow from an unrelated higher-speed motor in a compound world', async () => {
+    let state = assemblePlan(compileDesignBrief('Build a centrifugal water pump that delivers 50 liters per minute with a visible impeller, inlet, and outlet.'));
+    const baseline = await simulateDesign(state);
+    const pumpFlow = baseline.metrics.measures.find((item) => item.metric === 'flow_rate')!.value;
+    const support = state.components.find((item) => item.bodyType === 'fixed')!;
+    state = testCommand(state, 'create_component', {
+      component_id: 'unrelated-test-motor', primitive: 'motor', assembly_id: support.assemblyId, role: 'unrelated test motor',
+      position: [-2, .6, 1.5], rotation: [0, 0, 0], dimensions: [.4, .5, .4], material_id: 'steel', body_type: 'kinematic',
+    });
+    state = testCommand(state, 'connect_components', {
+      connection_id: 'unrelated-test-output', source_id: 'unrelated-test-motor', target_id: support.id,
+      connection_type: 'power', channel: 'unrelated_test_output',
+    });
+    state = testCommand(state, 'add_motor', {
+      motor_id: 'unrelated-high-speed-drive', component_id: 'unrelated-test-motor', max_torque: 1, max_rpm: 12000, direction: 1,
+    });
+    const compound = await simulateDesign(state);
+    expect(compound.metrics.measures.find((item) => item.metric === 'flow_rate')?.value).toBe(pumpFlow);
+  }, 30_000);
+
+  it('evaluates the hydraulic press and keeps its platen inside the work cell', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a hydraulic shop press that applies 50,000 N through a guided ram over a 300 mm stroke.'));
+    const run = await simulateDesign(state);
+    expect(run.metrics.measures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'pressing_force', value: 50000, status: 'pass' }),
+      expect.objectContaining({ metric: 'stroke', value: .3, status: 'pass' }),
+      expect.objectContaining({ metric: 'platen_parallelism', status: 'pass' }),
+    ]));
+    expect(run.failures.some((item) => item.type === 'physics-health')).toBe(false);
+    const platen = state.components.find((item) => item.parameters.press_platen)!;
+    const heights = run.replay.flatMap((frame) => frame.items.filter((item) => item.id === platen.id).map((item) => item.position[1]));
+    expect(platen.position[1] - Math.min(...heights)).toBeGreaterThan(.25);
+    expect(Math.min(...heights)).toBeGreaterThan(-1);
+    expect(Math.max(...heights)).toBeLessThan(state.world.bounds[1] + 1);
+  }, 30_000);
+
+  it('measures a stable winch without driving its rope joint like a slider', async () => {
+    const state = assemblePlan(compileDesignBrief('Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.'));
+    const run = await simulateDesign(state);
+    expect(run.metrics.measures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'payload_capacity', status: 'pass' }),
+      expect.objectContaining({ metric: 'line_speed', value: .2, status: 'pass' }),
+      expect.objectContaining({ metric: 'cable_safety_factor', status: 'pass' }),
+    ]));
+    expect(run.metrics.measures.find((item) => item.metric === 'cable_safety_factor')?.value).toBeGreaterThanOrEqual(5);
+    const payload = state.components.find((item) => item.parameters.winch_payload)!;
+    const heights = run.replay.flatMap((frame) => frame.items.filter((item) => item.id === payload.id).map((item) => item.position[1]));
+    expect(Math.max(...heights) - payload.position[1]).toBeGreaterThan(2.5);
+    const hook = state.components.find((item) => item.parameters.winch_hook)!;
+    const hookSamples = run.replay.flatMap((frame) => frame.items.filter((item) => item.id === hook.id).map((item) => ({ time: frame.time, y: item.position[1] })));
+    const upwardSpeeds = hookSamples.slice(1).map((item, index) => (item.y - hookSamples[index].y) / Math.max(.001, item.time - hookSamples[index].time)).filter((speed) => speed > .01);
+    expect(Math.max(...upwardSpeeds)).toBeLessThanOrEqual(.21);
+    expect(Math.max(...upwardSpeeds)).toBeGreaterThanOrEqual(.18);
+    expect(run.failures.some((item) => item.type === 'physics-health')).toBe(false);
+    expect(Math.min(...heights)).toBeGreaterThan(-1);
+    expect(Math.max(...heights)).toBeLessThan(state.world.bounds[1] + 1);
+  }, 30_000);
+
+  it('isolates press and winch measurements inside a compound world', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a hydraulic press that applies 50,000 N over a 300 mm stroke and an electric winch that lifts 200 kg at 0.2 m/s.'));
+    const run = await simulateDesign(state);
+    expect(run.metrics.measures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'pressing_force', value: 50000 }),
+      expect.objectContaining({ metric: 'stroke', value: .3 }),
+      expect.objectContaining({ metric: 'line_speed', value: .2 }),
+    ]));
+  }, 30_000);
+
+  it('honors a slow winch line-speed request below two drum rpm', async () => {
+    const state = assemblePlan(compileDesignBrief('Build an electric winch that lifts 100 kg by 2 meters at 0.05 m/s.'));
+    const run = await simulateDesign(state);
+    expect(run.metrics.measures.find((item) => item.metric === 'line_speed')).toMatchObject({ value: .05, status: 'pass' });
+  }, 30_000);
+
+  it('causally resizes a weak press ram and retunes platen parallelism', async () => {
+    let state = assemblePlan(compileDesignBrief('Build a hydraulic shop press that applies 50,000 N through a guided ram over a 300 mm stroke.'));
+    const ram = state.components.find((item) => item.parameters.hydraulic_ram)!;
+    const actuator = state.actuators.find((item) => item.componentId === ram.id)!;
+    const control = state.controls.find((item) => /press/i.test(item.name))!;
+    actuator.maxForce = 10_000;
+    control.kp = .01;
+    state.goal!.constraints.find((item) => item.metric === 'platen_parallelism')!.target = .8;
+
+    const failed = await simulateDesign(state);
+    expect(failed.metrics.measures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metric: 'pressing_force', status: 'fail' }),
+      expect.objectContaining({ metric: 'platen_parallelism', status: 'fail' }),
+    ]));
+    expect(failed.diagnosis.recommendations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetId: actuator.id, field: 'maxForce' }),
+      expect.objectContaining({ targetId: control.id, field: 'kp' }),
+    ]));
+
+    state = commitSimulation(state, failed, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'restore press force and platen parallelism' });
+    expect(state.actuators.find((item) => item.id === actuator.id)?.maxForce).toBeGreaterThanOrEqual(50_000);
+    expect(state.controls.find((item) => item.id === control.id)?.kp).toBeGreaterThan(.01);
+    const passed = await simulateDesign(state);
+    expect(passed.metrics.measures.find((item) => item.metric === 'pressing_force')?.status).toBe('pass');
+    expect(passed.metrics.measures.find((item) => item.metric === 'platen_parallelism')?.status).toBe('pass');
+  }, 30_000);
+
+  it.each([
+    ['undersized', .1],
+    ['oversized', .8],
+  ])('redesigns an %s exact press stroke in the correct direction', async (_case, startingStroke) => {
+    let state = assemblePlan(compileDesignBrief('Build a hydraulic shop press that applies 50,000 N through a guided ram over a 300 mm stroke.'));
+    const ram = state.components.find((item) => item.parameters.hydraulic_ram)!;
+    const actuator = state.actuators.find((item) => item.componentId === ram.id)!;
+    const guide = state.joints.find((item) => item.id === actuator.jointId)!;
+    state.goal!.constraints.find((item) => item.metric === 'stroke')!.operator = 'exact';
+    actuator.travel = startingStroke;
+    guide.limits = [0, startingStroke];
+
+    const failed = await simulateDesign(state);
+    expect(failed.metrics.measures.find((item) => item.metric === 'stroke')).toMatchObject({ value: startingStroke, status: 'fail' });
+    state = commitSimulation(state, failed, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'match exact press stroke' });
+    expect(state.actuators.find((item) => item.id === actuator.id)?.travel).toBe(.3);
+    expect(state.joints.find((item) => item.id === guide.id)?.limits?.[1]).toBe(.3);
+    const passed = await simulateDesign(state);
+    expect(passed.metrics.measures.find((item) => item.metric === 'stroke')).toMatchObject({ value: .3, status: 'pass' });
+  }, 30_000);
+
+  it.each([
+    ['too slow', .05],
+    ['too fast', .5],
+  ])('retunes a winch that is %s to the exact requested line speed', async (_case, startingSpeed) => {
+    let state = assemblePlan(compileDesignBrief('Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.'));
+    const drum = state.components.find((item) => item.parameters.winch_drum)!;
+    const motorBody = state.components.find((item) => item.parameters.electric_winch_motor)!;
+    const motor = state.motors.find((item) => item.componentId === motorBody.id)!;
+    const radius = Number(drum.parameters.drum_radius_m);
+    motor.maxRpm = startingSpeed / (2 * Math.PI * radius) * 60;
+
+    const failed = await simulateDesign(state);
+    expect(failed.metrics.measures.find((item) => item.metric === 'line_speed')).toMatchObject({ value: startingSpeed, status: 'fail' });
+    expect(failed.diagnosis.recommendations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetId: motor.id, field: 'maxRpm' }),
+    ]));
+    state = commitSimulation(state, failed, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'match exact cable line speed' });
+    const passed = await simulateDesign(state);
+    expect(passed.metrics.measures.find((item) => item.metric === 'line_speed')).toMatchObject({ value: .2, status: 'pass' });
+  }, 30_000);
+
+  it('selects a stronger winch cable from suspended load and safety factor', async () => {
+    let state = assemblePlan(compileDesignBrief('Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.'));
+    const payload = state.components.find((item) => item.parameters.winch_payload)!;
+    const cables = state.components.filter((item) => item.parameters.winch_cable);
+    const weakRating = Number(payload.parameters.payload_kg) * 9.81 * 2;
+    cables.forEach((item) => { item.parameters.rated_breaking_load_n = weakRating; });
+
+    const failed = await simulateDesign(state);
+    expect(failed.metrics.measures.find((item) => item.metric === 'cable_safety_factor')).toMatchObject({ value: 2, status: 'fail' });
+    expect(failed.diagnosis.recommendations.filter((item) => item.field === 'rated_breaking_load_n')).toHaveLength(cables.length);
+    state = commitSimulation(state, failed, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'restore cable design factor' });
+    const passed = await simulateDesign(state);
+    expect(passed.metrics.measures.find((item) => item.metric === 'cable_safety_factor')).toMatchObject({ status: 'pass' });
+    expect(passed.metrics.measures.find((item) => item.metric === 'cable_safety_factor')?.value).toBeGreaterThanOrEqual(5);
+  }, 30_000);
+
   it('credits continuous angular travel only to the motor bound to that revolute joint', async () => {
     const connected = assemblePlan(compileDesignBrief('Build an aluminum six-blade impeller and animate it at 120 rpm.'));
     const shaftJoint = connected.joints.find((item) => item.type === 'revolute')!;
@@ -205,7 +386,41 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
   it('refuses incomplete worlds instead of forcing them into a template', async () => {
     const state = assemblePlan(compileDesignBrief('Build an automatic rotating hatch with an obstruction sensor.'));
     const jointless = { ...state, joints: [], motors: [], actuators: [] };
-    await expect(simulateDesign(jointless)).rejects.toThrow(/no motor or actuator/i);
+    await expect(simulateDesign(jointless)).rejects.toThrow(/no valid driven path/i);
+  });
+
+  it('rejects active worlds whose registered drives cannot move their referenced joint', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a 4:1 gearbox with 120 rpm input.'));
+    const fixedJoint = state.joints.find((item) => item.type === 'fixed')!;
+    const motorBody = state.components.find((item) => item.primitive === 'motor')!;
+    const inert = {
+      ...state,
+      motors: [{ id: 'inert-motor', componentId: motorBody.id, jointId: fixedJoint.id, maxTorque: 100, maxRpm: 120, direction: 1 }],
+      actuators: [],
+    };
+    await expect(simulateDesign(inert)).rejects.toThrow(/no valid driven path|movable drive joint/i);
+  });
+
+  it('rejects overconstrained joint graphs even when state bypasses the WebMCP command guard', async () => {
+    const state = assemblePlan(compileDesignBrief('Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.'));
+    const existing = state.joints[0];
+    const duplicatePair = { ...state, joints: [...state.joints, { ...existing, id: 'injected-duplicate-joint' }] };
+    await expect(simulateDesign(duplicatePair)).rejects.toThrow(/duplicates a joint between the same body pair/i);
+
+    const fixedPair = state.components.filter((item) => item.bodyType === 'fixed')
+      .flatMap((left, index, fixed) => fixed.slice(index + 1).map((right) => [left, right] as const))
+      .find(([left, right]) => !state.joints.some((joint) => new Set([joint.componentA, joint.componentB]).has(left.id) && new Set([joint.componentA, joint.componentB]).has(right.id)));
+    expect(fixedPair).toBeDefined();
+    const fixedMotion = {
+      ...state,
+      joints: [...state.joints, {
+        id: 'injected-fixed-body-hinge', type: 'revolute' as const,
+        componentA: fixedPair![0].id, componentB: fixedPair![1].id,
+        anchorA: [0, 0, 0] as [number, number, number], anchorB: [0, 0, 0] as [number, number, number],
+        axis: [0, 1, 0] as [number, number, number], limits: [-.5, .5] as [number, number],
+      }],
+    };
+    await expect(simulateDesign(fixedMotion)).rejects.toThrow(/motion joint .* connects two fixed bodies/i);
   });
 
   it('never changes evidence from the optimization counter alone', async () => {

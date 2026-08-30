@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createInitialForgeState } from './forge-data';
+import { createInitialForgeState, materialFor } from './forge-data';
 import { applyForgeTool, computeDesignHash } from './forge-engine';
 import { compileDesignBrief } from './forge-prompt';
 import { localPointToWorld } from './forge-motion';
@@ -29,11 +29,68 @@ describe('ForgeTwin shared world command engine', () => {
     expect(computeDesignHash(remassed)).toBe(remassed.designHash);
   });
 
+  it('scales authored component mass during geometry and material edits instead of replacing it with a solid-envelope estimate', () => {
+    const original = assemblePlan(compileDesignBrief('Build an electric winch that lifts 200 kg by 3 meters at 0.2 m/s.'));
+    const drum = original.components.find((item) => item.parameters.winch_drum)!;
+    const resizedDimensions = [...drum.dimensions] as [number, number, number];
+    resizedDimensions[1] = Number((resizedDimensions[1] * 1.1).toFixed(3));
+    const resized = testCommand(original, 'set_dimensions', { component_id: drum.id, dimensions: resizedDimensions });
+    const resizedDrum = resized.components.find((item) => item.id === drum.id)!;
+    expect(resizedDrum.mass).toBeCloseTo(drum.mass * 1.1, 0);
+    expect(resizedDrum.mass).toBeLessThan(100);
+
+    const battery = original.components.find((item) => item.primitive === 'controller')!;
+    const rematerialed = testCommand(original, 'set_material', { component_id: battery.id, material_id: 'aluminum' });
+    expect(rematerialed.components.find((item) => item.id === battery.id)?.mass).toBeCloseTo(battery.mass * 2700 / materialFor(battery.materialId).density, 1);
+  });
+
   it('enforces optimistic concurrency and validates topology', () => {
     const state = assemblePlan(compileDesignBrief('Build a 4:1 gearbox with 120 rpm input.'));
     expect(() => applyForgeTool(state, 'set_mass', { component_id: state.components[0].id, mass: 10, expected_revision: state.revision - 1, expected_workspace_nonce: state.workspaceNonce }, 'WebMCP')).toThrow(/STALE_REVISION/);
     expect(() => testCommand(state, 'create_joint', { joint_id: 'bad-joint', joint_type: 'revolute', component_a: state.components[0].id, component_b: state.components[0].id, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: [0, 1, 0] })).toThrow(/two different bodies/i);
-    expect(() => testCommand(state, 'create_joint', { joint_id: 'bad-gear', joint_type: 'gear', component_a: state.components[0].id, component_b: state.components[1].id, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: [0, 1, 0] })).toThrow(/positive ratio/i);
+    const unusedMovingPair = state.components.flatMap((left, index) => state.components.slice(index + 1).map((right) => [left, right] as const))
+      .find(([left, right]) => !(left.bodyType === 'fixed' && right.bodyType === 'fixed')
+        && !state.joints.some((joint) => new Set([joint.componentA, joint.componentB]).has(left.id) && new Set([joint.componentA, joint.componentB]).has(right.id)));
+    expect(unusedMovingPair).toBeDefined();
+    expect(() => testCommand(state, 'create_joint', { joint_id: 'bad-gear', joint_type: 'gear', component_a: unusedMovingPair![0].id, component_b: unusedMovingPair![1].id, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: [0, 1, 0] })).toThrow(/positive ratio/i);
+    const existing = state.joints[0];
+    expect(() => testCommand(state, 'create_joint', { joint_id: 'duplicate-pair', joint_type: 'fixed', component_a: existing.componentB, component_b: existing.componentA, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: [0, 1, 0] })).toThrow(/same body pair/i);
+    const fixedPair = state.components.filter((item) => item.bodyType === 'fixed').flatMap((left, index, fixed) => fixed.slice(index + 1).map((right) => [left, right] as const))
+      .find(([left, right]) => !state.joints.some((joint) => new Set([joint.componentA, joint.componentB]).has(left.id) && new Set([joint.componentA, joint.componentB]).has(right.id)));
+    expect(fixedPair).toBeDefined();
+    expect(() => testCommand(state, 'create_joint', { joint_id: 'fixed-body-hinge', joint_type: 'revolute', component_a: fixedPair![0].id, component_b: fixedPair![1].id, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: [0, 1, 0], limits: [-.5, .5] })).toThrow(/two fixed bodies/i);
+  });
+
+  it('guards WebMCP drives against fixed, reversed, and unrelated joint paths', () => {
+    let state = assemblePlan(compileDesignBrief('Build a 4:1 gearbox with 120 rpm input.'));
+    const assemblyId = state.assemblies[0].id;
+    state = testCommand(state, 'create_component', {
+      component_id: 'audit-drive-motor', primitive: 'motor', assembly_id: assemblyId, role: 'audit drive motor',
+      position: [0, .5, 1.5], rotation: [0, 0, 0], dimensions: [.4, .5, .4], material_id: 'steel', body_type: 'kinematic',
+    });
+    const motorBody = state.components.find((item) => item.id === 'audit-drive-motor')!;
+    const fixedJoint = state.joints.find((item) => item.type === 'fixed')!;
+    const motionJoint = state.joints.find((item) => item.type === 'revolute' && state.components.find((body) => body.id === item.componentB)?.bodyType !== 'fixed')!;
+    const guarded = () => ({ expected_revision: state.revision, expected_workspace_nonce: state.workspaceNonce });
+    expect(() => applyForgeTool(state, 'add_motor', {
+      ...guarded(), motor_id: 'fixed-path-motor', component_id: motorBody.id, joint_id: fixedJoint.id, max_torque: 20, max_rpm: 120,
+    }, 'WebMCP')).toThrow(/fixed joint/i);
+    expect(() => applyForgeTool(state, 'add_actuator', {
+      ...guarded(), actuator_id: 'fixed-path-actuator', component_id: motorBody.id, joint_id: fixedJoint.id,
+      actuator_type: 'rotary-motor', max_force: 200, max_speed: 1, travel: 1,
+    }, 'WebMCP')).toThrow(/fixed joint/i);
+    expect(() => applyForgeTool(state, 'add_motor', {
+      ...guarded(), motor_id: 'unrelated-path-motor', component_id: motorBody.id, joint_id: motionJoint.id, max_torque: 20, max_rpm: 120,
+    }, 'WebMCP')).toThrow(/connect the drive body/i);
+
+    state = testCommand(state, 'connect_components', {
+      connection_id: 'audit-drive-interface', source_id: motorBody.id, target_id: motionJoint.componentB,
+      connection_type: 'power', channel: 'audit_drive_output',
+    });
+    expect(() => applyForgeTool(state, 'add_motor', {
+      expected_revision: state.revision, expected_workspace_nonce: state.workspaceNonce,
+      motor_id: 'related-path-motor', component_id: motorBody.id, joint_id: motionJoint.id, max_torque: 20, max_rpm: 120,
+    }, 'WebMCP')).not.toThrow();
   });
 
   it('locks human-authored fields against agent overwrite and preserves them on restore', () => {

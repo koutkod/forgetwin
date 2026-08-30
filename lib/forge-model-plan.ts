@@ -137,6 +137,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
   const plan = validateAgentPlanSemantics(rawPlan, requestedPrompt);
   const components = componentsFrom(plan);
   const joints = jointsFrom(plan, components);
+  const explicitComponentLimit = plan.requirements.find((item) => item.metric === 'component_count' && item.operator === 'max' && item.source === 'user');
   const sensorById = new Map(plan.sensors.map((item) => [item.id, item]));
   const editable = components.find((item) => item.id === plan.editable_component_id)!;
   const assumptions = [...plan.assumptions, 'AI-composed concept model; all bodies and references passed ForgeTwin semantic validation.'];
@@ -149,7 +150,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
       summary: `AI-composed ${plan.architecture.join(' + ')} from ${components.length} guarded physical bodies.`,
       capabilities: [...plan.capabilities],
       constraints: plan.requirements.map((item) => ({ ...item })),
-      maxComponents: Math.min(80, Math.max(24, components.length + 8)),
+      maxComponents: explicitComponentLimit?.target ?? Math.min(80, Math.max(24, components.length + 8)),
       assumptions,
       disclaimer: 'Concept-level rigid-body model. Validate loads, materials, controls, manufacturability, and safety before fabrication or real-world use.',
       simulationModel: 'GPT-5.6 design graph executed through guarded WebMCP-style tools in a Rapier multi-body world',

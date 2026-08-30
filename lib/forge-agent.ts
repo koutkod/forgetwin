@@ -423,6 +423,7 @@ function validateExplicitRequirements(plan: AgentPlan, requested: string) {
   const unitOf = (value: string) => {
     const unit = value.toLowerCase().replaceAll(' ', '').replaceAll('²', '2').replace(/[·⋅*.-]/g, '');
     if (unit === 'kg' || unit.startsWith('kilogram')) return 'kg';
+    if (unit === 'mm' || unit.startsWith('millimeter') || unit.startsWith('millimetre')) return 'mm';
     if (unit === 'm' || unit.startsWith('meter') || unit.startsWith('metre')) return 'm';
     if (unit === 'cm' || unit.startsWith('centimeter') || unit.startsWith('centimetre')) return 'cm';
     if (unit === 'nm' || unit.startsWith('newtonmeter') || unit.startsWith('newtonmetre')) return 'nm';
@@ -431,6 +432,7 @@ function validateExplicitRequirements(plan: AgentPlan, requested: string) {
     if (unit === 'l/min' || unit.includes('liter/min') || unit.includes('litre/min') || unit.includes('literperminute') || unit.includes('litreperminute')) return 'l/min';
     if (unit === 's' || unit === 'sec' || unit.startsWith('second')) return 's';
     if (unit === 'm/s2' || /met(?:er|re)s?persecondsquared/.test(unit)) return 'm/s2';
+    if (unit === 'm/s' || /^met(?:er|re)s?persecond$/.test(unit)) return 'm/s';
     if (unit.includes('/min') || unit.includes('perminute')) return '/min';
     if (unit === '%' || unit === 'percent') return '%';
     if (unit === '°' || unit.startsWith('degree')) return 'deg';
@@ -495,8 +497,24 @@ function validateExplicitRequirements(plan: AgentPlan, requested: string) {
   if (pressForce) {
     const valueIndex = pressForce[1] ? 1 : 3; const unitIndex = pressForce[2] ? 2 : 4;
     const force = valueOf(pressForce[valueIndex]); const forceUnit = unitOf(pressForce[unitIndex]);
-    expectTarget(forceUnit === 'kn' ? force * 1000 : force, ['clamp_force'], 'press or clamp force', 'min', ['n']);
+    expectTarget(forceUnit === 'kn' ? force * 1000 : force, ['pressing_force', 'clamp_force'], 'press or clamp force', 'min', ['n']);
   }
+
+  const distanceUnitToken = '(mm|millimeters?|millimetres?|cm|centimeters?|centimetres?|m|meters?|metres?)';
+  const labelledStroke = requested.match(new RegExp(`\\b(?:stroke|ram\\s+travel|piston\\s+travel|plunger\\s+travel)\\b[^.]{0,36}?${numberToken}\\s*${distanceUnitToken}\\b`));
+  const suffixedStroke = requested.match(new RegExp(`${numberToken}\\s*${distanceUnitToken}\\b\\s*(?:of\\s+)?(?:(?:linear|ram|piston|plunger|press)\\s+)?(?:stroke|travel)\\b`));
+  const statedStroke = labelledStroke ?? suffixedStroke;
+  if (statedStroke) {
+    const distance = valueOf(statedStroke[1]); const unit = unitOf(statedStroke[2]);
+    const meters = unit === 'mm' ? distance / 1000 : unit === 'cm' ? distance / 100 : distance;
+    expectTarget(meters, ['stroke'], 'stroke length', 'min', ['m']);
+  }
+
+  const speedUnitToken = '(m\\s*\\/\\s*s|meters?\\s+per\\s+second|metres?\\s+per\\s+second)';
+  const labelledLineSpeed = requested.match(new RegExp(`\\b(?:winch|hoist|cable|line\\s+speed|winding)\\b[^.]{0,100}?${numberToken}\\s*${speedUnitToken}\\b`));
+  const suffixedLineSpeed = requested.match(new RegExp(`${numberToken}\\s*${speedUnitToken}\\b[^.]{0,45}?\\b(?:line\\s+speed|winch|hoist|cable|winding)\\b`));
+  const lineSpeed = labelledLineSpeed ?? suffixedLineSpeed;
+  if (lineSpeed) expectTarget(valueOf(lineSpeed[1]), ['line_speed'], 'winch line speed', 'exact', ['m/s']);
 
   const trackingTolerance = requested.match(new RegExp(`\\b(?:track|tracker|tracking|follow|following|point|pointing|align|aligned|keep|keeps|keeping|panel)\\b[^.]{0,80}?\\b(?:within|error(?:\\s+of)?|tolerance(?:\\s+of)?|no more than|at most)\\s*${numberToken}\\s*(°|degrees?)\\b`));
   if (trackingTolerance) expectTarget(valueOf(trackingTolerance[1]), ['tracking_error'], 'tracking-error', 'max', ['deg']);
@@ -548,6 +566,8 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
     if (item.position.some((value) => Math.abs(value) > 25)) throw new Error(`Component ${item.id} is outside the 50 m concept workspace.`);
     if (item.rotation.some((value) => Math.abs(value) > Math.PI * 2)) throw new Error(`Component ${item.id} rotation must stay within ±2π radians.`);
   }
+  const explicitComponentLimit = plan.requirements.find((item) => item.metric === 'component_count' && item.operator === 'max' && item.source === 'user');
+  if (explicitComponentLimit && plan.components.length > explicitComponentLimit.target) throw new Error(`The design graph exceeds the user’s explicit component-count limit of ${explicitComponentLimit.target}.`);
   unique(plan.connections.map((item) => `${item.connection_type}|${[item.source_id, item.target_id].sort().join('|')}|${item.channel}`), 'Connection edge');
   for (const item of plan.connections) { assertReference(componentIds, item.source_id, `Connection ${item.id}`); assertReference(componentIds, item.target_id, `Connection ${item.id}`); if (item.source_id === item.target_id) throw new Error(`Connection ${item.id} cannot target itself.`); }
   unique(plan.joints.map((item) => [item.component_a, item.component_b].sort().join('|')), 'Joint body pair');
