@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { ForgeScene } from '../components/forge/forge-scene';
 import {
-  normalizeRedesignSequence, requestAgentEdit, requestAgentPlan, requestAgentRedesign,
+  AgentRequestError, normalizeRedesignSequence, requestAgentEdit, requestAgentPlan, requestAgentRedesign, validateAgentKey,
   type AgentEditAction, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
@@ -58,6 +58,8 @@ export function ForgeTwinApp() {
   const [agentModel, setAgentModel] = useState('gpt-5.6-sol');
   const [agentKey, setAgentKey] = useState('');
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [agentConnecting, setAgentConnecting] = useState(false);
+  const [agentConnectionError, setAgentConnectionError] = useState<string | null>(null);
   const [agentTrace, setAgentTrace] = useState<AgentTraceItem[]>([]);
   const [editPrompt, setEditPrompt] = useState('');
   const [editMessages, setEditMessages] = useState<EditMessage[]>([]);
@@ -67,6 +69,7 @@ export function ForgeTwinApp() {
   const animationPlaying = animationState.designHash === state.designHash && animationState.playing;
   const setAnimationPlaying = (playing: boolean) => setAnimationState({ designHash: state.designHash, playing });
   const traceSeq = useRef(0);
+  const agentConnectSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3600); return () => window.clearTimeout(timer); }, [toast]);
@@ -77,6 +80,13 @@ export function ForgeTwinApp() {
     traceSeq.current += 1;
     const item: AgentTraceItem = { id: `agent-trace-${traceSeq.current}`, kind, title, detail, at: new Date().toISOString() };
     setAgentTrace((current) => [...current, item].slice(-30));
+  };
+  const recordModelFailure = (caught: unknown) => {
+    const message = caught instanceof Error ? caught.message : 'The model request failed.';
+    const disconnected = caught instanceof AgentRequestError && ['MODEL_KEY_REJECTED', 'MODEL_ACCESS_DENIED'].includes(caught.code);
+    setAgentConnectionError(message);
+    if (disconnected) { setAgentKey(''); setAgentRuntime('deterministic'); }
+    return { message, disconnected };
   };
   const runtimeActor = (): Actor => agentRuntime === 'session-model' ? 'ModelAgent' : 'Deterministic';
   const updateGoalPrompt = (prompt: string) => { setGoalPrompt(prompt); setPromptError(null); };
@@ -105,8 +115,9 @@ export function ForgeTwinApp() {
         addTrace('reasoning', 'Model diagnosed the failed trial', response.result.diagnosis);
         addTrace('action', 'Model selected the evidence loop', steps.map((step) => step.tool).join(' → '));
       } catch (caught) {
-        actor = 'Deterministic'; setAgentRuntime('deterministic');
-        addTrace('fallback', 'Model redesign unavailable', `${caught instanceof Error ? caught.message : 'The model request failed.'} Continuing with the bounded local evidence loop.`);
+        actor = 'Deterministic';
+        const failure = recordModelFailure(caught);
+        addTrace('fallback', 'Model redesign unavailable', `${failure.message} Continuing with the bounded local evidence loop.${failure.disconnected ? ' Reconnect with an active key.' : ' The validated key remains connected for the next retry.'}`);
       }
     }
     const failedMetric = failed.metrics.measures.find((item) => item.status === 'fail');
@@ -149,11 +160,12 @@ export function ForgeTwinApp() {
         try {
           const response = await requestAgentPlan(requestedPrompt, agentKey || undefined, controller.signal);
           modelAssumptions = response.result.assumptions;
-          setAgentModel(response.model);
+          setAgentModel(response.model); setAgentConnectionError(null);
           addTrace('reasoning', response.result.reasoning_summary, `Interpreted as: ${response.result.normalized_prompt}. Architecture: ${response.result.architecture.join(' · ')}. Verify: ${response.result.verification_focus.join(', ')}. The user's object identity remains authoritative.`);
         } catch (caught) {
-          actor = 'Deterministic'; setAgentRuntime('deterministic');
-          addTrace('fallback', 'Switched to the local engineer', `${caught instanceof Error ? caught.message : 'The model request failed.'} The deterministic planner will still build, simulate, and repair the machine.`);
+          actor = 'Deterministic';
+          const failure = recordModelFailure(caught);
+          addTrace('fallback', 'Switched to the local engineer for this run', `${failure.message} The deterministic planner will still build, simulate, and repair the machine.${failure.disconnected ? ' Reconnect with an active key.' : ' Your validated key remains connected for the next retry.'}`);
         }
       } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
 
@@ -331,13 +343,25 @@ export function ForgeTwinApp() {
     if (!result.ok) setError(result.error.message); else setToast(`Restored revision ${target.revision} as a new head`);
   };
 
-  const connectTemporaryModel = (key: string) => {
+  const connectTemporaryModel = async (key: string) => {
     const value = key.trim();
-    if (value.length < 20 || value.length > 300) { setError('Enter a complete OpenAI API key between 20 and 300 characters. It stays only in this browser tab.'); return; }
-    setAgentKey(value); setAgentRuntime('session-model'); setAgentSettingsOpen(false);
-    setToast('Model connected for this tab — the next mission will use model-selected planning');
+    if (value.length < 20 || value.length > 300) { setAgentConnectionError('Enter a complete OpenAI API key between 20 and 300 characters.'); return; }
+    if (value.includes('\\')) { setAgentConnectionError('The pasted key contains a backslash. Copy the original key directly from the OpenAI dashboard and try again.'); return; }
+    const requestId = ++agentConnectSeq.current;
+    setAgentConnecting(true); setAgentConnectionError(null);
+    try {
+      const response = await validateAgentKey(value);
+      if (requestId !== agentConnectSeq.current) return;
+      setAgentKey(value); setAgentRuntime('session-model'); setAgentModel(response.model); setAgentSettingsOpen(false);
+      setToast(`${response.model} verified and connected for this tab`);
+    } catch (caught) {
+      if (requestId !== agentConnectSeq.current) return;
+      setAgentKey(''); setAgentRuntime('deterministic');
+      setAgentConnectionError(caught instanceof Error ? caught.message : 'OpenAI could not validate this key.');
+    } finally { if (requestId === agentConnectSeq.current) setAgentConnecting(false); }
   };
   const disconnectTemporaryModel = () => {
+    agentConnectSeq.current += 1; setAgentConnecting(false); setAgentConnectionError(null);
     setAgentKey(''); setAgentRuntime('deterministic'); setAgentSettingsOpen(false);
     setToast('Your OpenAI key was removed from this tab');
   };
@@ -453,7 +477,7 @@ export function ForgeTwinApp() {
             selected_component_id: current.selectedComponentId ?? '', assembly_ids: current.assemblies.map((item) => item.id),
             components: current.components.map((item) => ({ id: item.id, role: item.role, primitive: item.primitive, assembly_id: item.assemblyId, position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId, body_type: item.bodyType, mass: item.mass, human_locked_fields: item.humanLockedFields })),
           }, agentKey || undefined, controller.signal);
-          setAgentModel(response.model); summary = response.result.summary; commands = modelEditCommands(response.result.actions);
+          setAgentModel(response.model); setAgentConnectionError(null); summary = response.result.summary; commands = modelEditCommands(response.result.actions);
           if (/\b(add|create|attach)\b/i.test(prompt) && /\b(headlights?|head lamps?|lamps?|bike lights?|work lights?)\b/i.test(prompt)) {
             commands = localEditCommands(prompt);
             summary = 'The agent mapped the request to a purpose-built LED light module and mounted it on the bicycle steering structure.';
@@ -461,9 +485,9 @@ export function ForgeTwinApp() {
           }
           addTrace('reasoning', 'Model proposed an in-place revision', summary);
         } catch (caught) {
-          actor = 'Deterministic'; setAgentRuntime('deterministic'); commands = localEditCommands(prompt);
+          actor = 'Deterministic'; const failure = recordModelFailure(caught); commands = localEditCommands(prompt);
           summary = `The model was unavailable, so the local chat interpreter applied: ${commands.map((item) => item.label).join(' · ')}.`;
-          addTrace('fallback', 'Local chat editor took over', caught instanceof Error ? caught.message : 'The model edit request failed.');
+          addTrace('fallback', 'Local chat editor took over for this edit', `${failure.message}${failure.disconnected ? ' Reconnect with an active key.' : ' The validated key remains connected for the next retry.'}`);
         }
       } else {
         commands = localEditCommands(prompt); summary = `Local chat edit: ${commands.map((item) => item.label).join(' · ')}.`;
@@ -499,7 +523,7 @@ export function ForgeTwinApp() {
     setToast('Scratch world ready — the primitive library is unlocked');
   };
 
-  if (state.screen === 'landing') return <><Landing state={state} toolCount={registeredTools} prompt={goalPrompt} promptError={promptError} busy={busy} agentRuntime={agentRuntime} agentModel={agentModel} onConfigureAgent={() => setAgentSettingsOpen(true)} onPromptChange={updateGoalPrompt} onEnter={enterScratchWorld} onGenerate={generateFromPrompt} onExample={(example) => { setGoalPrompt(example.prompt); setPromptError(null); }} />{generationVisual && <GenerationSequence state={generationVisual} onCancel={cancelAgentRun} />}{agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}</>;
+  if (state.screen === 'landing') return <><Landing state={state} toolCount={registeredTools} prompt={goalPrompt} promptError={promptError} busy={busy} agentRuntime={agentRuntime} agentModel={agentModel} onConfigureAgent={() => setAgentSettingsOpen(true)} onPromptChange={updateGoalPrompt} onEnter={enterScratchWorld} onGenerate={generateFromPrompt} onExample={(example) => { setGoalPrompt(example.prompt); setPromptError(null); }} />{generationVisual && <GenerationSequence state={generationVisual} onCancel={cancelAgentRun} />}{agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} connecting={agentConnecting} connectionError={agentConnectionError} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}</>;
 
   const latestRun = state.runs.at(-1) ?? null;
   const firstFailedRun = state.runs.find((run) => run.status === 'failed') ?? null;
@@ -539,7 +563,7 @@ export function ForgeTwinApp() {
     {toast && <div className="success-toast" role="status"><Check size={14} />{toast}</div>}
     {drawer && <Drawer type={drawer} state={state} onClose={() => setDrawer(null)} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} onAddPrimitive={addPrimitive} />}
     {generationVisual && <GenerationSequence state={generationVisual} onCancel={cancelAgentRun} />}
-    {agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}
+    {agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} connecting={agentConnecting} connectionError={agentConnectionError} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}
     <div className="sr-only" aria-live="polite">{busy ? 'Agent is engineering the shared physical world' : toast ?? error ?? ''}</div>
   </div>;
 }
@@ -614,7 +638,7 @@ function GoalComposer({ id, prompt, error, busy, agentRuntime, compact = false, 
   return <form className={`goal-composer ${compact ? 'compact' : ''}`} aria-busy={busy} onSubmit={(event) => { event.preventDefault(); onGenerate(prompt); }}><label htmlFor={id}>What should ForgeTwin engineer?</label><textarea id={id} value={prompt} onChange={(event) => onPromptChange(event.target.value)} maxLength={500} rows={compact ? 4 : 3} aria-describedby={`${hintId}${error ? ` ${errorId}` : ''}`} aria-invalid={Boolean(error)} disabled={busy} /><div className="goal-composer-meta"><span id={hintId}>{prompt.length}/500 · free-form world synthesis · measurable constraints</span><button className="run-button hero" type="submit" disabled={busy || prompt.trim().length < 12}><Sparkles size={15} />{busy ? 'Engineering…' : modelConnected ? 'Engineer with AI' : 'Engineer locally'}</button></div>{error && <p className="goal-error" id={errorId} role="alert"><AlertTriangle size={13} />{error}</p>}</form>;
 }
 
-function AgentSettingsDialog({ runtime, model, hasTemporaryKey, onConnect, onDisconnect, onClose }: { runtime: AgentRuntimeMode; model: string; hasTemporaryKey: boolean; onConnect: (key: string) => void; onDisconnect: () => void; onClose: () => void }) {
+function AgentSettingsDialog({ runtime, model, hasTemporaryKey, connecting, connectionError, onConnect, onDisconnect, onClose }: { runtime: AgentRuntimeMode; model: string; hasTemporaryKey: boolean; connecting: boolean; connectionError: string | null; onConnect: (key: string) => Promise<void>; onDisconnect: () => void; onClose: () => void }) {
   const [key, setKey] = useState('');
   const dialogRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
@@ -636,7 +660,7 @@ function AgentSettingsDialog({ runtime, model, hasTemporaryKey, onConnect, onDis
     return () => { document.removeEventListener('keydown', handle); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
   }, []);
   const modelConnected = runtime === 'session-model' && hasTemporaryKey;
-  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>Bring your own model</small><h2 id="agent-settings-title">Use your OpenAI API key</h2></div><button onClick={onClose} aria-label="Close agent settings"><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${modelConnected ? 'connected' : 'local'}`}><i /><div><strong>{modelConnected ? `${model} connected with your key` : 'Local deterministic engineer active'}</strong><p>{modelConnected ? 'Your model handles planning, chat edits, and redesign decisions. Physics and guarded tools still run inside ForgeTwin.' : 'ForgeTwin remains fully usable without a key. Add your own below when you want model-selected reasoning.'}</p></div></div>{!hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); onConnect(key); }}><label htmlFor="temporary-openai-key">Your OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} maxLength={300} placeholder="sk-…" /><p><KeyRound size={12} />Used only for this browser tab and sent only to ForgeTwin’s same-origin agent route. It is never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={key.trim().length < 20 || key.trim().length > 300}><Bot size={14} />Use my key for this tab</button></form>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect}>Remove my key from this tab</button>}</div><footer><span>Your OpenAI account is charged for model usage. Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose}>Done</button></footer></section></div>;
+  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !connecting) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>Bring your own model</small><h2 id="agent-settings-title">Use your OpenAI API key</h2></div><button onClick={onClose} aria-label="Close agent settings" disabled={connecting}><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${modelConnected ? 'connected' : 'local'}`}><i /><div><strong>{connecting ? `Checking ${model} access…` : modelConnected ? `${model} connected with your key` : 'Local deterministic engineer active'}</strong><p>{connecting ? 'Validating the key and model without storing the key or generating a design.' : modelConnected ? 'Your model handles planning, chat edits, and redesign decisions. Physics and guarded tools still run inside ForgeTwin.' : 'ForgeTwin remains fully usable without a key. Add your own below when you want model-selected reasoning.'}</p></div></div>{connectionError && <p className="agent-connection-error" role="alert"><AlertTriangle size={13} />{connectionError}</p>}{!hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); void onConnect(key); }}><label htmlFor="temporary-openai-key">Your OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} maxLength={300} placeholder="sk-…" disabled={connecting} /><p><KeyRound size={12} />Used only for this browser tab and sent only to ForgeTwin’s same-origin agent route. It is never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={connecting || key.trim().length < 20 || key.trim().length > 300}><Bot size={14} />{connecting ? 'Verifying key…' : 'Verify & connect for this tab'}</button></form>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect} disabled={connecting}>Remove my key from this tab</button>}</div><footer><span>Your OpenAI account is charged only when the model handles a planning, redesign, or chat request. Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose} disabled={connecting}>Done</button></footer></section></div>;
 }
 
 function FailureBanner({ run, onReplay, onFix, busy }: { run: SimulationRun; onReplay: () => void; onFix: () => void; busy: boolean }) {

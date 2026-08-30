@@ -152,7 +152,7 @@ npm run dev
 
 Open `http://localhost:3000/`.
 
-Select **Connect AI** in the app and enter your own OpenAI API key to enable model-backed planning and chat edits for that browser tab. ForgeTwin does not use a shared owner key. Without a visitor key, the complete local engineering flow still works and is labeled as deterministic.
+Select **Connect AI** in the app and enter your own OpenAI API key to enable model-backed planning and chat edits for that browser tab. ForgeTwin validates the key and GPT-5.6 Sol access before showing the model as connected, never stores the key, and surfaces authentication, access, quota, and temporary-provider errors without exposing key material. A transient model failure falls back locally only for that operation while keeping the validated session available for retry. ForgeTwin does not use a shared owner key. Without a visitor key, the complete local engineering flow still works and is labeled as deterministic.
 
 ```bash
 npm run typecheck

@@ -77,6 +77,34 @@ function extractOutputText(payload: unknown) {
   return null;
 }
 
+function providerError(status: number, fallback = 'OpenAI could not complete this request.') {
+  if (status === 401) return { code: 'MODEL_KEY_REJECTED', error: 'OpenAI rejected this API key. Check that it is active and copied completely.', status: 401 };
+  if (status === 403 || status === 404) return { code: 'MODEL_ACCESS_DENIED', error: `This OpenAI project cannot access ${modelName()}. Check the project permissions and API model access.`, status: 403 };
+  if (status === 429) return { code: 'MODEL_QUOTA_OR_RATE_LIMIT', error: 'The API key is valid, but the OpenAI project has no available quota or is currently rate-limited. Check API billing and limits.', status: 429 };
+  if (status >= 500) return { code: 'MODEL_PROVIDER_UNAVAILABLE', error: 'OpenAI is temporarily unavailable. ForgeTwin can use the local engineer for this run and retry later.', status: 502 };
+  return { code: 'MODEL_PROVIDER_ERROR', error: fallback, status: 400 };
+}
+
+function providerErrorResponse(status: number, fallback?: string) {
+  const failure = providerError(status, fallback);
+  return Response.json({ ok: false, code: failure.code, error: failure.error }, { status: failure.status });
+}
+
+async function validateModelAccess(apiKey: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(modelName())}`, {
+      method: 'GET', headers: { authorization: `Bearer ${apiKey}` }, signal: controller.signal,
+    });
+    if (!response.ok) return providerErrorResponse(response.status, 'OpenAI could not validate this key for the selected model.');
+    return Response.json({ ok: true, configured: true, model: modelName() }, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') return Response.json({ ok: false, code: 'MODEL_VALIDATION_TIMEOUT', error: 'OpenAI did not validate the key in time. Check your connection and try again.' }, { status: 504 });
+    return Response.json({ ok: false, code: 'MODEL_PROVIDER_UNAVAILABLE', error: 'OpenAI could not be reached to validate this key. Try again in a moment.' }, { status: 502 });
+  } finally { clearTimeout(timeout); }
+}
+
 async function createStructuredResponse(apiKey: string, task: z.infer<typeof requestSchema>) {
   const planTask = task.task === 'plan';
   const editTask = task.task === 'edit';
@@ -106,9 +134,8 @@ async function createStructuredResponse(apiKey: string, task: z.infer<typeof req
       signal: controller.signal,
     });
     if (!response.ok) {
-      const upstream = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
-      const detail = typeof upstream?.error?.message === 'string' && response.status < 500 ? upstream.error.message.slice(0, 240) : 'The model provider did not accept the request.';
-      return Response.json({ ok: false, code: 'MODEL_PROVIDER_ERROR', error: detail }, { status: response.status >= 500 ? 502 : 400 });
+      await response.body?.cancel().catch(() => undefined);
+      return providerErrorResponse(response.status, 'OpenAI rejected the structured engineering request. Try again or use the local engineer for this run.');
     }
     const payload = await response.json() as unknown;
     const text = extractOutputText(payload);
@@ -125,6 +152,13 @@ async function createStructuredResponse(apiKey: string, task: z.infer<typeof req
 
 export async function GET() {
   return Response.json({ ok: true, configured: false, model: modelName() }, { headers: { 'cache-control': 'no-store' } });
+}
+
+export async function PUT(request: Request) {
+  if (!sameOrigin(request)) return Response.json({ ok: false, code: 'ORIGIN_REJECTED', error: 'Cross-origin agent requests are not allowed.' }, { status: 403 });
+  const apiKey = sessionKey(request);
+  if (!apiKey) return Response.json({ ok: false, code: 'MODEL_KEY_REQUIRED', error: 'Enter a complete OpenAI API key to connect the model.' }, { status: 400 });
+  return validateModelAccess(apiKey);
 }
 
 export async function POST(request: Request) {

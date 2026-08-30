@@ -63,6 +63,12 @@ const agentStatusSchema = z.object({
   model: z.string().min(1).max(100),
 }).strict();
 
+const agentConnectionSchema = z.object({
+  ok: z.literal(true),
+  configured: z.literal(true),
+  model: z.string().min(1).max(100),
+}).strict();
+
 const agentPlanResponseSchema = z.object({
   ok: z.literal(true),
   mode: z.literal('model'),
@@ -169,6 +175,14 @@ function agentHeaders(apiKey?: string) {
 export async function getAgentStatus(signal?: AbortSignal) {
   const response = await fetch('/api/agent', { method: 'GET', cache: 'no-store', signal });
   return agentStatusSchema.parse(await readJson(response));
+}
+
+export async function validateAgentKey(apiKey: string, signal?: AbortSignal) {
+  const response = await fetch('/api/agent', {
+    method: 'PUT', redirect: 'error', cache: 'no-store',
+    headers: agentHeaders(apiKey), signal,
+  });
+  return agentConnectionSchema.parse(await readJson(response));
 }
 
 export async function requestAgentPlan(prompt: string, apiKey?: string, signal?: AbortSignal) {

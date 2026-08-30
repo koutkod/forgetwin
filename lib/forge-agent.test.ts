@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GET, POST } from '../app/api/agent/route';
+import { GET, POST, PUT } from '../app/api/agent/route';
 import {
-  agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, normalizeRedesignSequence, requestAgentPlan,
+  agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, normalizeRedesignSequence, requestAgentPlan, validateAgentKey,
 } from './forge-agent';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -72,6 +72,43 @@ describe('ForgeTwin model-agent boundary', () => {
   it('reports BYOK-only model status without exposing a key', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true, configured: false, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } }));
     await expect(getAgentStatus()).resolves.toEqual({ ok: true, configured: false, model: 'gpt-5.6-sol' });
+  });
+
+  it('validates a tab-owned key before reporting the model as connected', async () => {
+    const visitorKey = 'sk-test-tab-validation-key-123456789';
+    const clientFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true, configured: true, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    await expect(validateAgentKey(visitorKey)).resolves.toEqual({ ok: true, configured: true, model: 'gpt-5.6-sol' });
+    const [url, init] = clientFetch.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('/api/agent');
+    expect(init.method).toBe('PUT');
+    expect((init.headers as Record<string, string>)['x-forgetwin-openai-key']).toBe(visitorKey);
+    expect(init.body).toBeUndefined();
+  });
+
+  it('checks model access without echoing or placing the visitor key in a body', async () => {
+    const visitorKey = 'sk-test-validation-route-key-123456789';
+    const providerFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ id: 'gpt-5.6-sol', object: 'model' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const response = await PUT(new Request('http://localhost/api/agent', {
+      method: 'PUT', headers: { origin: 'http://localhost', 'x-forgetwin-openai-key': visitorKey },
+    }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, configured: true, model: 'gpt-5.6-sol' });
+    const [url, init] = providerFetch.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://api.openai.com/v1/models/gpt-5.6-sol');
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${visitorKey}`);
+    expect(init.body).toBeUndefined();
+  });
+
+  it('returns a sanitized actionable error when OpenAI rejects a key', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: { message: 'Incorrect API key provided: sk-secret-never-echo' } }), { status: 401, headers: { 'content-type': 'application/json' } }));
+    const response = await PUT(new Request('http://localhost/api/agent', {
+      method: 'PUT', headers: { origin: 'http://localhost', 'x-forgetwin-openai-key': 'sk-test-rejected-key-1234567890123' },
+    }));
+    expect(response.status).toBe(401);
+    const payload = await response.json() as { code: string; error: string };
+    expect(payload.code).toBe('MODEL_KEY_REJECTED');
+    expect(payload.error).toMatch(/rejected this API key/i);
+    expect(JSON.stringify(payload)).not.toContain('sk-secret-never-echo');
   });
 
   it('never falls back to a shared server key', async () => {
