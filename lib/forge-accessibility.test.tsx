@@ -28,6 +28,27 @@ describe('ForgeTwin accessible world editor shell', () => {
     expect(getByRole('img', { name: '3D general-purpose mechanical engineering world' })).toBeTruthy();
   });
 
+  it('uses a visitor-owned key only for the current browser tab', async () => {
+    const visitorKey = 'sk-test-browser-tab-key-123456789';
+    const first = render(<ForgeTwinApp />);
+    fireEvent.click(first.getByRole('button', { name: 'Connect AI' }));
+    const field = first.getByLabelText('Your OpenAI API key') as HTMLInputElement;
+    expect(field.type).toBe('password');
+    expect(field.maxLength).toBe(300);
+    fireEvent.change(field, { target: { value: visitorKey } });
+    fireEvent.click(first.getByRole('button', { name: 'Use my key for this tab' }));
+    await waitFor(() => expect(first.getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
+    expect(Object.values(window.localStorage).join('')).not.toContain(visitorKey);
+
+    fireEvent.click(first.getByRole('button', { name: 'Agent settings' }));
+    expect(first.getByRole('button', { name: 'Remove my key from this tab' })).toBeTruthy();
+    first.unmount();
+
+    const second = render(<ForgeTwinApp />);
+    expect(second.getByRole('button', { name: 'Engineer locally' })).toBeTruthy();
+    expect(Object.values(window.localStorage).join('')).not.toContain(visitorKey);
+  });
+
   it('moves focus into analysis drawers, closes on Escape, and restores focus', async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(createInitialForgeState('lab')));
     const { getByRole, queryByRole } = render(<ForgeTwinApp />);
@@ -79,7 +100,10 @@ describe('ForgeTwin accessible world editor shell', () => {
         ],
       } }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
-    const { getByRole, findByText, findAllByText } = render(<ForgeTwinApp />);
+    const { getByRole, getByLabelText, findByText, findAllByText } = render(<ForgeTwinApp />);
+    fireEvent.click(getByRole('button', { name: 'Connect AI' }));
+    fireEvent.change(getByLabelText('Your OpenAI API key'), { target: { value: 'sk-test-model-agent-key-123456789' } });
+    fireEvent.click(getByRole('button', { name: 'Use my key for this tab' }));
     await waitFor(() => expect(getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer with AI' }));
     expect(await findByText('Engineering mission complete', {}, { timeout: 20_000 })).toBeTruthy();

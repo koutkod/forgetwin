@@ -4,7 +4,7 @@ ForgeTwin is a browser-based, agent-native engineering sandbox. A person describ
 
 The runtime is explicit about what is doing the work:
 
-- **Model agent** — when `OPENAI_API_KEY` is configured on the server, or a user connects a temporary key for the current tab, GPT-5.6 Sol interprets the brief, edits the current world from chat, and selects the failure-analysis/redesign tool loop. `OPENAI_MODEL` can override the default.
+- **Model agent** — a user can connect their own OpenAI API key for the current tab. GPT-5.6 Sol then interprets the brief, edits the current world from chat, and selects the failure-analysis/redesign tool loop. The key is held only in React memory, sent only to the same-origin agent route, and never stored in browser storage or the project. `OPENAI_MODEL` can override the default model.
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
 
@@ -152,14 +152,7 @@ npm run dev
 
 Open `http://localhost:3000/`.
 
-Optional model-backed mode:
-
-```bash
-cp .env.example .env.local
-# Set OPENAI_API_KEY in .env.local; OPENAI_MODEL defaults to gpt-5.6-sol.
-```
-
-Without that key, the complete local engineering flow still works and is labeled as deterministic.
+Select **Connect AI** in the app and enter your own OpenAI API key to enable model-backed planning and chat edits for that browser tab. ForgeTwin does not use a shared owner key. Without a visitor key, the complete local engineering flow still works and is labeled as deterministic.
 
 ```bash
 npm run typecheck

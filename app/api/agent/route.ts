@@ -47,10 +47,9 @@ function sameOrigin(request: Request) {
   try { return new URL(origin).origin === new URL(request.url).origin; } catch { return false; }
 }
 
-function configuredKey(request?: Request) {
-  const temporary = request?.headers.get('x-forgetwin-openai-key')?.trim();
-  if (temporary && temporary.length <= 300) return temporary;
-  return process.env.OPENAI_API_KEY?.trim() || null;
+function sessionKey(request: Request) {
+  const key = request.headers.get('x-forgetwin-openai-key')?.trim();
+  return key && key.length >= 20 && key.length <= 300 ? key : null;
 }
 
 function modelName() {
@@ -121,13 +120,13 @@ async function createStructuredResponse(apiKey: string, task: z.infer<typeof req
 }
 
 export async function GET() {
-  return Response.json({ ok: true, configured: Boolean(configuredKey()), model: modelName() }, { headers: { 'cache-control': 'no-store' } });
+  return Response.json({ ok: true, configured: false, model: modelName() }, { headers: { 'cache-control': 'no-store' } });
 }
 
 export async function POST(request: Request) {
   if (!sameOrigin(request)) return Response.json({ ok: false, code: 'ORIGIN_REJECTED', error: 'Cross-origin agent requests are not allowed.' }, { status: 403 });
-  const apiKey = configuredKey(request);
-  if (!apiKey) return Response.json({ ok: false, code: 'MODEL_NOT_CONFIGURED', error: 'No model key is connected. ForgeTwin will continue with its local deterministic engineer.' }, { status: 503 });
+  const apiKey = sessionKey(request);
+  if (!apiKey) return Response.json({ ok: false, code: 'MODEL_NOT_CONFIGURED', error: 'Add your OpenAI API key in Agent settings. ForgeTwin can continue with its local deterministic engineer.' }, { status: 503 });
   try {
     const body = requestSchema.parse(await request.json());
     return await createStructuredResponse(apiKey, body);

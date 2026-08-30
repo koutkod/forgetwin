@@ -88,7 +88,7 @@ export type AgentPlan = z.infer<typeof agentPlanSchema>;
 export type AgentRedesign = z.infer<typeof agentRedesignSchema>;
 export type AgentEdit = z.infer<typeof agentEditSchema>;
 export type AgentEditAction = z.infer<typeof agentEditActionSchema>;
-export type AgentRuntimeMode = 'checking' | 'server-model' | 'session-model' | 'deterministic';
+export type AgentRuntimeMode = 'session-model' | 'deterministic';
 
 export function normalizeRedesignSequence(decision: AgentRedesign) {
   const evidence = decision.tool_sequence.filter((step) => step.tool !== 'optimize_design' && step.tool !== 'run_simulation').slice(0, 6);
@@ -173,7 +173,7 @@ export async function getAgentStatus(signal?: AbortSignal) {
 
 export async function requestAgentPlan(prompt: string, apiKey?: string, signal?: AbortSignal) {
   const response = await fetch('/api/agent', {
-    method: 'POST',
+    method: 'POST', redirect: 'error',
     headers: agentHeaders(apiKey),
     body: JSON.stringify({ task: 'plan', prompt: conciseText.parse(prompt) }),
     signal,
@@ -183,7 +183,7 @@ export async function requestAgentPlan(prompt: string, apiKey?: string, signal?:
 
 export async function requestAgentRedesign(prompt: string, context: RedesignContext, apiKey?: string, signal?: AbortSignal) {
   const response = await fetch('/api/agent', {
-    method: 'POST',
+    method: 'POST', redirect: 'error',
     headers: agentHeaders(apiKey),
     body: JSON.stringify({ task: 'redesign', prompt: conciseText.parse(prompt), context }),
     signal,
@@ -193,7 +193,7 @@ export async function requestAgentRedesign(prompt: string, context: RedesignCont
 
 export async function requestAgentEdit(prompt: string, context: EditContext, apiKey?: string, signal?: AbortSignal) {
   const response = await fetch('/api/agent', {
-    method: 'POST',
+    method: 'POST', redirect: 'error',
     headers: agentHeaders(apiKey),
     body: JSON.stringify({ task: 'edit', prompt: z.string().trim().min(3).max(300).parse(prompt), context }),
     signal,

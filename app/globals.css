@@ -380,8 +380,8 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .agent-settings form label { display:block; margin-bottom:7px; color:#8c9aa2; font-size:9px; font-weight:700; }
 .agent-settings form input { width:100%; height:42px; border:1px solid var(--line); border-radius:8px; outline:0; background:#080d11; color:#dce5e9; padding:0 11px; font:10px var(--font-geist-mono),monospace; }
 .agent-settings form input:focus { border-color:rgba(73,220,255,.55); box-shadow:0 0 0 3px rgba(73,220,255,.08); }
-.agent-settings form p,.server-key-note { display:flex; align-items:flex-start; gap:7px; margin:8px 0 12px; color:#59666f; font-size:7px; line-height:1.5; }
-.agent-settings form p svg,.server-key-note svg { flex:none; margin-top:1px; color:#64ddf6; }
+.agent-settings form p { display:flex; align-items:flex-start; gap:7px; margin:8px 0 12px; color:#59666f; font-size:7px; line-height:1.5; }
+.agent-settings form p svg { flex:none; margin-top:1px; color:#64ddf6; }
 .agent-settings form .run-button { width:100%; min-height:40px; justify-content:center; }
 .disconnect-agent { width:100%; min-height:38px; margin-top:14px; border:1px solid rgba(255,95,111,.18); border-radius:8px; background:rgba(255,95,111,.05); color:#ff909a; font-size:8px; font-weight:750; }
 .agent-settings>footer { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:13px 18px; border-top:1px solid var(--line); background:#090e12; }

@@ -8,9 +8,9 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
-    "build:netlify": "next build",
+    "build:netlify": "next build --webpack",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .netlify",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

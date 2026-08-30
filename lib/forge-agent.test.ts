@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { POST } from '../app/api/agent/route';
+import { GET, POST } from '../app/api/agent/route';
 import {
   agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, normalizeRedesignSequence, requestAgentPlan,
 } from './forge-agent';
@@ -62,40 +62,74 @@ describe('ForgeTwin model-agent boundary', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
     const result = await requestAgentPlan('Build a 4:1 gearbox with at least 80% efficiency.', 'sk-test-temporary-key-123456789');
     expect(result.mode).toBe('model');
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const [url, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('/api/agent');
     expect((init.headers as Record<string, string>)['x-forgetwin-openai-key']).toBe('sk-test-temporary-key-123456789');
+    expect(String(init.body)).not.toContain('sk-test-temporary-key-123456789');
+    expect(init.redirect).toBe('error');
   });
 
-  it('reports server model status without exposing a key', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true, configured: true, model: 'gpt-5.4-mini' }), { status: 200, headers: { 'content-type': 'application/json' } }));
-    await expect(getAgentStatus()).resolves.toEqual({ ok: true, configured: true, model: 'gpt-5.4-mini' });
+  it('reports BYOK-only model status without exposing a key', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true, configured: false, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    await expect(getAgentStatus()).resolves.toEqual({ ok: true, configured: false, model: 'gpt-5.6-sol' });
   });
 
-  it('returns an explicit fallback response when no server model key exists', async () => {
+  it('never falls back to a shared server key', async () => {
     const previous = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-test-owner-key-that-must-never-be-used';
     try {
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
       const response = await POST(new Request('http://localhost/api/agent', {
         method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', host: 'localhost' },
         body: JSON.stringify({ task: 'plan', prompt: 'Build a small rover that carries five kilograms.' }),
       }));
       expect(response.status).toBe(503);
       await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_NOT_CONFIGURED' });
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
     }
   });
 
+  it('forwards a visitor key only as upstream authorization and blocks foreign origins', async () => {
+    const visitorKey = 'sk-test-visitor-key-for-current-tab-only';
+    const output = {
+      normalized_prompt: 'Build a small rover that carries five kilograms over rough terrain.',
+      reasoning_summary: 'Use a low frame, four supported wheels, and a centered payload deck.',
+      architecture: ['low frame', 'four wheel modules', 'payload deck'],
+      assumptions: ['Concept-level indoor terrain'],
+      verification_focus: ['course_time', 'traction_margin', 'platform_tilt'],
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output_text: JSON.stringify(output) }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const response = await POST(new Request('http://localhost/api/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://localhost', 'x-forgetwin-openai-key': visitorKey },
+      body: JSON.stringify({ task: 'plan', prompt: 'Build a small rover that carries five kilograms over rough terrain.' }),
+    }));
+    expect(response.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://api.openai.com/v1/responses');
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${visitorKey}`);
+    expect(String(init.body)).not.toContain(visitorKey);
+    expect(JSON.stringify(await response.json())).not.toContain(visitorKey);
+
+    const rejected = await POST(new Request('http://localhost/api/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://foreign.example', 'x-forgetwin-openai-key': visitorKey },
+      body: JSON.stringify({ task: 'plan', prompt: 'Build a small rover that carries five kilograms over rough terrain.' }),
+    }));
+    expect(rejected.status).toBe(403);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
 
   it('defaults to the flagship GPT-5.6 Sol model', async () => {
-    const previousKey = process.env.OPENAI_API_KEY;
     const previousModel = process.env.OPENAI_MODEL;
-    delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_MODEL;
+    delete process.env.OPENAI_MODEL;
     try {
-      const response = await (await import('../app/api/agent/route')).GET();
+      const response = await GET();
       await expect(response.json()).resolves.toMatchObject({ configured: false, model: 'gpt-5.6-sol' });
     } finally {
-      if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey;
       if (previousModel === undefined) delete process.env.OPENAI_MODEL; else process.env.OPENAI_MODEL = previousModel;
     }
   });
