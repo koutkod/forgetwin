@@ -360,8 +360,8 @@ class WorldBuilder {
     return value.id;
   }
 
-  motor(componentId: string, jointId: string | undefined, maxTorque: number, maxRpm: number) {
-    const value = { id: this.next('motor-drive'), componentId, jointId, maxTorque, maxRpm, direction: 1 };
+  motor(componentId: string, jointId: string | undefined, maxTorque: number, maxRpm: number, direction = 1) {
+    const value = { id: this.next('motor-drive'), componentId, jointId, maxTorque, maxRpm, direction };
     this.motors.push(value);
     return value.id;
   }
@@ -584,28 +584,28 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   };
 
   const wheelSpecs = [
-    { role: 'rear left drive wheel', position: [rearX, wheelY, -track / 2] as Vec3, driven: true },
-    { role: 'rear right drive wheel', position: [rearX, wheelY, track / 2] as Vec3, driven: true },
-    { role: 'front left steering wheel', position: [frontX, wheelY, -track / 2] as Vec3, driven: false },
-    { role: 'front right steering wheel', position: [frontX, wheelY, track / 2] as Vec3, driven: false },
+    { role: 'rear left drive wheel', position: [rearX, wheelY, -track / 2] as Vec3, driven: true, side: 'left' },
+    { role: 'rear right drive wheel', position: [rearX, wheelY, track / 2] as Vec3, driven: true, side: 'right' },
+    { role: 'front left steering wheel', position: [frontX, wheelY, -track / 2] as Vec3, driven: false, side: 'left' },
+    { role: 'front right steering wheel', position: [frontX, wheelY, track / 2] as Vec3, driven: false, side: 'right' },
   ];
   const wheels: string[] = [];
   const driveMotors: string[] = [];
   for (const spec of wheelSpecs) {
-    const mount = builder.component('plate', `${spec.role} spindle`, assembly, [spec.position[0], wheelY, spec.position[2] * .82], [.18, .26, .12], 'steel', 'fixed', { road_vehicle_spindle: true }, .75);
-    const wheel = builder.component('wheel', spec.role, assembly, spec.position, [wheelDiameter, wheelWidth, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, friction: offRoad ? 1.18 : 1.05 }, offRoad ? 5.8 : 4.1);
+    const mount = builder.component('plate', `${spec.role} spindle`, assembly, [spec.position[0], wheelY, spec.position[2] * .82], [.18, .26, .12], 'steel', 'fixed', { road_vehicle_spindle: true, road_vehicle_front_steering: !spec.driven, steering_side: spec.side }, .75);
+    const wheel = builder.component('wheel', spec.role, assembly, spec.position, [wheelDiameter, wheelWidth, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, road_vehicle_front_steering: !spec.driven, steering_side: spec.side, friction: offRoad ? 1.18 : 1.05 }, offRoad ? 5.8 : 4.1);
     const hub = centeredRevolute(mount, wheel);
     wheels.push(wheel);
     builder.connect(mount, floor, 'mechanical', spec.driven ? 'rear_axle_carrier' : 'steering_knuckle');
     if (spec.driven) {
       const motor = builder.component('motor', `${spec.role.includes('left') ? 'left' : 'right'} electric traction motor`, assembly, [spec.position[0] + .17, wheelY + .09, spec.position[2] * .69], [.32, .25, .32], 'aluminum', 'kinematic', { road_vehicle_motor: true }, 4.8);
-      builder.motor(motor, hub, Math.max(62, values.payloadKg * 2.6), offRoad ? 190 : 225);
+      builder.motor(motor, hub, Math.max(62, values.payloadKg * 2.6), offRoad ? 190 : 225, -1);
       builder.connect(motor, wheel, 'power', 'rear_wheel_torque');
       builder.connect(motor, floor, 'mechanical', 'motor_mount');
       driveMotors.push(motor);
     }
     if (!spec.driven) {
-      const disc = builder.component('gear', `${spec.role.includes('left') ? 'left' : 'right'} front brake disc`, assembly, [spec.position[0], wheelY, spec.position[2] * .84], [.25, .025, .25], 'steel', 'fixed', { road_vehicle_brake: true, teeth: 24 }, .42);
+      const disc = builder.component('gear', `${spec.role.includes('left') ? 'left' : 'right'} front brake disc`, assembly, [spec.position[0], wheelY, spec.position[2] * .84], [.25, .025, .25], 'steel', 'fixed', { road_vehicle_brake: true, road_vehicle_front_steering: true, steering_side: spec.side, teeth: 24 }, .42);
       builder.connect(disc, mount, 'mechanical', 'brake_caliper_mount');
     }
   }
@@ -623,9 +623,11 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
 
   const battery = builder.component('controller', electric ? 'high-voltage traction battery' : 'starter battery', assembly, [rearX + .12, .82, 0], [.62, .3, .5], 'polymer', 'fixed', { road_vehicle_battery: true }, electric ? 18 : 7);
   const controller = builder.component('controller', electric ? 'dual-motor inverter controller' : 'powertrain controller', assembly, [-.03, .79, railZ * .75], [.38, .24, .26], 'polymer', 'fixed', { road_vehicle_controller: true }, 1.7);
-  const pedal = builder.component('plate', 'accelerator pedal', assembly, [.49, .76, -.15], [.17, .05, .11], 'aluminum', 'fixed', { road_vehicle_pedal: true }, .22);
-  const brakePedal = builder.component('plate', 'brake pedal', assembly, [.49, .76, .15], [.17, .05, .11], 'steel', 'fixed', { road_vehicle_pedal: true }, .28);
-  builder.rotate(pedal, [0, 0, -.5]); builder.rotate(brakePedal, [0, 0, -.5]);
+  // The driver faces +X: negative Z is the left foot and positive Z the right.
+  // Each pedal component is anchored at its floor pivot; the scene composes a
+  // visible lever and upright foot pad from this low-level plate primitive.
+  const pedal = builder.component('plate', 'accelerator pedal', assembly, [.38, .65, .13], [.038, .18, .095], 'aluminum', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'accelerator' }, .22);
+  const brakePedal = builder.component('plate', 'brake pedal', assembly, [.38, .65, -.13], [.042, .19, .135], 'steel', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'brake' }, .28);
   for (const item of [battery, controller, pedal, brakePedal]) builder.connect(item, floor, 'mechanical', 'cockpit_mount');
   builder.connect(battery, controller, 'power', 'dc_traction_bus');
   driveMotors.forEach((motor) => builder.connect(controller, motor, 'signal', 'motor_torque_command'));

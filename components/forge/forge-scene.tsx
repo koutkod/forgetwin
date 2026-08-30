@@ -5,6 +5,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
+import { roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
@@ -71,15 +72,18 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     }
   }
 
-  const wheelLike = component.primitive === 'wheel' || component.parameters.bicycle_wheel || component.parameters.road_vehicle_wheel || component.parameters.rover_wheel;
-  if (wheelLike) rotation[2] += elapsed * 3.4;
-  if (component.primitive === 'gear' || component.parameters.bicycle_sprocket) {
+  const independentlyRollingWheel = (component.primitive === 'wheel' || component.parameters.bicycle_wheel || component.parameters.rover_wheel)
+    && !component.parameters.road_vehicle_wheel
+    && !component.parameters.road_vehicle_steering_wheel;
+  if (independentlyRollingWheel) rotation[2] -= elapsed * 3.4;
+  if ((component.primitive === 'gear' || component.parameters.bicycle_sprocket) && !component.parameters.road_vehicle_brake) {
     const direction = /output/.test(role) ? -1 : 1;
     const teeth = Math.max(12, Number(component.parameters.teeth ?? 18));
     rotation[2] += elapsed * (40.5 / teeth) * direction;
   }
   if (component.parameters.recycling_drum) rotation[0] += elapsed * 1.85;
   else if (component.primitive === 'pulley') rotation[2] += elapsed * 1.85;
+  if (component.parameters.road_vehicle_steering_rack) position[2] += roadVehicleRackTravel(elapsed);
 
   if (/solar|tracking/.test(context.machine)) {
     if (component.parameters.solar_moving || component.parameters.panel || role.includes('cross rail')) {
@@ -212,16 +216,25 @@ function BicycleWheel({ component, xray, selected }: { component: MachineCompone
 function RoadVehicleWheel({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
   const radius = component.dimensions[0] / 2;
   const width = component.dimensions[1];
-  return <group rotation={[Math.PI / 2, 0, 0]}>
-    <mesh castShadow receiveShadow><cylinderGeometry args={[radius, radius, width, 40]} /><StandardMaterial color="#171d20" xray={xray} selected={selected} metalness={.08} roughness={.9} /></mesh>
-    {[-1, 1].map((side) => <group key={side} position={[0, side * width * .51, 0]}>
+  const steeringRef = useRef<Group>(null);
+  const rollingRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => {
+    if (!steeringRef.current || !rollingRef.current) return;
+    const elapsed = operationTime.current;
+    steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, Boolean(component.parameters.road_vehicle_front_steering), String(component.parameters.steering_side ?? ''));
+    rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
+  });
+  return <group ref={steeringRef}><group ref={rollingRef}>
+    <mesh rotation={[Math.PI / 2, 0, 0]} castShadow receiveShadow><cylinderGeometry args={[radius, radius, width, 40]} /><StandardMaterial color="#171d20" xray={xray} selected={selected} metalness={.08} roughness={.9} /></mesh>
+    {[-1, 1].map((side) => <group key={side} position={[0, 0, side * width * .51]}>
       <mesh><torusGeometry args={[radius * .72, radius * .12, 12, 40]} /><StandardMaterial color="#2a3338" xray={xray} selected={selected} metalness={.18} roughness={.68} /></mesh>
       <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .48, radius * .48, width * .08, 32]} /><StandardMaterial color="#b7c2c6" xray={xray} selected={selected} metalness={.9} roughness={.16} /></mesh>
       {Array.from({ length: 6 }, (_, index) => <mesh key={index} rotation={[0, 0, index / 6 * Math.PI * 2]}><boxGeometry args={[radius * .74, radius * .08, width * .035]} /><StandardMaterial color="#5a6970" xray={xray} selected={selected} metalness={.82} roughness={.22} /></mesh>)}
     </group>)}
-    {!xray && Array.from({ length: 14 }, (_, index) => <mesh key={index} rotation={[0, index / 14 * Math.PI * 2, 0]} position={[0, 0, radius * .93]}><boxGeometry args={[width * 1.04, radius * .055, radius * .095]} /><meshStandardMaterial color="#0d1114" roughness={.96} /></mesh>)}
-    <mesh><cylinderGeometry args={[radius * .14, radius * .14, width * 1.28, 24]} /><StandardMaterial color="#273239" xray={xray} selected={selected} metalness={.8} roughness={.24} /></mesh>
-  </group>;
+    {!xray && Array.from({ length: 16 }, (_, index) => <group key={index} rotation={[0, 0, index / 16 * Math.PI * 2]}><mesh position={[0, radius * .94, 0]}><boxGeometry args={[radius * .13, radius * .07, width * 1.05]} /><meshStandardMaterial color="#0d1114" roughness={.96} /></mesh></group>)}
+    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .14, radius * .14, width * 1.28, 24]} /><StandardMaterial color="#273239" xray={xray} selected={selected} metalness={.8} roughness={.24} /></mesh>
+  </group></group>;
 }
 
 function BicycleTube({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -265,19 +278,48 @@ function RoadVehicleSeat({ component, color, xray, selected }: { component: Mach
 
 function RoadVehicleSteeringWheel({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
   const radius = component.dimensions[0] / 2;
-  return <group rotation={[0, Math.PI / 2, 0]}>
+  const steeringRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (steeringRef.current) steeringRef.current.rotation.z = roadVehicleSteeringWheelTurn(operationTime.current); });
+  return <group rotation={[0, Math.PI / 2, 0]}><group ref={steeringRef}>
     <mesh castShadow><torusGeometry args={[radius * .82, radius * .12, 12, 48]} /><StandardMaterial color="#171f23" xray={xray} selected={selected} metalness={.1} roughness={.82} /></mesh>
     {Array.from({ length: 3 }, (_, index) => <mesh key={index} rotation={[0, 0, index / 3 * Math.PI * 2]} position={[radius * .36, 0, 0]}><boxGeometry args={[radius * .72, radius * .09, component.dimensions[1] * .8]} /><StandardMaterial color="#86969d" xray={xray} selected={selected} metalness={.86} roughness={.2} /></mesh>)}
     <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .22, radius * .22, component.dimensions[1] * 1.3, 24]} /><StandardMaterial color="#263238" xray={xray} selected={selected} metalness={.68} roughness={.28} /></mesh>
-  </group>;
+  </group></group>;
 }
 
 function RoadVehicleBrake({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
   const radius = component.dimensions[0] / 2;
-  return <group rotation={[Math.PI / 2, 0, 0]}>
-    <mesh><cylinderGeometry args={[radius, radius, component.dimensions[1], 36]} /><StandardMaterial color="#b8c3c7" xray={xray} selected={selected} metalness={.94} roughness={.14} /></mesh>
-    {Array.from({ length: 8 }, (_, index) => { const angle = index / 8 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .63, 0, Math.sin(angle) * radius * .63]}><cylinderGeometry args={[radius * .07, radius * .07, component.dimensions[1] * 1.4, 12]} /><meshStandardMaterial color="#202a30" /></mesh>; })}
-    <group position={[radius * .72, 0, 0]}><BoxBody size={[radius * .4, component.dimensions[1] * 2.4, radius * .42]} color="#e8a046" xray={xray} selected={selected} radius={.02} /></group>
+  const steeringRef = useRef<Group>(null);
+  const rollingRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => {
+    if (!steeringRef.current || !rollingRef.current) return;
+    const elapsed = operationTime.current;
+    steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, true, String(component.parameters.steering_side ?? ''));
+    rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
+  });
+  return <group ref={steeringRef}><group ref={rollingRef}>
+    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius, radius, component.dimensions[1], 36]} /><StandardMaterial color="#b8c3c7" xray={xray} selected={selected} metalness={.94} roughness={.14} /></mesh>
+    {Array.from({ length: 8 }, (_, index) => { const angle = index / 8 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .63, Math.sin(angle) * radius * .63, 0]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .07, radius * .07, component.dimensions[1] * 1.4, 12]} /><meshStandardMaterial color="#202a30" /></mesh>; })}
+    <group position={[radius * .72, 0, 0]}><BoxBody size={[radius * .4, radius * .42, component.dimensions[1] * 2.4]} color="#e8a046" xray={xray} selected={selected} radius={.02} /></group>
+  </group></group>;
+}
+
+function RoadVehiclePedal({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const brake = component.parameters.pedal_kind === 'brake' || /brake/i.test(component.role);
+  const padHeight = brake ? .19 : .18;
+  const padWidth = brake ? .135 : .095;
+  const expectedZ = brake ? -.13 : .13;
+  const visualOffset: Vec3 = [.38 - component.position[0], .65 - component.position[1], expectedZ - component.position[2]];
+  const padColor = brake ? '#b9c3c7' : '#9aa8ae';
+  return <group position={visualOffset}>
+    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[.028, .028, padWidth * 1.28, 18]} /><StandardMaterial color="#323d43" xray={xray} selected={selected} metalness={.82} roughness={.24} /></mesh>
+    <Line points={[[0, 0, 0], [.085, .105, 0]]} color={selected ? '#65e5ff' : '#7d8b91'} lineWidth={3} />
+    <group position={[.1, .145, 0]} rotation={[0, 0, -.16]}>
+      <BoxBody size={[.038, padHeight, padWidth]} color={padColor} xray={xray} selected={selected} radius={.018} metalness={.74} roughness={.3} />
+      {!xray && [-.28, 0, .28].map((offset) => <group key={offset} position={[-.022, offset * padHeight, 0]}><BoxBody size={[.012, .015, padWidth * .78]} color="#20282d" xray={false} selected={false} radius={.005} /></group>)}
+    </group>
   </group>;
 }
 
@@ -811,6 +853,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating }:
   if (component.parameters.road_vehicle_seat) return <RoadVehicleSeat component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.road_vehicle_steering_wheel) return <RoadVehicleSteeringWheel component={component} xray={xray} selected={selected} />;
   if (component.parameters.road_vehicle_brake) return <RoadVehicleBrake component={component} xray={xray} selected={selected} />;
+  if (component.parameters.road_vehicle_pedal) return <RoadVehiclePedal component={component} xray={xray} selected={selected} />;
   if (component.parameters.road_vehicle_battery) return <BicycleBattery component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.bicycle_wheel) return <BicycleWheel component={component} xray={xray} selected={selected} />;
   if (component.parameters.bicycle_tube || component.parameters.round_tube) return <BicycleTube component={component} color={color} xray={xray} selected={selected} />;
