@@ -361,6 +361,9 @@ export function ForgeTwinApp() {
     const headlightRequest = /\b(headlights?|head lamps?|lamps?|bike lights?|work lights?)\b/.test(text);
     const addingComponent = /\b(add|create|attach)\b/.test(text);
     const aliases: Record<string, string[]> = {
+      'metal recovery chute': ['metal recovery chute'], 'plastic recovery chute': ['plastic recovery chute'], 'reject recovery chute': ['reject recovery chute'],
+      'trommel drum': ['perforated rotating trommel drum'], trommel: ['perforated rotating trommel drum'],
+      'optical sensor': ['bottle and reject optical sensor'], chute: ['recovery chute', 'feed chute'], hopper: ['feed hopper'],
       handlebar: ['handlebar'], saddle: ['saddle', 'seat'], seat: ['saddle', 'seat'], battery: ['battery'], chain: ['drive chain', 'sprocket'],
       headlight: ['headlight', 'light module'], lamp: ['headlight', 'light module'],
       'solar panel': ['solar charging panel'], panel: ['solar charging panel', 'tracked panel'], fork: ['front fork'], bicycle: ['top tube', 'chain stay'],
@@ -415,7 +418,11 @@ export function ForgeTwinApp() {
       const degrees = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:°|degrees?)/)?.[1] ?? 15);
       return [{ tool: 'rotate_component', input: { component_id: target.id, rotation: [target.rotation[0], target.rotation[1], target.rotation[2] + degrees * Math.PI / 180] }, label: `Rotate ${target.role}` }];
     }
-    const scale = /\b(shorter|smaller|narrower|reduce|shrink)\b/.test(text) ? .8 : /\b(much|significantly)\b/.test(text) ? 1.4 : 1.2;
+    const reducing = /\b(shorter|smaller|narrower|reduce|shrink)\b/.test(text);
+    const requestedPercent = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:%|percent)/)?.[1] ?? 0);
+    const scale = requestedPercent > 0
+      ? (reducing ? Math.max(.1, 1 - requestedPercent / 100) : 1 + requestedPercent / 100)
+      : reducing ? .8 : /\b(much|significantly)\b/.test(text) ? 1.4 : 1.2;
     const dimensions = [...target.dimensions] as [number, number, number];
     if (/\b(taller|height)\b/.test(text)) dimensions[1] *= scale;
     else if (/\b(wider|width|stabil|outrigger)\b/.test(text)) { dimensions[0] *= scale; dimensions[2] *= scale; }
@@ -644,6 +651,7 @@ function ComponentInspector({ component, state, onMove, onUpdate, busy }: { comp
 
 function wholeMachineChatExamples(state: ForgeState) {
   const roles = state.components.map((item) => item.role).join(' ');
+  if (/trommel|material recovery|recovered cans|recovered bottles/.test(roles)) return ['Make the metal recovery chute 20% wider', 'Increase the trommel drum diameter by 10%', 'Move the optical sensor up 0.3 m'];
   if (/conveyor|sorting|chute|bin/.test(roles)) return ['Lengthen the powered conveyor by 15%', 'Move the vision portal upstream 0.5 m', 'Widen both output chutes by 20%'];
   if (/crane|boom|counterweight|outrigger/.test(roles)) return ['Widen the crane carrier base by 20%', 'Increase the rear counterweight mass by 25%', 'Lengthen the lifting boom by 15%'];
   if (/road wheel|mobile chassis|suspension/.test(roles)) return ['Widen the wheelbase by 15%', 'Lower the payload deck by 0.2 m', 'Use aluminum for the mobile chassis'];
