@@ -63,12 +63,13 @@ export function ForgeTwinApp() {
   const [editMessages, setEditMessages] = useState<EditMessage[]>([]);
   const [agentCancelable, setAgentCancelable] = useState(false);
   const [generationVisual, setGenerationVisual] = useState<GenerationVisualState | null>(null);
-  const [animationPlaying, setAnimationPlaying] = useState(false);
+  const [animationState, setAnimationState] = useState({ designHash: state.designHash, playing: false });
+  const animationPlaying = animationState.designHash === state.designHash && animationState.playing;
+  const setAnimationPlaying = (playing: boolean) => setAnimationState({ designHash: state.designHash, playing });
   const traceSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3600); return () => window.clearTimeout(timer); }, [toast]);
-  useEffect(() => { setAnimationPlaying(false); }, [state.designHash]);
   useEffect(() => {
     const controller = new AbortController();
     void getAgentStatus(controller.signal).then((status) => {

@@ -173,9 +173,9 @@ function Spring({ component, xray, selected, operating }: { component: MachineCo
     return [Math.cos(angle) * component.dimensions[0], (t - .5) * component.dimensions[1], Math.sin(angle) * component.dimensions[0]] as Vec3;
   });
   useFrame(() => {
-    if (!springRef.current) return;
+    if (!springRef.current || !operating) return;
     const index = Number(component.parameters.operation_index ?? 0);
-    const travel = operating && component.parameters.suspension_corner ? suspensionTravel(operationTime.current, index) : 0;
+    const travel = component.parameters.suspension_corner ? suspensionTravel(operationTime.current, index) : 0;
     springRef.current.scale.y = Math.max(.72, 1 - travel / Math.max(.2, component.dimensions[1]));
   });
   return <group ref={springRef}><Line points={points} color={selected ? '#65e5ff' : component.color} lineWidth={xray ? 1 : 2} transparent opacity={xray ? .7 : 1} /></group>;
@@ -365,7 +365,7 @@ function RollerBody({ component, color, xray, selected, operating }: { component
   const radius = component.dimensions[0] / 2, length = component.dimensions[1];
   const rollerRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (rollerRef.current) rollerRef.current.rotation.y = operating ? operationTime.current * 2.6 : 0; });
+  useFrame(() => { if (rollerRef.current && operating) rollerRef.current.rotation.y = operationTime.current * 2.6; });
   return <group rotation={[Math.PI / 2, 0, 0]}><group ref={rollerRef}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 28]} /><StandardMaterial color="#9ba8ae" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .51, 0]}><cylinderGeometry args={[radius * .42, radius * .42, length * .08, 20]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.24} /></mesh>)}</group></group>;
 }
 
@@ -374,9 +374,9 @@ function ShaftBody({ component, color, xray, selected, operating }: { component:
   const shaftRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
   useFrame(() => {
-    if (!shaftRef.current) return;
+    if (!shaftRef.current || !operating) return;
     const configured = Number(component.parameters.operation_spin ?? (component.bodyType === 'dynamic' && !component.parameters.solar_pivot_axle ? 1.85 : 0));
-    shaftRef.current.rotation.y = operating ? operationTime.current * configured : 0;
+    shaftRef.current.rotation.y = operationTime.current * configured;
   });
   return <group ref={shaftRef}><mesh castShadow><cylinderGeometry args={[radius, radius, length * .76, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.9} roughness={.17} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .43, 0]}><cylinderGeometry args={[radius * .7, radius * .7, length * .14, 24]} /><StandardMaterial color="#c5d0d4" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>)}<group position={[radius * .58, 0, 0]}><BoxBody size={[radius * .22, length * .42, radius * .18]} color="#273138" xray={xray} selected={selected} radius={.008} /></group></group>;
 }
@@ -385,7 +385,7 @@ function ServoBody({ component, color, xray, selected, actuatorValue, operating 
   const [x, y, z] = component.dimensions;
   const horn = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (horn.current) horn.current.rotation.y = operating ? Math.sin(operationTime.current * 1.45) * .75 : actuatorValue * Math.PI * .8; });
+  useFrame(() => { if (horn.current && operating) horn.current.rotation.y = Math.sin(operationTime.current * 1.45) * .75; });
   return <group><BoxBody size={[x, y, z]} color={color} xray={xray} selected={selected} radius={.055} metalness={.7} roughness={.26} /><mesh position={[0, y * .58, 0]}><cylinderGeometry args={[x * .2, x * .2, y * .18, 24]} /><StandardMaterial color="#dbe4e7" xray={xray} selected={selected} metalness={.92} roughness={.14} /></mesh><group ref={horn} position={[0, y * .69, 0]} rotation={[0, actuatorValue * Math.PI * .8, 0]}><BoxBody size={[x * .95, y * .12, z * .16]} color="#e8a246" xray={xray} selected={selected} radius={.018} /></group></group>;
 }
 
@@ -403,7 +403,7 @@ function IndustrialConveyor({ component, color, xray, selected, operating }: { c
   const [x, y, z] = component.dimensions;
   const moving = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (moving.current) moving.current.position.x = operating ? (operationTime.current * .42) % Math.max(.22, x * .12) - x * .06 : 0; });
+  useFrame(() => { if (moving.current && operating) moving.current.position.x = (operationTime.current * .42) % Math.max(.22, x * .12) - x * .06; });
   return <group><BoxBody size={[x, y * .76, z]} color="#34434a" xray={xray} selected={selected} radius={.06} metalness={.66} roughness={.3} /><group position={[0, y * .46, 0]}><BoxBody size={[x * .98, y * .22, z * .84]} color="#171d21" xray={xray} selected={selected} radius={.04} metalness={.1} roughness={.88} /></group><group ref={moving} position={[0, y * .59, 0]}>{Array.from({ length: 10 }, (_, index) => <mesh key={index} position={[-x * .52 + index * x * .12, 0, 0]}><boxGeometry args={[.028, .012, z * .75]} /><meshStandardMaterial color="#48545a" roughness={.65} /></mesh>)}</group>{[-1, 1].map((side) => <group key={side} position={[0, y * .58, side * z * .47]}><BoxBody size={[x, y * .48, .075]} color={color} xray={xray} selected={selected} radius={.022} metalness={.86} roughness={.2} /></group>)}{[-1, 1].map((side) => <mesh key={side} position={[side * x * .47, y * .38, 0]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[y * .45, y * .45, z * .86, 28]} /><StandardMaterial color="#6d7b82" xray={xray} selected={selected} metalness={.82} roughness={.22} /></mesh>)}</group>;
 }
 
@@ -495,7 +495,7 @@ function GearboxBearing({ component, color, xray, selected }: { component: Machi
 function AnimatedZoneRoller({ position, radius, length, operating, xray, selected }: { position: Vec3; radius: number; length: number; operating: boolean; xray: boolean; selected: boolean }) {
   const ref = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (ref.current) ref.current.rotation.x = operating ? operationTime.current * 3.4 : 0; });
+  useFrame(() => { if (ref.current && operating) ref.current.rotation.x = operationTime.current * 3.4; });
   return <group ref={ref} position={position} rotation={[Math.PI / 2, 0, 0]}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 24]} /><StandardMaterial color="#a8b4b9" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh><mesh><cylinderGeometry args={[radius * .32, radius * .32, length * 1.08, 16]} /><StandardMaterial color="#243139" xray={xray} selected={selected} /></mesh></group>;
 }
 
@@ -581,7 +581,7 @@ function LinearActuator({ component, color, xray, selected, actuatorValue, opera
   const [diameter, length] = component.dimensions;
   const rodRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (rodRef.current) rodRef.current.position.y = length * (.18 + (operating ? operatingValue(operationTime.current) : actuatorValue) * .2); });
+  useFrame(() => { if (rodRef.current && operating) rodRef.current.position.y = length * (.18 + operatingValue(operationTime.current) * .2); });
   return <group><mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .58, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.75} roughness={.24} /></mesh><group ref={rodRef} position={[0, length * (.18 + actuatorValue * .2), 0]}><mesh><cylinderGeometry args={[diameter * .24, diameter * .24, length * .72, 22]} /><StandardMaterial color="#d8e1e4" xray={xray} selected={selected} metalness={.95} roughness={.1} /></mesh></group>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .37, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[diameter * .48, diameter * .13, 9, 24]} /><StandardMaterial color="#3c4a51" xray={xray} selected={selected} /></mesh>)}</group>;
 }
 
@@ -738,7 +738,7 @@ function FixtureClamp({ component, color, xray, selected, actuatorValue, operati
   const [diameter, length] = component.dimensions;
   const rodRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (rodRef.current) rodRef.current.position.y = length * (.22 + (operating ? operatingValue(operationTime.current) : actuatorValue) * .13); });
+  useFrame(() => { if (rodRef.current && operating) rodRef.current.position.y = length * (.22 + operatingValue(operationTime.current) * .13); });
   return <group>
     <mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .62, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>
     <group ref={rodRef} position={[0, length * (.22 + actuatorValue * .13), 0]}><mesh><cylinderGeometry args={[diameter * .24, diameter * .24, length * .58, 18]} /><StandardMaterial color="#dce5e8" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh></group>
@@ -752,7 +752,8 @@ function GripperBody({ component, color, xray, selected, actuatorValue, operatin
   const operationTime = useContext(OperationTimeContext);
   const jawPosition = (value: number) => component.dimensions[2] * (.48 - value * .18);
   useFrame(() => {
-    const value = operating ? operatingValue(operationTime.current) : actuatorValue;
+    if (!operating) return;
+    const value = operatingValue(operationTime.current);
     const [left, right] = jawRef.current?.children ?? [];
     if (left) left.position.z = -jawPosition(value);
     if (right) right.position.z = jawPosition(value);
@@ -885,7 +886,8 @@ function EditableBody({ component, xray, selected, actuatorValue, enabled, repla
   const x = dragging ? draftX : replay?.position[0] ?? component.position[0];
   useFrame(() => {
     if (!bodyRef.current || dragging || replay) return;
-    const pose = operationPose(component, operationTime.current, operatingContext);
+    const elapsed = operationTime.current;
+    const pose = operationPose(component, elapsed, { ...operatingContext, enabled: operatingContext.enabled || elapsed > 0 });
     bodyRef.current.position.set(...pose.position);
     bodyRef.current.rotation.set(...pose.rotation);
   });
@@ -903,7 +905,6 @@ function EditableBody({ component, xray, selected, actuatorValue, enabled, repla
 function Machine({ state, preview, operating = false, frame, onComponentMove, onSelect }: Props & { frame: ReplayFrame | null }) {
   const previewData = useMemo(() => previewWorld(), []);
   const operationTime = useRef(0);
-  useEffect(() => { operationTime.current = 0; }, [state.designHash]);
   useFrame((_, delta) => { if (operating) operationTime.current += Math.min(delta, .05); });
   const components = state.components.length ? state.components : preview ? previewData.components : [];
   const joints: Joint[] = state.components.length ? state.joints : preview ? previewData.joints : [];
@@ -917,7 +918,7 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
   const cameraRadius = Math.max(3.8, Math.min(13, Math.max(...spans) * 1.02));
   const machine = `${state.goal?.machineName ?? (preview ? 'counterbalanced tower crane' : '')} ${state.goal?.brief ?? ''}`.toLowerCase();
   const drawbridgeDeck = /drawbridge/.test(machine) ? components.filter((item) => /deck|hinged span/.test(item.role.toLowerCase())).sort((a, b) => a.position[0] - b.position[0])[0] : undefined;
-  const operatingContext: OperatingContext = { enabled: operating || operationTime.current > 0, machine, drawbridgePivot: drawbridgeDeck ? [drawbridgeDeck.position[0] - drawbridgeDeck.dimensions[0] / 2, drawbridgeDeck.position[1], drawbridgeDeck.position[2]] : null };
+  const operatingContext: OperatingContext = { enabled: operating, machine, drawbridgePivot: drawbridgeDeck ? [drawbridgeDeck.position[0] - drawbridgeDeck.dimensions[0] / 2, drawbridgeDeck.position[1], drawbridgeDeck.position[2]] : null };
   return <OperationTimeContext.Provider value={operationTime}><>
     <CameraDirector center={center} radius={cameraRadius} signature={`${state.designHash}-${preview ? 'preview' : 'world'}`} />
     <ambientLight intensity={.72} />
@@ -974,5 +975,5 @@ export function ForgeScene(props: Props) {
   const { run, frame } = useReplay(props.state);
   const label = props.state.goal ? `3D physical world for ${props.state.goal.machineName}. The adjacent world hierarchy and component inspector provide an accessible editing alternative.` : '3D general-purpose mechanical engineering world.';
   const replayFrame = props.state.replayMode === 'failure' ? frame : null;
-  return <div className="canvas-wrap"><Canvas aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine {...props} frame={replayFrame} /></Suspense></Canvas>{!props.preview && <div className="sr-only">{run ? `${run.status} multi-body simulation ${props.state.replayMode === 'failure' ? 'failure replay' : 'result'} is active.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
+  return <div className="canvas-wrap"><Canvas aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine key={props.state.designHash} {...props} frame={replayFrame} /></Suspense></Canvas>{!props.preview && <div className="sr-only">{run ? `${run.status} multi-body simulation ${props.state.replayMode === 'failure' ? 'failure replay' : 'result'} is active.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
 }
