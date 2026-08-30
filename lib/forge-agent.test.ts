@@ -127,7 +127,31 @@ describe('ForgeTwin model-agent boundary', () => {
 
   it('rejects a drive coupled only to an unrelated fixed joint', () => {
     const inert = validPlan({ motors: [{ id: 'traction-drive', component_id: 'drive-motor', joint_id: 'chassis-test-mount', max_torque: 80, max_rpm: 240, direction: 1 }] });
-    expect(() => validateAgentPlanSemantics(inert, inert.normalized_prompt)).toThrow(/connected to the mechanism it drives/i);
+    expect(() => validateAgentPlanSemantics(inert, inert.normalized_prompt)).toThrow(/movable component_b|connected to the mechanism it drives/i);
+  });
+
+  it('rejects a motor whose authored joint endpoint makes the fixed support the driven body', () => {
+    const reversed = validPlan({
+      joints: validPlan().joints.map((joint) => joint.id === 'wheel-joint'
+        ? { ...joint, component_a: 'drive-wheel', component_b: 'test-rail' }
+        : joint),
+    });
+    expect(() => validateAgentPlanSemantics(reversed, reversed.normalized_prompt)).toThrow(/movable component_b/i);
+  });
+
+  it('rejects a vehicle whose only drive spins an unrelated decorative rotor', () => {
+    const source = validPlan();
+    const decoy: AgentPlan = {
+      ...source,
+      components: [...source.components, {
+        id: 'display-rotor', primitive: 'shaft', assembly_id: 'rover', role: 'decorative display rotor',
+        position: [0, 1.1, 0], rotation: [0, 0, 0], dimensions: [.5, .14, .14], material_id: 'steel',
+        body_type: 'dynamic', mass: 1, color: '#f59e0b', semantic_tags: [],
+      }],
+      joints: [...source.joints, { id: 'display-bearing', joint_type: 'revolute', component_a: 'payload-chassis', component_b: 'display-rotor', axis: [1, 0, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 }],
+      motors: [{ ...source.motors[0], joint_id: 'display-bearing' }],
+    };
+    expect(() => validateAgentPlanSemantics(decoy, decoy.normalized_prompt)).toThrow(/road wheel or axle/i);
   });
 
   it('preserves explicit values, direction, units, and user provenance', () => {
@@ -147,14 +171,120 @@ describe('ForgeTwin model-agent boundary', () => {
     ['Build a car suspension.', fixedPartPlan('car suspension', [{ primitive: 'spring', role: 'coil spring suspension member' }, { primitive: 'beam', role: 'lower suspension control arm' }])],
     ['Build a vehicle chassis.', fixedPartPlan('vehicle chassis', [{ primitive: 'frame', role: 'vehicle chassis perimeter frame' }, { primitive: 'beam', role: 'chassis crossmember rail' }])],
     ['Build a pump housing.', fixedPartPlan('pump housing', [{ primitive: 'frame', role: 'volute pump housing shell' }, { primitive: 'plate', role: 'pump housing cover plate' }])],
+    ['Build a pump impeller.', fixedPartPlan('pump impeller', [{ primitive: 'gear', role: 'vaned centrifugal pump impeller' }])],
+    ['Build a conveyor roller.', fixedPartPlan('conveyor roller', [{ primitive: 'roller', role: 'conveyor drive roller' }])],
+    ['Build a robotic arm gripper.', fixedPartPlan('robotic arm gripper', [{ primitive: 'gripper', role: 'parallel-jaw robotic arm gripper' }])],
     ['Build a crane hook.', fixedPartPlan('crane hook', [{ primitive: 'hook', role: 'forged crane load hook' }, { primitive: 'support', role: 'hook inspection fixture' }])],
     ['Build a bicycle fork.', fixedPartPlan('bicycle fork', [{ primitive: 'beam', role: 'left fork stanchion' }, { primitive: 'beam', role: 'right fork stanchion and steerer crown' }])],
   ])('recognizes a requested subassembly without demanding the entire parent machine: %s', (prompt, plan) => {
     expect(() => validateAgentPlanSemantics(plan, prompt)).not.toThrow();
   });
 
+  it('does not mistake a roller-conveyor system for one standalone roller', () => {
+    const rollerOnly = fixedPartPlan('conveyor roller system', [{ primitive: 'roller', role: 'single conveyor roller' }]);
+    expect(() => validateAgentPlanSemantics(rollerOnly, 'Build a conveyor roller system for moving cartons.')).toThrow(/conveyor bed|transport surface/i);
+  });
+
   it('validates every machine family in a compound goal', () => {
     expect(() => validateAgentPlanSemantics(validCranePlan(), 'Build a crane mounted on a rover.')).toThrow(/multi-wheel rolling chassis/i);
+  });
+
+  it('does not accept a generic compact rig for an unknown named machine', () => {
+    const generic = validPlan({ machine_name: 'Compact rotary test rig', architecture: ['compact generic rotary fixture'] });
+    expect(() => validateAgentPlanSemantics(generic, 'Build a compact planetary differential.')).toThrow(/main object named|object identity/i);
+  });
+
+  it('does not misclassify the adjective load-bearing as a bearing-part request', () => {
+    const bridge = fixedPartPlan('Load-bearing truss bridge', [
+      { primitive: 'support', role: 'left bridge abutment support' },
+      { primitive: 'plate', role: 'load-bearing bridge deck span' },
+      { primitive: 'beam', role: 'left truss chord' },
+      { primitive: 'beam', role: 'right truss chord' },
+      { primitive: 'support', role: 'right bridge abutment support' },
+    ]);
+    bridge.joints = [
+      { id: 'left-seat', joint_type: 'fixed', component_a: 'part-1', component_b: 'part-2', axis: [0, 1, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 },
+      { id: 'left-truss', joint_type: 'fixed', component_a: 'part-2', component_b: 'part-3', axis: [0, 1, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 },
+      { id: 'right-truss', joint_type: 'fixed', component_a: 'part-3', component_b: 'part-4', axis: [0, 1, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 },
+      { id: 'right-seat', joint_type: 'fixed', component_a: 'part-4', component_b: 'part-5', axis: [0, 1, 0], limits: null, ratio: 0, stiffness: 0, damping: 0 },
+    ];
+    expect(() => validateAgentPlanSemantics(bridge, 'Build a load-bearing truss bridge.')).not.toThrow();
+  });
+
+  it('preserves an explicit rover course-time limit', () => {
+    const timed = validPlan({ requirements: [
+      ...validPlan().requirements,
+      { metric: 'course_time', label: 'Course completion time', operator: 'max', target: 20, unit: 's', source: 'user' },
+    ] });
+    expect(() => validateAgentPlanSemantics(timed, 'Build a rover that reaches the target in under 20 seconds.')).not.toThrow();
+    expect(() => validateAgentPlanSemantics(validPlan(), 'Build a rover that reaches the target in under 20 seconds.')).toThrow(/course-time/i);
+  });
+
+  it.each([
+    ['Build a centrifugal pump.', 'Centrifugal pump'],
+    ['Build a scissor lift.', 'Scissor lift'],
+    ['Build a four-bar linkage.', 'Four-bar linkage'],
+    ['Build a 20 kN hydraulic press mechanism.', 'Hydraulic press mechanism'],
+    ['Build an electric winch.', 'Electric winch'],
+    ['Build a compact gearbox.', 'Compact gearbox'],
+    ['Build a truss bridge.', 'Truss bridge'],
+    ['Build a robotic arm.', 'Robotic arm'],
+    ['Build an HVAC brazing fixture for a heat exchanger and two pipes.', 'HVAC brazing fixture'],
+  ])('rejects a renamed but mechanically unrelated rig: %s', (prompt, machineName) => {
+    const decoy = validPlan({ machine_name: machineName, architecture: [machineName, 'generic driven test rig'] });
+    expect(() => validateAgentPlanSemantics(decoy, prompt)).toThrow(/physical signature/i);
+  });
+
+  it('requires a bicycle drive to operate the bicycle drivetrain rather than an unrelated rotor', () => {
+    const source = validPlan();
+    const bicycle = validPlan({
+      machine_name: 'Electric bicycle', architecture: ['bicycle frame', 'two road wheels', 'electric drivetrain'],
+      components: source.components.map((component) => component.id === 'drive-wheel'
+        ? { ...component, primitive: 'beam' as const, role: 'unrelated driven test rotor', semantic_tags: [] }
+        : component),
+    });
+    expect(() => validateAgentPlanSemantics(bicycle, 'Build an electric bicycle.')).toThrow(/bicycle drivetrain/i);
+  });
+
+  it('accepts a pump only when flow paths and the driven pumping element are represented', () => {
+    const source = validPlan();
+    const pump: AgentPlan = {
+      ...source,
+      normalized_prompt: 'Build a centrifugal pump delivering 50 liters per minute.', machine_name: 'Centrifugal process pump', domain: 'Fluid machinery',
+      architecture: ['volute pump casing', 'suction and discharge ports', 'motor-driven impeller shaft'], capabilities: ['structure', 'rotate'],
+      requirements: [{ metric: 'flow_rate', label: 'Design flow', operator: 'min', target: 50, unit: 'L/min', source: 'user' }],
+      components: [
+        ...source.components,
+        { id: 'pump-casing', primitive: 'frame', assembly_id: 'rover', role: 'volute pump housing and casing', position: [2.5, .7, 0], rotation: [0, 0, 0], dimensions: [1.2, 1.1, .8], material_id: 'steel', body_type: 'fixed', mass: 24, color: '#64748b', semantic_tags: [] },
+        { id: 'pump-shaft', primitive: 'shaft', assembly_id: 'rover', role: 'centrifugal pump impeller shaft', position: [2.5, .7, 0], rotation: [0, 0, 0], dimensions: [.8, .18, .18], material_id: 'steel', body_type: 'dynamic', mass: 3, color: '#94a3b8', semantic_tags: ['rotor'] },
+        { id: 'suction-port', primitive: 'plate', assembly_id: 'rover', role: 'separate suction inlet port', position: [2.5, .7, -.55], rotation: [0, 0, 0], dimensions: [.35, .35, .2], material_id: 'steel', body_type: 'fixed', mass: 1, color: '#38bdf8', semantic_tags: [] },
+        { id: 'discharge-port', primitive: 'plate', assembly_id: 'rover', role: 'separate discharge outlet port', position: [2.5, 1.3, 0], rotation: [0, 0, 0], dimensions: [.35, .2, .35], material_id: 'steel', body_type: 'fixed', mass: 1, color: '#38bdf8', semantic_tags: [] },
+      ],
+      joints: [...source.joints, { id: 'pump-rotor-joint', joint_type: 'revolute', component_a: 'pump-casing', component_b: 'pump-shaft', axis: [0, 0, 1], limits: null, ratio: 0, stiffness: 0, damping: 0 }],
+      motors: [{ ...source.motors[0], joint_id: 'pump-rotor-joint' }], editable_component_id: 'pump-shaft',
+    };
+    expect(() => validateAgentPlanSemantics(pump, pump.normalized_prompt)).not.toThrow();
+    const missingFlow = { ...pump, requirements: [{ ...pump.requirements[0], target: 20 }] };
+    expect(() => validateAgentPlanSemantics(missingFlow, pump.normalized_prompt)).toThrow(/flow-rate/i);
+  });
+
+  it('normalizes an explicit press-force target into newtons', () => {
+    const source = validPlan();
+    const press: AgentPlan = {
+      ...source,
+      normalized_prompt: 'Build a 20 kN hydraulic press mechanism.', machine_name: '20 kN hydraulic press mechanism', domain: 'Forming machinery',
+      architecture: ['rigid press frame', 'work bed and anvil', 'guided hydraulic ram'], capabilities: ['structure', 'lift'],
+      requirements: [{ metric: 'clamp_force', label: 'Press force', operator: 'min', target: 20_000, unit: 'N', source: 'user' }],
+      components: [
+        ...source.components,
+        { id: 'press-frame', primitive: 'frame', assembly_id: 'rover', role: 'rigid hydraulic press frame', position: [2.5, 1.5, 0], rotation: [0, 0, 0], dimensions: [1.6, 2.8, 1.1], material_id: 'steel', body_type: 'fixed', mass: 120, color: '#475569', semantic_tags: [] },
+        { id: 'press-anvil', primitive: 'plate', assembly_id: 'rover', role: 'press work bed and anvil', position: [2.5, .45, 0], rotation: [0, 0, 0], dimensions: [1.2, .2, .9], material_id: 'steel', body_type: 'fixed', mass: 35, color: '#64748b', semantic_tags: [] },
+        { id: 'press-ram', primitive: 'piston', assembly_id: 'rover', role: 'hydraulic press ram and moving platen', position: [2.5, 1.7, 0], rotation: [0, 0, 0], dimensions: [.45, .9, .45], material_id: 'steel', body_type: 'dynamic', mass: 18, color: '#ef4444', semantic_tags: [] },
+      ],
+      joints: [...source.joints, { id: 'press-slide', joint_type: 'prismatic', component_a: 'press-frame', component_b: 'press-ram', axis: [0, 1, 0], limits: [0, .8], ratio: 0, stiffness: 0, damping: 0 }],
+      actuators: [{ id: 'press-cylinder', component_id: 'press-ram', joint_id: 'press-slide', actuator_type: 'piston', max_force: 25_000, max_speed: .12, travel: .8 }], editable_component_id: 'press-ram',
+    };
+    expect(() => validateAgentPlanSemantics(press, press.normalized_prompt)).not.toThrow();
   });
 
   it('accepts guarded in-place chat edits and rejects arbitrary tools', () => {

@@ -107,10 +107,10 @@ export const agentEditSchema = z.object({
   understanding: z.string().trim().min(8).max(500),
   needs_clarification: z.boolean(),
   clarification_question: z.string().trim().max(240),
-  target_ids: z.array(identifier).max(12),
+  target_ids: z.array(identifier).max(40),
   preserve_ids: z.array(identifier).max(40),
   requested_invariants: z.array(z.string().trim().min(1).max(140)).max(12),
-  actions: z.array(editActionSchema).max(16),
+  actions: z.array(editActionSchema).max(48),
   verification: z.array(z.string().trim().min(1).max(140)).max(8),
 }).strict();
 
@@ -166,13 +166,18 @@ function assertReference(ids: Set<string>, value: string, label: string, allowEm
 const identityChecks: Array<{ requested: RegExp; designed: RegExp }> = [
   { requested: /\b(?:bracket|mounting bracket)\b/, designed: /\bbracket\b/ },
   { requested: /\b(?:housing|enclosure|casing)\b/, designed: /\b(?:housing|enclosure|casing)\b/ },
-  { requested: /\b(?:bearing)\b/, designed: /\bbearing\b/ },
+  { requested: /(?:^|\s)(?:(?:ball|roller|thrust|plain|sleeve|wheel|shaft)\s+)?bearing(?:\s+(?:block|assembly|housing|unit))?\b/, designed: /\bbearing\b/ },
   { requested: /\b(?:duct|air duct)\b/, designed: /\bduct\b/ },
+  { requested: /\b(?:hvac|heat exchanger|braz(?:e|ing|ed))\b[^.]{0,80}\b(?:fixture|jig)\b|\b(?:fixture|jig)\b[^.]{0,80}\b(?:hvac|heat exchanger|braz(?:e|ing|ed))\b/, designed: /\b(?:hvac|heat exchanger|braz(?:e|ing|ed)|pipe alignment)\b[^.]{0,80}\b(?:fixture|jig)\b|\b(?:fixture|jig)\b[^.]{0,80}\b(?:hvac|heat exchanger|braz(?:e|ing|ed)|pipe alignment)\b/ },
   { requested: /\b(?:brazed plate|plate heat exchanger|heat exchanger|bphe)\b/, designed: /\b(?:heat exchanger|brazed plate|transfer plate|bphe)\b/ },
   { requested: /\b(?:fixture|jig)\b/, designed: /\b(?:fixture|jig)\b/ },
   { requested: /\b(?:bench vise|vise)\b/, designed: /\bvise\b/ },
   { requested: /\b(?:bicycle|bike)\s+(?:suspension\s+)?fork\b/, designed: /\b(?:bicycle|bike|suspension)\s+fork\b|\bfork\b/ },
+  { requested: /\bscissor(?:[- ]type)?\s+lift\b/, designed: /\bscissor(?:[- ]type)?\s+lift\b/ },
   { requested: /\b(?:car jack|patient lift|lift|elevator|hoist)\b/, designed: /\b(?:jack|lift|elevator|hoist)\b/ },
+  { requested: /\b(?:four[- ]bar|toggle|crank[- ]rocker|parallel)\s+linkage\b|\blinkage\s+mechanism\b|^(?:please\s+)?(?:build|design|create|engineer|make)\s+(?:an?|the)?\s*linkage\b/, designed: /\b(?:four[- ]bar|toggle|crank[- ]rocker|parallel)\s+linkage\b|\blinkage(?:\s+mechanism)?\b/ },
+  { requested: /\b(?:(?:hydraulic|pneumatic|mechanical|arbor|shop)\s+press|press\s+(?:machine|mechanism))\b|^(?:please\s+)?(?:build|design|create|engineer|make)\s+(?:an?|the)?\s*press\b/, designed: /\b(?:(?:hydraulic|pneumatic|mechanical|arbor|shop)\s+press|press(?:\s+(?:machine|mechanism))?)\b/ },
+  { requested: /\b(?:electric|manual|powered|cable|drum)?\s*winch\b/, designed: /\bwinch\b/ },
   { requested: /\b(?:crane)\b/, designed: /\b(?:crane|boom|hoist)\b/ },
   { requested: /\b(?:go-kart|gokart|go cart|kart)\b/, designed: /\b(?:go-kart|gokart|kart)\b/ },
   { requested: /\b(?:bicycle|bike)\b/, designed: /\b(?:bicycle|bike)\b/ },
@@ -195,8 +200,55 @@ const identityChecks: Array<{ requested: RegExp; designed: RegExp }> = [
 function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   const count = (primitive: string) => plan.components.filter((item) => item.primitive === primitive).length;
   const roles = plan.components.map((item) => `${item.role} ${item.semantic_tags.join(' ')}`).join(' ').toLowerCase();
-  const hasDrive = plan.motors.length > 0 || plan.actuators.length > 0;
   const requireSignature = (condition: boolean, description: string) => { if (!condition) throw new Error(`The design graph lacks the physical signature of the requested object: ${description}.`); };
+  const componentById = new Map(plan.components.map((item) => [item.id, item]));
+  const drivenJointIds = new Set([
+    ...plan.motors.map((item) => item.joint_id).filter(Boolean),
+    ...plan.actuators.map((item) => item.joint_id),
+  ]);
+  const motionJoints = plan.joints.filter((item) => item.joint_type !== 'fixed');
+  const componentText = (id: string) => {
+    const component = componentById.get(id);
+    return component ? `${component.role} ${component.semantic_tags.join(' ')}`.toLowerCase() : '';
+  };
+  const jointTouches = (joint: AgentPlan['joints'][number], predicate: (component: AgentPlan['components'][number], text: string) => boolean) => [joint.component_a, joint.component_b]
+    .some((id) => { const component = componentById.get(id); return component ? predicate(component, componentText(id)) : false; });
+  const relevantDrivenJoints = (predicate: (component: AgentPlan['components'][number], text: string) => boolean) => motionJoints
+    .filter((joint) => drivenJointIds.has(joint.id) && jointTouches(joint, predicate));
+  const pathHasMotionCount = (start: (component: AgentPlan['components'][number]) => boolean, end: (component: AgentPlan['components'][number]) => boolean, minimum: number) => {
+    const adjacency = new Map(plan.components.map((component) => [component.id, [] as Array<{ id: string; moving: boolean }>]));
+    for (const joint of plan.joints) {
+      const moving = joint.joint_type !== 'fixed';
+      adjacency.get(joint.component_a)?.push({ id: joint.component_b, moving });
+      adjacency.get(joint.component_b)?.push({ id: joint.component_a, moving });
+    }
+    const queue = plan.components.filter(start).map((component) => ({ id: component.id, motions: 0 }));
+    const visited = new Set(queue.map((item) => `${item.id}:0`));
+    while (queue.length) {
+      const current = queue.shift()!;
+      const body = componentById.get(current.id);
+      if (body && end(body) && current.motions >= minimum) return true;
+      for (const edge of adjacency.get(current.id) ?? []) {
+        const motions = Math.min(minimum, current.motions + (edge.moving ? 1 : 0));
+        const state = `${edge.id}:${motions}`;
+        if (!visited.has(state)) { visited.add(state); queue.push({ id: edge.id, motions }); }
+      }
+    }
+    return false;
+  };
+  const hasJointPath = (starts: Set<string>, ends: Set<string>, allowed: Set<string>) => {
+    const adjacency = new Map([...allowed].map((id) => [id, new Set<string>()]));
+    for (const joint of plan.joints) {
+      if (!allowed.has(joint.component_a) || !allowed.has(joint.component_b)) continue;
+      adjacency.get(joint.component_a)!.add(joint.component_b); adjacency.get(joint.component_b)!.add(joint.component_a);
+    }
+    const visited = new Set([...starts].filter((id) => allowed.has(id))); const queue = [...visited];
+    while (queue.length) {
+      const current = queue.shift()!; if (ends.has(current) && !starts.has(current)) return true;
+      for (const neighbor of adjacency.get(current) ?? []) if (!visited.has(neighbor)) { visited.add(neighbor); queue.push(neighbor); }
+    }
+    return false;
+  };
 
   const bicycleFork = /\b(?:bicycle|bike)\s+(?:suspension\s+)?fork\b/.test(requested);
   const vehicleSuspension = /\b(?:car|automotive|vehicle|rover)\s+suspension\b|\bsuspension\b[^.]{0,28}\b(?:for|of)\s+(?:an?\s+)?(?:car|vehicle|rover)\b/.test(requested);
@@ -206,6 +258,38 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   const cranePart = requested.match(/\bcrane\s+(hook|boom|jib|pulley|counterweight)\b/)?.[1];
   const pumpHousing = /\b(?:centrifugal\s+|reciprocating\s+|piston\s+)?pump\s+(?:housing|casing|enclosure)\b/.test(requested);
   const transmissionHousing = /\b(?:gearbox|transmission)\s+(?:housing|casing|enclosure)\b/.test(requested);
+  const scissorLift = /\bscissor(?:[- ]type)?\s+lift\b/.test(requested);
+  const fourBarLinkage = /\bfour[- ]bar\s+linkage\b/.test(requested);
+  const linkage = fourBarLinkage || /\b(?:toggle|crank[- ]rocker|parallel)\s+linkage\b|\blinkage\s+mechanism\b|^(?:please\s+)?(?:build|design|create|engineer|make)\s+(?:an?|the)?\s*linkage\b/.test(requested);
+  const press = /\b(?:(?:hydraulic|pneumatic|mechanical|arbor|shop)\s+press|press\s+(?:machine|mechanism))\b|^(?:please\s+)?(?:build|design|create|engineer|make)\s+(?:an?|the)?\s*press\b/.test(requested);
+  const winch = /\b(?:electric|manual|powered|cable|drum)?\s*winch\b/.test(requested);
+  const hvacFixture = /\b(?:hvac|heat exchanger|braz(?:e|ing|ed))\b[^.]{0,80}\b(?:fixture|jig)\b|\b(?:fixture|jig)\b[^.]{0,80}\b(?:hvac|heat exchanger|braz(?:e|ing|ed))\b/.test(requested);
+  const parentPartMatch = requested.match(/\b(?:pump|gearbox|transmission|conveyor|robotic arm|robot arm|car|automotive|vehicle|bicycle|bike)\s+(?:mounting\s+)?(bracket|housing|casing|enclosure|bearing|shaft|impeller|seal|cover|flange|manifold|gear|coupling|roller|belt|gripper|joint|pedal|disc|caliper|rack)\b/);
+  const parentPart = parentPartMatch && !(['roller', 'belt'].includes(parentPartMatch[1]) && /\bconveyor\s+(?:roller|belt)\s+(?:system|line|bed|machine)\b/.test(requested)) ? parentPartMatch[1] : undefined;
+
+  // A named part of a familiar machine is still a part-level request. Validate
+  // its own geometry, then stop before the parent-machine signatures below can
+  // demand an entire pump, conveyor, vehicle, or robotic arm.
+  if (parentPart) {
+    if (parentPart === 'bracket') requireSignature(count('plate') + count('frame') + count('support') >= 1 && /bracket/.test(roles), 'a recognizable mounting bracket body');
+    else if (['housing', 'casing', 'enclosure', 'cover', 'manifold'].includes(parentPart)) requireSignature(count('plate') + count('frame') + count('support') >= 1 && new RegExp(`${parentPart}|housing|casing|enclosure|shell`).test(roles), `a recognizable ${parentPart} body`);
+    else if (parentPart === 'bearing') requireSignature(/bearing/.test(roles), 'a recognizable bearing body');
+    else if (parentPart === 'shaft') requireSignature(count('shaft') >= 1, 'a shaft body');
+    else if (parentPart === 'impeller') requireSignature((count('gear') + count('plate') + count('shaft') >= 1) && /impeller/.test(roles), 'a vaned impeller body');
+    else if (parentPart === 'seal') requireSignature(/seal/.test(roles), 'a recognizable sealing body');
+    else if (parentPart === 'flange') requireSignature(/flange/.test(roles), 'a recognizable flange body');
+    else if (parentPart === 'gear') requireSignature(count('gear') >= 1, 'a gear body');
+    else if (parentPart === 'coupling') requireSignature((count('shaft') + count('gear') + count('frame') >= 1) && /coupling/.test(roles), 'a recognizable shaft coupling');
+    else if (parentPart === 'roller') requireSignature(count('roller') >= 1, 'a conveyor roller body');
+    else if (parentPart === 'belt') requireSignature(count('belt') >= 1, 'a conveyor belt body');
+    else if (parentPart === 'gripper') requireSignature(count('gripper') >= 1, 'a robotic gripper body');
+    else if (parentPart === 'joint') requireSignature(plan.joints.some((joint) => joint.joint_type !== 'fixed'), 'a motion-capable robotic joint');
+    else if (parentPart === 'pedal') requireSignature(count('plate') + count('beam') >= 1 && /pedal/.test(roles), 'a recognizable vehicle pedal');
+    else if (parentPart === 'disc') requireSignature(count('gear') + count('plate') >= 1 && /disc|rotor/.test(roles), 'a recognizable brake disc');
+    else if (parentPart === 'caliper') requireSignature(count('gripper') + count('piston') + count('frame') >= 1 && /caliper/.test(roles), 'a recognizable brake caliper');
+    else if (parentPart === 'rack') requireSignature(count('shaft') + count('gear') >= 1 && /rack/.test(roles), 'a recognizable steering rack');
+    return;
+  }
 
   if (cranePart === 'hook') requireSignature(count('hook') >= 1, 'a recognizable load hook');
   if (cranePart === 'boom' || cranePart === 'jib') requireSignature(count('beam') + count('frame') >= 1 && /boom|jib/.test(roles), 'a structural crane boom or jib');
@@ -221,7 +305,7 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   if (/\bcrane\b/.test(requested) && !cranePart) {
     requireSignature(count('beam') + count('frame') + count('support') >= 2, 'a supported mast or boom structure');
     requireSignature(count('hook') + count('cable') + count('pulley') >= 1, 'a hook, cable, or pulley load path');
-    requireSignature(hasDrive, 'a driven hoist or boom actuator');
+    requireSignature(relevantDrivenJoints((component, text) => ['hook', 'cable', 'pulley'].includes(component.primitive) || /boom|jib|hoist|winch|cable|pulley|hook/.test(text)).length >= 1, 'a drive coupled to the hoist, boom, or lifting path');
   }
   if (/\b(?:bench vise|vise)\b/.test(requested)) {
     requireSignature(count('plate') + count('beam') + count('support') >= 2 && (count('shaft') + count('piston') + count('servo') >= 1), 'opposed jaws and a screw or linear clamp drive');
@@ -229,33 +313,88 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   if (/\b(?:go-kart|gokart|go cart|kart|car|automobile|buggy|rover|agv|vehicle)\b/.test(requested) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(requested) && !vehicleSuspension && !vehicleChassis && !vehicleWheel && !vehicleAxle) {
     requireSignature(count('wheel') >= 3, 'a multi-wheel rolling chassis');
     requireSignature(count('frame') + count('plate') + count('beam') >= 1, 'a load-bearing chassis');
-    requireSignature(hasDrive, 'a wheel or axle drive');
+    requireSignature(relevantDrivenJoints((component, text) => (component.primitive === 'wheel' && /road wheel|drive wheel|driven wheel|front[^.]{0,24}wheel|rear[^.]{0,24}wheel|traction|wheel hub/.test(text))
+      || (component.primitive === 'shaft' && /drive axle|powered axle|axle shaft|traction/.test(text))).length >= 1, 'a drive coupled to a road wheel or axle');
   }
   if (/\b(?:bicycle|bike)\b/.test(requested) && !bicycleFork) {
     requireSignature(count('wheel') >= 2 && count('beam') + count('frame') >= 2, 'two wheels and a recognizable frame');
-    requireSignature(hasDrive, 'a crank, chain, or wheel drive');
+    const rollingWheelIds = new Set(motionJoints.filter((joint) => joint.joint_type === 'revolute' && jointTouches(joint, (component) => component.primitive === 'wheel'))
+      .flatMap((joint) => [joint.component_a, joint.component_b]).filter((id) => componentById.get(id)?.primitive === 'wheel'));
+    requireSignature(rollingWheelIds.size >= 2, 'two independently mounted rolling wheels');
+    requireSignature(relevantDrivenJoints((component, text) => component.primitive === 'wheel' || /crank|chain|sprocket/.test(text)).length >= 1, 'a crank, chain, or wheel drive coupled to the bicycle drivetrain');
   }
   if (/\b(?:gearbox|gear train|transmission)\b/.test(requested) && !transmissionHousing) {
-    requireSignature(count('gear') >= 2 && count('shaft') >= 1, 'at least two meshing gears on supported shafts');
-    requireSignature(hasDrive, 'a driven input shaft');
+    const gearMesh = plan.joints.some((joint) => joint.joint_type === 'gear'
+      && componentById.get(joint.component_a)?.primitive === 'gear' && componentById.get(joint.component_b)?.primitive === 'gear');
+    requireSignature(count('gear') >= 2 && count('shaft') >= 2 && gearMesh, 'at least two meshing gears on distinct input and output shafts');
+    requireSignature(relevantDrivenJoints((component) => component.primitive === 'gear' || component.primitive === 'shaft').length >= 1, 'a driven input shaft coupled into the gear train');
   }
   if (/\b(?:robotic arm|robot arm|manipulator)\b/.test(requested)) {
     requireSignature(count('beam') >= 2 && count('gripper') >= 1, 'an articulated link chain and end effector');
-    requireSignature(plan.actuators.length >= 2, 'multiple actuated joints');
+    const armDrivenJoints = new Set(relevantDrivenJoints((component, text) => ['beam', 'gripper', 'servo', 'motor'].includes(component.primitive) || /arm|joint|link|gripper|wrist/.test(text)).map((joint) => joint.id));
+    requireSignature(armDrivenJoints.size >= 2, 'multiple independently actuated arm joints');
+    requireSignature(pathHasMotionCount((component) => component.body_type === 'fixed', (component) => component.primitive === 'gripper', 2), 'a connected base-to-gripper chain with at least two articulated degrees of freedom');
+  }
+  if (scissorLift) {
+    const scissorArmIds = new Set(plan.components.filter((component) => ['beam', 'frame'].includes(component.primitive) && /scissor|cross|lift arm/.test(componentText(component.id))).map((component) => component.id));
+    const platformIds = new Set(plan.components.filter((component) => /platform|deck|table/.test(componentText(component.id))).map((component) => component.id));
+    const crossedArms = scissorArmIds.size;
+    const armPivots = motionJoints.filter((joint) => joint.joint_type === 'revolute' && jointTouches(joint, (component, text) => ['beam', 'frame'].includes(component.primitive) && /scissor|cross|lift arm/.test(text))).length;
+    requireSignature(crossedArms >= 4 && /platform|deck|table/.test(roles), 'crossed scissor arms supporting a lift platform');
+    requireSignature(armPivots >= 3 && relevantDrivenJoints((component, text) => /scissor|lift arm|platform|piston|cylinder/.test(text) || component.primitive === 'piston').length >= 1, 'a pinned scissor linkage with a coupled lift actuator');
+    requireSignature(platformIds.size >= 1 && hasJointPath(scissorArmIds, platformIds, new Set([...scissorArmIds, ...platformIds])), 'a lift platform mechanically carried by the scissor-arm linkage');
+  }
+  if (linkage) {
+    const linkCount = plan.components.filter((component) => ['beam', 'shaft', 'plate'].includes(component.primitive) && /link|crank|rocker|coupler/.test(componentText(component.id))).length;
+    const linkagePivots = motionJoints.filter((joint) => joint.joint_type === 'revolute' && jointTouches(joint, (_component, text) => /link|crank|rocker|coupler/.test(text))).length;
+    requireSignature(linkCount >= (fourBarLinkage ? 3 : 2) && linkagePivots >= (fourBarLinkage ? 4 : 2), fourBarLinkage ? 'a ground link plus crank, coupler, and rocker joined by four pivots' : 'multiple links joined by revolute pivots');
+  }
+  if (press) {
+    const pressSlides = motionJoints.filter((joint) => joint.joint_type === 'prismatic' && jointTouches(joint, (component, text) => component.primitive === 'piston' || /ram|platen|press slide/.test(text)));
+    requireSignature(count('support') + count('frame') + count('beam') >= 2 && /bed|table|anvil|bolster/.test(roles), 'a rigid press frame with a work table or anvil');
+    requireSignature(pressSlides.length >= 1 && pressSlides.some((joint) => drivenJointIds.has(joint.id)), 'a driven ram or platen constrained by a prismatic guide');
+  }
+  if (winch) {
+    const drumJoints = motionJoints.filter((joint) => joint.joint_type === 'revolute' && jointTouches(joint, (component, text) => ['shaft', 'pulley', 'roller'].includes(component.primitive) || /drum|spool|winch/.test(text)));
+    requireSignature(count('cable') >= 1 && count('shaft') + count('pulley') + count('roller') >= 1 && /drum|spool|winch/.test(roles), 'a cable wound on a supported drum or spool');
+    requireSignature(drumJoints.some((joint) => drivenJointIds.has(joint.id)), 'a motor or actuator coupled to the winch drum joint');
   }
   if (/\bsuspension\b/.test(requested) && !bicycleFork && !vehicleSuspension) requireSignature(count('spring') >= 1 && count('beam') + count('frame') + count('wheel') >= 1, 'a compliant member connected into a supported mechanism');
   if (/\b(?:solar tracker|track(?:ing)? (?:the )?sun)\b/.test(requested)) {
     requireSignature(count('plate') + count('frame') >= 1 && /solar|panel|array/.test(roles), 'a framed solar panel or array');
-    requireSignature(hasDrive && count('sensor') + count('camera') >= 1, 'a tracking drive and light feedback');
+    requireSignature(relevantDrivenJoints((component, text) => /solar|panel|array|tracker|tracking axis|slew|tilt/.test(text)).length >= 1 && count('sensor') + count('camera') >= 1, 'a panel-coupled tracking drive and light feedback');
   }
   if (/\bdrawbridge\b/.test(requested)) {
     requireSignature(count('beam') + count('plate') >= 2 && plan.joints.some((item) => item.joint_type === 'revolute'), 'a hinged structural span');
-    requireSignature(count('counterweight') + count('pulley') + count('cable') >= 1 && hasDrive, 'a counterbalanced or cable drive');
+    requireSignature(count('counterweight') + count('pulley') + count('cable') >= 1 && relevantDrivenJoints((component, text) => ['counterweight', 'pulley', 'cable'].includes(component.primitive) || /bridge span|drawbridge|hinged span|winch/.test(text)).length >= 1, 'a counterbalanced or cable drive coupled to the bridge span');
   } else if (/\b(?:bridge|truss)\b/.test(requested)) {
-    requireSignature(count('beam') + count('plate') >= 3 && count('support') >= 1, 'a supported structural deck or truss');
+    const bridgeSupportIds = new Set(plan.components.filter((component) => component.primitive === 'support' || /abutment|pier|bridge support/.test(componentText(component.id))).map((component) => component.id));
+    const bridgeSpanIds = new Set(plan.components.filter((component) => ['beam', 'plate', 'frame'].includes(component.primitive) && /deck|span|truss|girder|chord/.test(componentText(component.id))).map((component) => component.id));
+    const supports = [...bridgeSupportIds]; const bridgeGraph = new Set([...bridgeSupportIds, ...bridgeSpanIds]);
+    const spansBetweenSupports = supports.some((left, index) => supports.slice(index + 1).some((right) => hasJointPath(new Set([left]), new Set([right]), bridgeGraph)));
+    requireSignature(count('beam') + count('plate') >= 3 && bridgeSupportIds.size >= 2 && bridgeSpanIds.size >= 1 && spansBetweenSupports, 'a structural deck or truss physically spanning between two grounded supports');
   }
   if (/\b(?:centrifugal pump|reciprocating pump|piston pump|pump)\b/.test(requested) && !pumpHousing) {
-    requireSignature(count('piston') + count('shaft') + count('gear') >= 1 && hasDrive, 'a driven impeller, shaft, or reciprocating pumping element');
+    const centrifugal = /\bcentrifugal\s+pump\b/.test(requested) || /impeller|volute/.test(roles);
+    const reciprocating = /\b(?:reciprocating|piston)\s+pump\b/.test(requested) || /plunger|pump piston/.test(roles);
+    const pumpDrive = relevantDrivenJoints((component, text) => component.primitive === 'piston' || component.primitive === 'shaft' || /impeller|pump rotor|plunger|pump piston/.test(text));
+    const hasPumpBody = count('frame') + count('plate') + count('container') + count('support') >= 1 && /housing|casing|volute|chamber|pump body/.test(roles);
+    const inletIds = new Set(plan.components.filter((component) => /\b(?:inlet|intake|suction)\b/.test(componentText(component.id))).map((component) => component.id));
+    const outletIds = new Set(plan.components.filter((component) => /\b(?:outlet|discharge)\b/.test(componentText(component.id))).map((component) => component.id));
+    const hasSeparatePorts = [...inletIds].some((inletId) => [...outletIds].some((outletId) => outletId !== inletId));
+    const pumpingElement = centrifugal
+      ? count('shaft') >= 1 && /impeller|pump rotor/.test(roles)
+      : reciprocating
+        ? count('piston') >= 1 && motionJoints.some((joint) => joint.joint_type === 'prismatic' && jointTouches(joint, (component, text) => component.primitive === 'piston' || /plunger|pump piston/.test(text)))
+        : count('piston') + count('shaft') >= 1 && /impeller|pump rotor|plunger|pump piston/.test(roles);
+    requireSignature(hasPumpBody && hasSeparatePorts && pumpingElement && pumpDrive.length >= 1, 'a housed pumping chamber with separate inlet and outlet flow paths and a drive coupled to its pumping element');
+  }
+  if (hvacFixture) {
+    const exchangerBodies = plan.components.filter((component) => /heat exchanger|exchanger core|coil/.test(componentText(component.id))).length;
+    const pipeBodies = plan.components.filter((component) => /pipe|tube|inlet|outlet/.test(componentText(component.id))).length;
+    const locatingBodies = plan.components.filter((component) => ['gripper', 'piston', 'support', 'frame'].includes(component.primitive) && /clamp|locator|nest|fixture|stop/.test(componentText(component.id))).length;
+    requireSignature(count('support') + count('frame') + count('plate') >= 1 && exchangerBodies >= 1 && pipeBodies >= 2, 'a fixture base holding one heat exchanger and two separately represented pipes');
+    requireSignature(locatingBodies >= 2, 'multiple clamps or locators that establish the brazing alignment');
   }
   if (/\b(?:wind turbine|turbine)\b/.test(requested)) {
     requireSignature(count('shaft') >= 1 && (/blade|rotor/.test(roles) || count('beam') + count('plate') >= 3), 'a bladed rotor on a shaft');
@@ -271,6 +410,9 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   }
   if (/\b(?:package sorter|box sorter|sorting system)\b/.test(requested) || (/\bconveyor\b/.test(requested) && /\bsort/.test(requested))) {
     requireSignature(count('conveyor') >= 1 && count('container') >= 2 && count('sensor') + count('camera') >= 1, 'a conveyor, classification sensor, and separate destinations');
+  } else if (/\bconveyor\b/.test(requested)) {
+    requireSignature(count('conveyor') >= 1, 'a recognizable conveyor bed and transport surface');
+    requireSignature(relevantDrivenJoints((component, text) => ['conveyor', 'roller', 'belt'].includes(component.primitive) || /conveyor|drive roller|belt/.test(text)).length >= 1, 'a motor coupled to a conveyor belt or drive roller');
   }
 }
 
@@ -284,6 +426,11 @@ function validateExplicitRequirements(plan: AgentPlan, requested: string) {
     if (unit === 'm' || unit.startsWith('meter') || unit.startsWith('metre')) return 'm';
     if (unit === 'cm' || unit.startsWith('centimeter') || unit.startsWith('centimetre')) return 'cm';
     if (unit === 'nm' || unit.startsWith('newtonmeter') || unit.startsWith('newtonmetre')) return 'nm';
+    if (unit === 'n' || unit.startsWith('newton')) return 'n';
+    if (unit === 'kn' || unit.startsWith('kilonewton')) return 'kn';
+    if (unit === 'l/min' || unit.includes('liter/min') || unit.includes('litre/min') || unit.includes('literperminute') || unit.includes('litreperminute')) return 'l/min';
+    if (unit === 's' || unit === 'sec' || unit.startsWith('second')) return 's';
+    if (unit === 'm/s2' || /met(?:er|re)s?persecondsquared/.test(unit)) return 'm/s2';
     if (unit.includes('/min') || unit.includes('perminute')) return '/min';
     if (unit === '%' || unit === 'percent') return '%';
     if (unit === '°' || unit.startsWith('degree')) return 'deg';
@@ -314,14 +461,16 @@ function validateExplicitRequirements(plan: AgentPlan, requested: string) {
   }
 
   const reach = requested.match(new RegExp(`\\b(?:reach|reaches|spans?|spanning)\\b[^.]{0,40}?${numberToken}\\s*(m|meters?|metres?)\\b`));
-  if (reach) expectTarget(valueOf(reach[1]), ['reach', 'span'], 'reach or span', 'min', ['m']);
+  const labelledSpan = requested.match(new RegExp(`${numberToken}\\s*(m|meters?|metres?)\\s+(?:clear\\s+)?span\\b`));
+  const reachOrSpan = reach ?? labelledSpan;
+  if (reachOrSpan) expectTarget(valueOf(reachOrSpan[1]), ['reach', 'span'], 'reach or span', 'min', ['m']);
 
-  const actionLoad = requested.match(new RegExp(`\\b(?:lift|raise|carry|carries|carrying|support|supports|hoist)\\b[^,.]{0,75}?${numberToken}\\s*(kg|kilograms?)\\b`));
+  const actionLoad = requested.match(new RegExp(`\\b(?:lift|raise|carry|carries|carrying|support|supports|hoist|pull|pulls|pulling)\\b[^,.]{0,75}?${numberToken}\\s*(kg|kilograms?)\\b`));
   const labelledLoad = requested.match(new RegExp(`${numberToken}\\s*(kg|kilograms?)\\s+(?:(?:rated|moving|patient|payload|design)\\s+){0,2}(?:payload|load|patient|beam)\\b`));
   const load = actionLoad ?? labelledLoad;
   if (load) expectTarget(valueOf(load[1]), ['payload_capacity', 'load_capacity'], 'load target', 'min', ['kg']);
 
-  const throughput = requested.match(new RegExp(`${numberToken}\\s*\\+?\\s*(?:boxes?|packages?|parts?|items?|objects?)?\\s*(?:per\\s+minute|/\\s*min)\\b`));
+  const throughput = requested.match(new RegExp(`${numberToken}\\s*\\+?\\s*(?:boxes?|packages?|parts?|items?|objects?|containers?|bags?|tablets?|cookies?|bottles?|cans?|pieces?)?\\s*(?:per\\s+minute|/\\s*(?:min|minute))\\b`));
   if (throughput) expectTarget(valueOf(throughput[1]), ['throughput'], 'throughput', 'min', ['/min']);
 
   const componentLimit = requested.match(new RegExp(`(?:no more than|at most|maximum|max(?:imum)? of)\\s+${numberToken}\\s+(?:physical\\s+)?components?\\b`));
@@ -333,11 +482,33 @@ function validateExplicitRequirements(plan: AgentPlan, requested: string) {
   const tilt = requested.match(new RegExp(`(?:tilt|tilting)[^.]{0,35}?(?:below|under|less than|no more than|at most)\\s*${numberToken}\\s*(°|degrees?)\\b`));
   if (tilt) expectTarget(valueOf(tilt[1]), ['platform_tilt'], 'tilt limit', 'max', ['deg']);
 
-  const drop = requested.match(new RegExp(`(?:drop|dropping|dropped)[^.]{0,45}?(?:below|under|less than|no more than|at most)\\s*${numberToken}\\s*(m|meters?|metres?|cm|centimeters?|centimetres?)\\b`));
+  const drop = requested.match(new RegExp(`(?:drop|dropping|dropped)[^.]{0,55}?(?:below|under|less than|no more than|at most|more than|over|exceed(?:ing)?)\\s*${numberToken}\\s*(m|meters?|metres?|cm|centimeters?|centimetres?)\\b`));
   if (drop) {
     const distance = valueOf(drop[1]); const unit = unitOf(drop[2]);
     expectTarget(unit === 'm' ? distance * 100 : distance, ['drop_height'], 'drop-height limit', 'max', ['cm']);
   }
+
+  const flowRate = requested.match(new RegExp(`${numberToken}\\s*(l\\s*/\\s*min|liters?\\s+per\\s+minute|litres?\\s+per\\s+minute)\\b`));
+  if (flowRate) expectTarget(valueOf(flowRate[1]), ['flow_rate'], 'flow-rate', 'min', ['l/min']);
+
+  const pressForce = requested.match(new RegExp(`${numberToken}\\s*(kn|kilonewtons?|n|newtons?)\\b[^.]{0,36}\\b(?:press(?:ing)?|clamp(?:ing)?|force)\\b|\\b(?:press(?:ing)?|clamp(?:ing)?|force)\\b[^.]{0,36}?${numberToken}\\s*(kn|kilonewtons?|n|newtons?)\\b`));
+  if (pressForce) {
+    const valueIndex = pressForce[1] ? 1 : 3; const unitIndex = pressForce[2] ? 2 : 4;
+    const force = valueOf(pressForce[valueIndex]); const forceUnit = unitOf(pressForce[unitIndex]);
+    expectTarget(forceUnit === 'kn' ? force * 1000 : force, ['clamp_force'], 'press or clamp force', 'min', ['n']);
+  }
+
+  const trackingTolerance = requested.match(new RegExp(`\\b(?:track|tracker|tracking|follow|following|point|pointing|align|aligned|keep|keeps|keeping|panel)\\b[^.]{0,80}?\\b(?:within|error(?:\\s+of)?|tolerance(?:\\s+of)?|no more than|at most)\\s*${numberToken}\\s*(°|degrees?)\\b`));
+  if (trackingTolerance) expectTarget(valueOf(trackingTolerance[1]), ['tracking_error'], 'tracking-error', 'max', ['deg']);
+
+  const alignmentTolerance = requested.match(new RegExp(`\\b(?:align|alignment|position|positioning)\\b[^.]{0,65}?\\b(?:within|tolerance(?:\\s+of)?|error(?:\\s+of)?|no more than|at most)\\s*${numberToken}\\s*(mm|millimeters?|millimetres?)\\b`));
+  if (alignmentTolerance) expectTarget(valueOf(alignmentTolerance[1]), ['alignment_error'], 'alignment tolerance', 'max', ['mm']);
+
+  const courseTime = requested.match(new RegExp(`\\b(?:reach|reaches|reaching|finish|finishes|complete|completes|target|course)\\b[^.]{0,65}?\\b(?:in\\s+)?(?:under|within|less than|no more than|at most)?\\s*${numberToken}\\s*(s|sec|seconds?)\\b`));
+  if (courseTime) expectTarget(valueOf(courseTime[1]), ['course_time'], 'course-time', 'max', ['s']);
+
+  const acceleration = requested.match(new RegExp(`\\b(?:acceleration|accelerating|accelerate)\\b[^.]{0,55}?\\b(?:below|under|less than|no more than|at most|not exceed(?:ing)?|without exceeding)\\s*${numberToken}\\s*(m\\s*/\\s*s(?:2|²)|meters?\\s+per\\s+second\\s+squared|metres?\\s+per\\s+second\\s+squared)\\b`));
+  if (acceleration) expectTarget(valueOf(acceleration[1]), ['peak_acceleration'], 'peak-acceleration limit', 'max', ['m/s2']);
 }
 
 function validatePromptFidelity(plan: AgentPlan, originalPrompt: string) {
@@ -347,9 +518,10 @@ function validatePromptFidelity(plan: AgentPlan, originalPrompt: string) {
   if (identity && !identity.designed.test(designed)) throw new Error('The design graph does not preserve the user’s requested mechanical object identity.');
   if (!identity) {
     const head = requested.replace(/^(?:please\s+)?(?:build|design|create|engineer|make)\s+(?:an?|the)?\s*/, '').split(/\b(?:that|which|while|using|with|to)\b/)[0];
-    const ignored = new Set(['machine', 'mechanism', 'system', 'device', 'tool', 'part', 'mechanical', 'physical', 'automatic', 'powered', 'good']);
+    const ignored = new Set(['machine', 'mechanism', 'system', 'device', 'tool', 'part', 'rig', 'model', 'prototype', 'assembly', 'test', 'display', 'concept', 'mechanical', 'physical', 'automatic', 'powered', 'good', 'compact', 'small', 'large', 'industrial', 'electric', 'hydraulic', 'pneumatic', 'portable', 'heavy-duty', 'high-speed', 'low-speed']);
     const tokens = head.match(/[a-z][a-z-]{3,}/g)?.filter((token) => !ignored.has(token)) ?? [];
-    if (tokens.length && !tokens.some((token) => designed.includes(token) || (token.endsWith('s') && designed.includes(token.slice(0, -1))))) throw new Error('The design graph does not preserve the main object named in the user goal.');
+    const headNoun = tokens.at(-1);
+    if (headNoun && !designed.includes(headNoun) && !(headNoun.endsWith('s') && designed.includes(headNoun.slice(0, -1)))) throw new Error('The design graph does not preserve the main object named in the user goal.');
   }
   const primitiveNames: Record<string, string> = { wheel: 'wheel', wheels: 'wheel', gear: 'gear', gears: 'gear', sensor: 'sensor', sensors: 'sensor', motor: 'motor', motors: 'motor', servo: 'servo', servos: 'servo', piston: 'piston', pistons: 'piston', spring: 'spring', springs: 'spring', bin: 'container', bins: 'container', container: 'container', containers: 'container', ramp: 'ramp', ramps: 'ramp', pulley: 'pulley', pulleys: 'pulley', headlight: 'light', headlights: 'light' };
   const countWords: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
@@ -365,6 +537,7 @@ function validatePromptFidelity(plan: AgentPlan, originalPrompt: string) {
 export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: string) {
   unique(plan.assemblies.map((item) => item.id), 'Assembly'); unique(plan.components.map((item) => item.id), 'Component'); unique(plan.connections.map((item) => item.id), 'Connection'); unique(plan.joints.map((item) => item.id), 'Joint'); unique(plan.motors.map((item) => item.id), 'Motor'); unique(plan.sensors.map((item) => item.id), 'Sensor'); unique(plan.actuators.map((item) => item.id), 'Actuator'); unique(plan.controls.map((item) => item.id), 'Control');
   const assemblyIds = new Set(plan.assemblies.map((item) => item.id)); const componentIds = new Set(plan.components.map((item) => item.id)); const jointIds = new Set(plan.joints.map((item) => item.id)); const sensorIds = new Set(plan.sensors.map((item) => item.id)); const actuatorIds = new Set(plan.actuators.map((item) => item.id));
+  const bodyById = new Map(plan.components.map((item) => [item.id, item]));
   for (const item of plan.assemblies) { if (item.parent_id) assertReference(assemblyIds, item.parent_id, `Assembly ${item.id} parent`); if (item.parent_id === item.id) throw new Error(`Assembly ${item.id} cannot parent itself.`); }
   for (const start of plan.assemblies) {
     const visited = new Set<string>(); let current = start;
@@ -377,10 +550,11 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
   }
   unique(plan.connections.map((item) => `${item.connection_type}|${[item.source_id, item.target_id].sort().join('|')}|${item.channel}`), 'Connection edge');
   for (const item of plan.connections) { assertReference(componentIds, item.source_id, `Connection ${item.id}`); assertReference(componentIds, item.target_id, `Connection ${item.id}`); if (item.source_id === item.target_id) throw new Error(`Connection ${item.id} cannot target itself.`); }
-  for (const item of plan.joints) { assertReference(componentIds, item.component_a, `Joint ${item.id}`); assertReference(componentIds, item.component_b, `Joint ${item.id}`); if (item.component_a === item.component_b) throw new Error(`Joint ${item.id} needs two bodies.`); if (Math.hypot(...item.axis) < .5) throw new Error(`Joint ${item.id} needs a non-zero axis.`); if (item.limits && item.limits[0] > item.limits[1]) throw new Error(`Joint ${item.id} has reversed limits.`); if (['prismatic', 'spring', 'rope'].includes(item.joint_type) && !item.limits) throw new Error(`Joint ${item.id} needs finite travel limits.`); if (['gear', 'belt'].includes(item.joint_type) && item.ratio <= 0) throw new Error(`Joint ${item.id} needs a positive ratio.`); }
-  for (const item of plan.motors) { assertReference(componentIds, item.component_id, `Motor ${item.id}`); assertReference(jointIds, item.joint_id, `Motor ${item.id}`, true); if (plan.components.find((part) => part.id === item.component_id)?.primitive !== 'motor') throw new Error(`Motor ${item.id} must target a motor primitive.`); }
+  unique(plan.joints.map((item) => [item.component_a, item.component_b].sort().join('|')), 'Joint body pair');
+  for (const item of plan.joints) { assertReference(componentIds, item.component_a, `Joint ${item.id}`); assertReference(componentIds, item.component_b, `Joint ${item.id}`); if (item.component_a === item.component_b) throw new Error(`Joint ${item.id} needs two bodies.`); if (Math.hypot(...item.axis) < .5) throw new Error(`Joint ${item.id} needs a non-zero axis.`); if (item.limits && item.limits[0] > item.limits[1]) throw new Error(`Joint ${item.id} has reversed limits.`); if (['prismatic', 'spring', 'rope'].includes(item.joint_type) && !item.limits) throw new Error(`Joint ${item.id} needs finite travel limits.`); if (['gear', 'belt'].includes(item.joint_type) && item.ratio <= 0) throw new Error(`Joint ${item.id} needs a positive ratio.`); if (item.joint_type !== 'fixed' && bodyById.get(item.component_a)?.body_type === 'fixed' && bodyById.get(item.component_b)?.body_type === 'fixed') throw new Error(`Joint ${item.id} cannot create motion between two fixed bodies.`); }
+  for (const item of plan.motors) { assertReference(componentIds, item.component_id, `Motor ${item.id}`); assertReference(jointIds, item.joint_id, `Motor ${item.id}`, true); if (plan.components.find((part) => part.id === item.component_id)?.primitive !== 'motor') throw new Error(`Motor ${item.id} must target a motor primitive.`); if (item.joint_id) { const driven = plan.joints.find((joint) => joint.id === item.joint_id)!; if (driven.joint_type === 'fixed' || bodyById.get(driven.component_b)?.body_type === 'fixed') throw new Error(`Motor ${item.id} must drive the movable component_b endpoint of a motion joint.`); } }
   for (const item of plan.sensors) { assertReference(componentIds, item.component_id, `Sensor ${item.id}`); assertReference(componentIds, item.target_id, `Sensor ${item.id}`, true); if (!['sensor', 'camera'].includes(plan.components.find((part) => part.id === item.component_id)?.primitive ?? '')) throw new Error(`Sensor ${item.id} must target a sensor or camera primitive.`); }
-  for (const item of plan.actuators) { assertReference(componentIds, item.component_id, `Actuator ${item.id}`); assertReference(jointIds, item.joint_id, `Actuator ${item.id}`); if (!['motor', 'servo', 'piston'].includes(plan.components.find((part) => part.id === item.component_id)?.primitive ?? '')) throw new Error(`Actuator ${item.id} needs a motor, servo, or piston body.`); }
+  for (const item of plan.actuators) { assertReference(componentIds, item.component_id, `Actuator ${item.id}`); assertReference(jointIds, item.joint_id, `Actuator ${item.id}`); if (!['motor', 'servo', 'piston'].includes(plan.components.find((part) => part.id === item.component_id)?.primitive ?? '')) throw new Error(`Actuator ${item.id} needs a motor, servo, or piston body.`); const driven = plan.joints.find((joint) => joint.id === item.joint_id)!; if (driven.joint_type === 'fixed' || bodyById.get(driven.component_b)?.body_type === 'fixed') throw new Error(`Actuator ${item.id} must drive the movable component_b endpoint of a motion joint.`); }
   for (const item of plan.controls) { item.sensor_ids.forEach((id) => assertReference(sensorIds, id, `Control ${item.id}`)); item.actuator_ids.forEach((id) => assertReference(actuatorIds, id, `Control ${item.id}`)); }
   assertReference(componentIds, plan.editable_component_id, 'Editable component');
   if (!plan.components.some((item) => item.body_type === 'fixed')) throw new Error('The design needs at least one grounded fixed body.');
@@ -394,9 +568,8 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
   const orphan = plan.components.find((item) => !reachable.has(item.id) && !item.semantic_tags.some((tag) => intentionallyFree.has(tag)));
   if (orphan) throw new Error(`Component ${orphan.id} is not mechanically reachable from a grounded body.`);
   const active = plan.capabilities.some((item) => ['transport', 'lift', 'mobile', 'manipulate', 'transmit', 'track', 'rotate'].includes(item));
-  const bodyById = new Map(plan.components.map((item) => [item.id, item]));
   const motionJointIds = new Set(plan.joints.filter((joint) => joint.joint_type !== 'fixed'
-    && [bodyById.get(joint.component_a), bodyById.get(joint.component_b)].some((body) => body?.body_type !== 'fixed')).map((joint) => joint.id));
+    && bodyById.get(joint.component_b)?.body_type !== 'fixed').map((joint) => joint.id));
   const hasDrivenPath = plan.actuators.some((actuator) => motionJointIds.has(actuator.joint_id))
     || plan.motors.some((motor) => motionJointIds.has(motor.joint_id));
   if (active && !hasDrivenPath) throw new Error('An active machine needs a motor or actuator connected to the mechanism it drives.');
@@ -410,6 +583,9 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
     return edit;
   }
   if (!edit.actions.length) throw new Error('A resolved edit needs at least one guarded action.');
+  if (edit.clarification_question) throw new Error('A resolved edit must leave clarification_question empty.');
+  if (!edit.verification.length) throw new Error('A resolved edit needs at least one observable verification check.');
+  unique(edit.target_ids, 'Resolved target'); unique(edit.preserve_ids, 'Preserved component');
 
   const identifiers = (tool: AgentEditAction['tool'], key: string) => edit.actions.filter((action) => action.tool === tool).map((action) => (action as unknown as Record<string, string>)[key]);
   const created = {
@@ -434,14 +610,59 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
   const assemblies = new Set(existing.assemblies), components = new Set(existing.components), joints = new Set(existing.joints), sensors = new Set(existing.sensors), actuators = new Set(existing.actuators);
   const connections = new Set(existing.connections), motors = new Set(existing.motors), controls = new Set(existing.controls);
   const primitiveById = new Map(context.components.map((item) => [item.id, item.primitive]));
-  const motorComponentById = new Map(context.motors.map((item) => [item.id, item.component_id]));
-  const sensorComponentById = new Map(context.sensors.map((item) => [item.id, item.component_id]));
-  const actuatorComponentById = new Map(context.actuators.map((item) => [item.id, item.component_id]));
+  const bodyTypeById = new Map(context.components.map((item) => [item.id, item.body_type]));
+  const parametersById = new Map(context.components.map((item) => [item.id, item.parameters]));
+  const createdTagsById = new Map<string, string[]>();
+  const jointById = new Map(context.joints.map((item) => [item.id, { ...item }]));
+  const connectionById = new Map(context.connections.map((item) => [item.id, { ...item }]));
+  const motorById = new Map(context.motors.map((item) => [item.id, { component_id: item.component_id, joint_id: item.joint_id }]));
+  const sensorById = new Map(context.sensors.map((item) => [item.id, { component_id: item.component_id, target_id: item.target_id }]));
+  const actuatorById = new Map(context.actuators.map((item) => [item.id, { component_id: item.component_id, joint_id: item.joint_id }]));
+  const controlById = new Map(context.controls.map((item) => [item.id, { sensor_ids: [...item.sensor_ids], actuator_ids: [...item.actuator_ids] }]));
   const locked = new Map(context.components.map((item) => [item.id, new Set(item.human_locked_fields)]));
   const preserved = new Set(edit.preserve_ids); const declaredTargets = new Set(edit.target_ids); const touched = new Set<string>();
   edit.preserve_ids.forEach((id) => assertReference(existing.components, id, 'Preserved component'));
   const touch = (id: string) => { touched.add(id); if (!declaredTargets.has(id)) throw new Error(`Touched component ${id} must be declared in target_ids.`); if (preserved.has(id)) throw new Error(`Edit cannot change preserved component ${id}.`); };
   const mutableField = (id: string, field: string) => { assertReference(components, id, `Edit ${field}`); touch(id); if (locked.get(id)?.has(field)) throw new Error(`Edit would overwrite human-locked ${field} on ${id}.`); };
+  const touchJoint = (jointId: string) => {
+    const joint = jointById.get(jointId); if (!joint) return;
+    touch(joint.component_a); touch(joint.component_b);
+  };
+  const requireDrivenJoint = (jointId: string, label: string) => {
+    const joint = jointById.get(jointId);
+    if (!joint || joint.joint_type === 'fixed' || bodyTypeById.get(joint.component_b) === 'fixed') throw new Error(`${label} must drive the movable component_b endpoint of a motion joint.`);
+    return joint;
+  };
+  const touchMotor = (motorId: string) => {
+    const motor = motorById.get(motorId); if (!motor) return;
+    assertReference(components, motor.component_id, `Motor ${motorId}`); touch(motor.component_id); if (motor.joint_id) { requireDrivenJoint(motor.joint_id, `Motor ${motorId}`); touchJoint(motor.joint_id); }
+  };
+  const touchSensor = (sensorId: string) => {
+    const sensor = sensorById.get(sensorId); if (!sensor) return;
+    assertReference(components, sensor.component_id, `Sensor ${sensorId}`); touch(sensor.component_id);
+    if (sensor.target_id) { assertReference(components, sensor.target_id, `Sensor ${sensorId}`); touch(sensor.target_id); }
+  };
+  const touchActuator = (actuatorId: string) => {
+    const actuator = actuatorById.get(actuatorId); if (!actuator) return;
+    assertReference(components, actuator.component_id, `Actuator ${actuatorId}`); requireDrivenJoint(actuator.joint_id, `Actuator ${actuatorId}`); touch(actuator.component_id); touchJoint(actuator.joint_id);
+  };
+  const touchControl = (controlId: string) => {
+    const control = controlById.get(controlId); if (!control) return;
+    control.sensor_ids.forEach(touchSensor); control.actuator_ids.forEach(touchActuator);
+  };
+
+  const reachableFromFixed = (componentIds: Set<string>, graph: Map<string, { component_a: string; component_b: string }>) => {
+    const adjacency = new Map([...componentIds].map((id) => [id, new Set<string>()]));
+    for (const joint of graph.values()) {
+      if (!componentIds.has(joint.component_a) || !componentIds.has(joint.component_b)) continue;
+      adjacency.get(joint.component_a)!.add(joint.component_b); adjacency.get(joint.component_b)!.add(joint.component_a);
+    }
+    const reachable = new Set([...componentIds].filter((id) => bodyTypeById.get(id) === 'fixed'));
+    const queue = [...reachable];
+    while (queue.length) for (const neighbor of adjacency.get(queue.shift()!) ?? []) if (!reachable.has(neighbor)) { reachable.add(neighbor); queue.push(neighbor); }
+    return reachable;
+  };
+  const baselineReachable = reachableFromFixed(new Set(existing.components), new Map(context.joints.map((item) => [item.id, item])));
 
   for (const action of edit.actions) {
     if (action.tool === 'create_assembly') { if (action.parent_id) assertReference(assemblies, action.parent_id, `Assembly ${action.assembly_id}`); assemblies.add(action.assembly_id); continue; }
@@ -449,58 +670,139 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
       assertReference(assemblies, action.assembly_id, `Component ${action.component_id}`); touch(action.component_id);
       if (action.position.some((value, index) => Math.abs(value) > context.world.bounds[index] / 2)) throw new Error(`Component ${action.component_id} is outside the current world bounds.`);
       if (action.rotation.some((value) => Math.abs(value) > Math.PI * 2)) throw new Error(`Component ${action.component_id} rotation must stay within ±2π radians.`);
-      components.add(action.component_id); primitiveById.set(action.component_id, action.primitive); continue;
+      components.add(action.component_id); primitiveById.set(action.component_id, action.primitive); bodyTypeById.set(action.component_id, action.body_type); createdTagsById.set(action.component_id, action.semantic_tags); continue;
     }
     if (action.tool === 'set_dimensions') { mutableField(action.component_id, 'dimensions'); continue; }
     if (action.tool === 'set_material') { mutableField(action.component_id, 'material'); continue; }
     if (action.tool === 'set_mass') { mutableField(action.component_id, 'mass'); continue; }
     if (action.tool === 'move_component') {
       mutableField(action.component_id, 'position');
-      context.joints.filter((item) => item.component_a === action.component_id || item.component_b === action.component_id).forEach((item) => touch(item.component_a === action.component_id ? item.component_b : item.component_a));
+      [...jointById.values()].filter((item) => item.component_a === action.component_id || item.component_b === action.component_id).forEach((item) => touch(item.component_a === action.component_id ? item.component_b : item.component_a));
       if (action.position.some((value, index) => Math.abs(value) > context.world.bounds[index] / 2)) throw new Error(`${action.component_id} would leave the current world bounds.`); continue;
     }
     if (action.tool === 'rotate_component') {
       mutableField(action.component_id, 'rotation');
-      context.joints.filter((item) => item.component_a === action.component_id || item.component_b === action.component_id).forEach((item) => touch(item.component_a === action.component_id ? item.component_b : item.component_a));
+      [...jointById.values()].filter((item) => item.component_a === action.component_id || item.component_b === action.component_id).forEach((item) => touch(item.component_a === action.component_id ? item.component_b : item.component_a));
       if (action.rotation.some((value) => Math.abs(value) > Math.PI * 2)) throw new Error(`${action.component_id} rotation must stay within ±2π radians.`); continue;
     }
     if (action.tool === 'remove_component') {
       mutableField(action.component_id, 'remove');
-      const attachedJoints = context.joints.filter((item) => item.component_a === action.component_id || item.component_b === action.component_id);
+      if ((locked.get(action.component_id)?.size ?? 0) > 0) throw new Error(`Edit cannot remove human-locked component ${action.component_id}.`);
+      const attachedJoints = [...jointById.values()].filter((item) => item.component_a === action.component_id || item.component_b === action.component_id);
       const attachedJointIds = new Set(attachedJoints.map((item) => item.id));
       for (const joint of attachedJoints) touch(joint.component_a === action.component_id ? joint.component_b : joint.component_a);
-      for (const edge of context.connections.filter((item) => item.source_id === action.component_id || item.target_id === action.component_id)) touch(edge.source_id === action.component_id ? edge.target_id : edge.source_id);
-      for (const sensor of context.sensors.filter((item) => item.target_id === action.component_id && item.component_id !== action.component_id)) touch(sensor.component_id);
-      for (const motor of context.motors.filter((item) => item.component_id !== action.component_id && Boolean(item.joint_id) && attachedJointIds.has(item.joint_id))) touch(motor.component_id);
-      for (const actuator of context.actuators.filter((item) => item.component_id !== action.component_id && attachedJointIds.has(item.joint_id))) touch(actuator.component_id);
-      components.delete(action.component_id); primitiveById.delete(action.component_id); attachedJoints.forEach((item) => joints.delete(item.id)); continue;
+      for (const edge of [...connectionById.values()].filter((item) => item.source_id === action.component_id || item.target_id === action.component_id)) touch(edge.source_id === action.component_id ? edge.target_id : edge.source_id);
+      const removedSensorIds = new Set([...sensorById].filter(([, item]) => item.component_id === action.component_id || item.target_id === action.component_id).map(([id]) => id));
+      const removedActuatorIds = new Set([...actuatorById].filter(([, item]) => item.component_id === action.component_id || attachedJointIds.has(item.joint_id)).map(([id]) => id));
+      const removedMotorIds = new Set([...motorById].filter(([, item]) => item.component_id === action.component_id || Boolean(item.joint_id && attachedJointIds.has(item.joint_id))).map(([id]) => id));
+      for (const id of removedSensorIds) {
+        const sensor = sensorById.get(id)!;
+        if (sensor.component_id !== action.component_id) touch(sensor.component_id);
+        if (sensor.target_id && sensor.target_id !== action.component_id) touch(sensor.target_id);
+        sensorById.delete(id); sensors.delete(id);
+      }
+      for (const id of removedActuatorIds) {
+        const actuator = actuatorById.get(id)!;
+        if (actuator.component_id !== action.component_id) touch(actuator.component_id);
+        if (jointById.has(actuator.joint_id)) touchJoint(actuator.joint_id);
+        actuatorById.delete(id); actuators.delete(id);
+      }
+      for (const id of removedMotorIds) {
+        const motor = motorById.get(id)!;
+        if (motor.component_id !== action.component_id) touch(motor.component_id);
+        if (motor.joint_id && jointById.has(motor.joint_id)) touchJoint(motor.joint_id);
+        motorById.delete(id); motors.delete(id);
+      }
+      for (const [id, control] of controlById) {
+        const changed = control.sensor_ids.some((item) => removedSensorIds.has(item)) || control.actuator_ids.some((item) => removedActuatorIds.has(item));
+        control.sensor_ids = control.sensor_ids.filter((item) => !removedSensorIds.has(item)); control.actuator_ids = control.actuator_ids.filter((item) => !removedActuatorIds.has(item));
+        if (!control.sensor_ids.length && !control.actuator_ids.length) { controlById.delete(id); controls.delete(id); }
+        else if (changed) touchControl(id);
+      }
+      for (const [id, edge] of connectionById) if (edge.source_id === action.component_id || edge.target_id === action.component_id) { connectionById.delete(id); connections.delete(id); }
+      attachedJoints.forEach((item) => { jointById.delete(item.id); joints.delete(item.id); });
+      components.delete(action.component_id); primitiveById.delete(action.component_id); bodyTypeById.delete(action.component_id); parametersById.delete(action.component_id); createdTagsById.delete(action.component_id); continue;
     }
-    if (action.tool === 'connect_components') { assertReference(components, action.source_id, `Connection ${action.connection_id}`); assertReference(components, action.target_id, `Connection ${action.connection_id}`); if (action.source_id === action.target_id) throw new Error(`Connection ${action.connection_id} cannot target itself.`); touch(action.source_id); touch(action.target_id); connections.add(action.connection_id); continue; }
+    if (action.tool === 'connect_components') {
+      assertReference(components, action.source_id, `Connection ${action.connection_id}`); assertReference(components, action.target_id, `Connection ${action.connection_id}`); if (action.source_id === action.target_id) throw new Error(`Connection ${action.connection_id} cannot target itself.`);
+      if ([...connectionById.values()].some((item) => item.source_id === action.source_id && item.target_id === action.target_id && item.connection_type === action.connection_type)) throw new Error(`Connection ${action.connection_id} duplicates an existing ${action.connection_type} edge.`);
+      touch(action.source_id); touch(action.target_id); connections.add(action.connection_id); connectionById.set(action.connection_id, {
+        id: action.connection_id, source_id: action.source_id, target_id: action.target_id, connection_type: action.connection_type, channel: action.channel,
+      }); continue;
+    }
     if (action.tool === 'create_joint') {
       assertReference(components, action.component_a, `Joint ${action.joint_id}`); assertReference(components, action.component_b, `Joint ${action.joint_id}`); if (action.component_a === action.component_b) throw new Error(`Joint ${action.joint_id} needs two bodies.`);
       if (Math.hypot(...action.axis) < .5 || (action.limits && action.limits[0] > action.limits[1])) throw new Error(`Joint ${action.joint_id} has an invalid axis or limits.`); if (['prismatic', 'spring', 'rope'].includes(action.joint_type) && !action.limits) throw new Error(`Joint ${action.joint_id} needs finite travel limits.`); if (['gear', 'belt'].includes(action.joint_type) && action.ratio <= 0) throw new Error(`Joint ${action.joint_id} needs a positive ratio.`);
-      touch(action.component_a); touch(action.component_b); joints.add(action.joint_id); continue;
+      if (action.joint_type !== 'fixed' && bodyTypeById.get(action.component_a) === 'fixed' && bodyTypeById.get(action.component_b) === 'fixed') throw new Error(`Joint ${action.joint_id} cannot create motion between two fixed bodies.`);
+      if ([...jointById.values()].some((joint) => new Set([joint.component_a, joint.component_b]).has(action.component_a) && new Set([joint.component_a, joint.component_b]).has(action.component_b))) throw new Error(`Joint ${action.joint_id} duplicates an existing joint between the same bodies.`);
+      touch(action.component_a); touch(action.component_b); joints.add(action.joint_id); jointById.set(action.joint_id, {
+        id: action.joint_id, joint_type: action.joint_type, component_a: action.component_a, component_b: action.component_b,
+        axis: action.axis, limits: action.limits, ratio: action.ratio || null, stiffness: action.stiffness || null, damping: action.damping || null,
+      }); continue;
     }
-    if (action.tool === 'remove_joint') { assertReference(joints, action.joint_id, 'Remove joint'); const joint = context.joints.find((item) => item.id === action.joint_id); if (joint) { touch(joint.component_a); touch(joint.component_b); } joints.delete(action.joint_id); continue; }
-    if (action.tool === 'add_motor') { assertReference(components, action.component_id, `Motor ${action.motor_id}`); assertReference(joints, action.joint_id, `Motor ${action.motor_id}`, true); if (primitiveById.get(action.component_id) !== 'motor') throw new Error(`Motor ${action.motor_id} must target a motor primitive.`); touch(action.component_id); motors.add(action.motor_id); motorComponentById.set(action.motor_id, action.component_id); continue; }
-    if (action.tool === 'set_motor_speed') { assertReference(motors, action.motor_id, 'Motor speed edit'); touch(motorComponentById.get(action.motor_id)!); continue; }
-    if (action.tool === 'add_sensor') { assertReference(components, action.component_id, `Sensor ${action.sensor_id}`); assertReference(components, action.target_id, `Sensor ${action.sensor_id}`, true); if (!['sensor', 'camera'].includes(primitiveById.get(action.component_id) ?? '')) throw new Error(`Sensor ${action.sensor_id} needs a sensor or camera body.`); touch(action.component_id); sensors.add(action.sensor_id); sensorComponentById.set(action.sensor_id, action.component_id); continue; }
-    if (action.tool === 'set_sensor_range') { assertReference(sensors, action.sensor_id, 'Sensor range edit'); touch(sensorComponentById.get(action.sensor_id)!); continue; }
-    if (action.tool === 'add_actuator') { assertReference(components, action.component_id, `Actuator ${action.actuator_id}`); assertReference(joints, action.joint_id, `Actuator ${action.actuator_id}`); if (!['motor', 'servo', 'piston'].includes(primitiveById.get(action.component_id) ?? '')) throw new Error(`Actuator ${action.actuator_id} needs a motor, servo, or piston body.`); touch(action.component_id); actuators.add(action.actuator_id); actuatorComponentById.set(action.actuator_id, action.component_id); continue; }
-    if (action.tool === 'set_actuator_timing') { assertReference(actuators, action.actuator_id, 'Actuator timing edit'); touch(actuatorComponentById.get(action.actuator_id)!); continue; }
-    if (action.tool === 'set_control_logic') { action.sensor_ids.forEach((id) => assertReference(sensors, id, `Control ${action.control_id}`)); action.actuator_ids.forEach((id) => assertReference(actuators, id, `Control ${action.control_id}`)); controls.add(action.control_id); continue; }
-    if (action.tool === 'update_control_logic') { assertReference(controls, action.control_id, 'Control edit'); continue; }
+    if (action.tool === 'remove_joint') {
+      assertReference(joints, action.joint_id, 'Remove joint'); touchJoint(action.joint_id);
+      const removedMotorIds = new Set([...motorById].filter(([, item]) => item.joint_id === action.joint_id).map(([id]) => id));
+      const removedActuatorIds = new Set([...actuatorById].filter(([, item]) => item.joint_id === action.joint_id).map(([id]) => id));
+      for (const id of removedMotorIds) { const motor = motorById.get(id)!; touch(motor.component_id); motorById.delete(id); motors.delete(id); }
+      for (const id of removedActuatorIds) { const actuator = actuatorById.get(id)!; touch(actuator.component_id); actuatorById.delete(id); actuators.delete(id); }
+      for (const [id, control] of controlById) {
+        const changed = control.actuator_ids.some((item) => removedActuatorIds.has(item));
+        control.actuator_ids = control.actuator_ids.filter((item) => !removedActuatorIds.has(item));
+        if (!control.sensor_ids.length && !control.actuator_ids.length) { controlById.delete(id); controls.delete(id); }
+        else if (changed) touchControl(id);
+      }
+      joints.delete(action.joint_id); jointById.delete(action.joint_id); continue;
+    }
+    if (action.tool === 'add_motor') {
+      assertReference(components, action.component_id, `Motor ${action.motor_id}`); assertReference(joints, action.joint_id, `Motor ${action.motor_id}`);
+      if (primitiveById.get(action.component_id) !== 'motor') throw new Error(`Motor ${action.motor_id} must target a motor primitive.`);
+      requireDrivenJoint(action.joint_id, `Motor ${action.motor_id}`);
+      motorById.set(action.motor_id, { component_id: action.component_id, joint_id: action.joint_id }); motors.add(action.motor_id); touchMotor(action.motor_id); continue;
+    }
+    if (action.tool === 'set_motor_speed') { assertReference(motors, action.motor_id, 'Motor speed edit'); touchMotor(action.motor_id); continue; }
+    if (action.tool === 'add_sensor') {
+      assertReference(components, action.component_id, `Sensor ${action.sensor_id}`); assertReference(components, action.target_id, `Sensor ${action.sensor_id}`, true); if (!['sensor', 'camera'].includes(primitiveById.get(action.component_id) ?? '')) throw new Error(`Sensor ${action.sensor_id} needs a sensor or camera body.`);
+      sensors.add(action.sensor_id); sensorById.set(action.sensor_id, { component_id: action.component_id, target_id: action.target_id }); touchSensor(action.sensor_id); continue;
+    }
+    if (action.tool === 'set_sensor_range') { assertReference(sensors, action.sensor_id, 'Sensor range edit'); touchSensor(action.sensor_id); continue; }
+    if (action.tool === 'add_actuator') {
+      assertReference(components, action.component_id, `Actuator ${action.actuator_id}`); assertReference(joints, action.joint_id, `Actuator ${action.actuator_id}`); if (!['motor', 'servo', 'piston'].includes(primitiveById.get(action.component_id) ?? '')) throw new Error(`Actuator ${action.actuator_id} needs a motor, servo, or piston body.`);
+      requireDrivenJoint(action.joint_id, `Actuator ${action.actuator_id}`);
+      actuators.add(action.actuator_id); actuatorById.set(action.actuator_id, { component_id: action.component_id, joint_id: action.joint_id }); touchActuator(action.actuator_id); continue;
+    }
+    if (action.tool === 'set_actuator_timing') { assertReference(actuators, action.actuator_id, 'Actuator timing edit'); touchActuator(action.actuator_id); continue; }
+    if (action.tool === 'set_control_logic') {
+      unique(action.sensor_ids, `Control ${action.control_id} sensor`); unique(action.actuator_ids, `Control ${action.control_id} actuator`);
+      action.sensor_ids.forEach((id) => assertReference(sensors, id, `Control ${action.control_id}`)); action.actuator_ids.forEach((id) => assertReference(actuators, id, `Control ${action.control_id}`));
+      if (!action.actuator_ids.length) throw new Error(`Control ${action.control_id} needs at least one actuator.`);
+      if (action.mode !== 'timed' && !action.sensor_ids.length) throw new Error(`Control ${action.control_id} needs sensor feedback for ${action.mode} mode.`);
+      controls.add(action.control_id); controlById.set(action.control_id, { sensor_ids: [...action.sensor_ids], actuator_ids: [...action.actuator_ids] }); touchControl(action.control_id); continue;
+    }
+    if (action.tool === 'update_control_logic') { assertReference(controls, action.control_id, 'Control edit'); touchControl(action.control_id); continue; }
     const exhaustive: never = action; throw new Error(`Unsupported edit action ${String(exhaustive)}`);
   }
   const projectedCount = components.size; if (projectedCount > context.max_components) throw new Error('The edit exceeds the component budget.');
-  const newlyLinked = new Set(edit.actions.flatMap((action) => action.tool === 'connect_components'
-    ? [action.source_id, action.target_id]
-    : action.tool === 'create_joint' ? [action.component_a, action.component_b] : []));
+  if (!projectedCount) throw new Error('A chat edit cannot delete the entire engineered world; use Reset instead.');
+  if (![...components].some((id) => bodyTypeById.get(id) === 'fixed')) throw new Error('The edit would leave the machine without a grounded fixed body.');
   const freeTags = new Set(['payload', 'package-red', 'package-blue', 'shipping-carton', 'tomato-ripe', 'tomato-reject', 'metal-can', 'plastic-bottle', 'reject-object']);
   for (const action of edit.actions.filter((item): item is Extract<AgentEditAction, { tool: 'create_component' }> => item.tool === 'create_component')) {
-    if (!action.semantic_tags.some((tag) => freeTags.has(tag)) && !newlyLinked.has(action.component_id)) throw new Error(`Created component ${action.component_id} needs a physical connection or joint in the same atomic edit.`);
+    if (!components.has(action.component_id) || action.semantic_tags.some((tag) => freeTags.has(tag))) continue;
+    const hasJoint = [...jointById.values()].some((item) => item.component_a === action.component_id || item.component_b === action.component_id);
+    const hasMechanicalEdge = [...connectionById.values()].some((item) => item.connection_type === 'mechanical' && (item.source_id === action.component_id || item.target_id === action.component_id));
+    if (!hasJoint && !hasMechanicalEdge) throw new Error(`Created component ${action.component_id} needs a physical connection or joint in the same atomic edit.`);
   }
+  const reachable = reachableFromFixed(components, jointById);
+  const freeProductForms = new Set(['package-red', 'package-blue', 'shipping-carton', 'tomato', 'metal-can', 'plastic-bottle', 'reject-object']);
+  const intentionallyFree = (id: string) => {
+    if (createdTagsById.get(id)?.some((tag) => freeTags.has(tag))) return true;
+    const parameters = parametersById.get(id) ?? {};
+    return parameters.semantic_payload === true || (typeof parameters.product_form === 'string' && freeProductForms.has(parameters.product_form));
+  };
+  const orphan = [...components].find((id) => bodyTypeById.get(id) !== 'fixed' && !reachable.has(id) && !intentionallyFree(id) && (!existing.components.has(id) || baselineReachable.has(id)));
+  if (orphan) throw new Error(`The edit would leave component ${orphan} mechanically disconnected from every grounded body.`);
   edit.target_ids.forEach((id) => assertReference(new Set([...existing.components, ...created.components]), id, 'Resolved target'));
+  for (const id of edit.target_ids) if (!touched.has(id)) throw new Error(`Resolved target ${id} is not changed by any proposed action.`);
   if ([...preserved].some((id) => touched.has(id))) throw new Error('target_ids and preserve_ids must be disjoint.');
   return edit;
 }
