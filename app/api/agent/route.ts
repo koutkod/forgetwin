@@ -44,7 +44,11 @@ const BASE_INSTRUCTIONS = `You are ForgeTwin's mechanical engineering planning a
 function sameOrigin(request: Request) {
   const origin = request.headers.get('origin');
   if (!origin) return true;
-  try { return new URL(origin).origin === new URL(request.url).origin; } catch { return false; }
+  const candidates = [request.url, process.env.NEXT_PUBLIC_SITE_ORIGIN, process.env.URL, process.env.DEPLOY_PRIME_URL];
+  try {
+    const allowed = new Set(candidates.filter((value): value is string => Boolean(value)).map((value) => new URL(value).origin));
+    return allowed.has(new URL(origin).origin);
+  } catch { return false; }
 }
 
 function sessionKey(request: Request) {

@@ -122,6 +122,22 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts the configured public origin behind a trusted deployment proxy', async () => {
+    const previous = process.env.NEXT_PUBLIC_SITE_ORIGIN;
+    process.env.NEXT_PUBLIC_SITE_ORIGIN = 'https://forgetwin.netlify.app';
+    try {
+      const response = await POST(new Request('http://internal-function-host/api/agent', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://forgetwin.netlify.app' },
+        body: JSON.stringify({ task: 'plan', prompt: 'Build a small rover that carries five kilograms.' }),
+      }));
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_NOT_CONFIGURED' });
+    } finally {
+      if (previous === undefined) delete process.env.NEXT_PUBLIC_SITE_ORIGIN; else process.env.NEXT_PUBLIC_SITE_ORIGIN = previous;
+    }
+  });
+
 
   it('defaults to the flagship GPT-5.6 Sol model', async () => {
     const previousModel = process.env.OPENAI_MODEL;
