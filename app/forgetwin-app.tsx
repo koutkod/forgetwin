@@ -3,7 +3,7 @@
 import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Bot, Box, Check, ChevronDown,
   CircleDot, Clock3, Code2, Cpu, Gauge, GitCompareArrows, History, Layers3, Move3D,
-  KeyRound, MessageSquareText, MoveHorizontal, Play, Radio, Redo2, RotateCcw, Save, Send,
+  KeyRound, MessageSquareText, MoveHorizontal, Pause, Play, Radio, Redo2, RotateCcw, Save, Send,
   Settings2, Sparkles, Square, TimerReset, Undo2, Waypoints, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -63,10 +63,12 @@ export function ForgeTwinApp() {
   const [editMessages, setEditMessages] = useState<EditMessage[]>([]);
   const [agentCancelable, setAgentCancelable] = useState(false);
   const [generationVisual, setGenerationVisual] = useState<GenerationVisualState | null>(null);
+  const [animationPlaying, setAnimationPlaying] = useState(false);
   const traceSeq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3600); return () => window.clearTimeout(timer); }, [toast]);
+  useEffect(() => { setAnimationPlaying(false); }, [state.designHash]);
   useEffect(() => {
     const controller = new AbortController();
     void getAgentStatus(controller.signal).then((status) => {
@@ -259,7 +261,7 @@ export function ForgeTwinApp() {
   };
 
   const diagnoseAndFix = async () => {
-    if (busy) return; setBusy(true); setError(null);
+    if (busy) return; setAnimationPlaying(false); setBusy(true); setError(null);
     try {
       const failed = getSnapshot().runs.at(-1);
       if (!failed || failed.status !== 'failed') throw new Error('Run a failing physics trial before optimizing.');
@@ -274,7 +276,7 @@ export function ForgeTwinApp() {
   };
 
   const retuneHumanEdit = async () => {
-    if (busy) return; setBusy(true); setError(null);
+    if (busy) return; setAnimationPlaying(false); setBusy(true); setError(null);
     try {
       let actor = runtimeActor();
       const before = getSnapshot();
@@ -307,7 +309,7 @@ export function ForgeTwinApp() {
   const runHeaderSimulation = async () => {
     if (!state.components.length) return generateFromPrompt(goalPrompt);
     if (busy) return;
-    setBusy(true); setError(null);
+    setAnimationPlaying(false); setBusy(true); setError(null);
     const result = await runMachine('UI');
     if (!result.ok) setError(result.error.message); else setToast(`Physics run ${getSnapshot().phase}`);
     setBusy(false);
@@ -443,7 +445,7 @@ export function ForgeTwinApp() {
     if (!state.components.length) { setError('Engineer a machine before editing it with chat.'); return; }
     const userMessage: EditMessage = { id: `edit-user-${Date.now()}`, role: 'user', text: prompt };
     setEditMessages((current) => [...current, userMessage].slice(-18)); setEditPrompt('');
-    const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true); setBusy(true); setError(null);
+    const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true); setAnimationPlaying(false); setBusy(true); setError(null);
     let actor = runtimeActor();
     try {
       await call('inspect_workspace', { since_revision: Math.max(0, state.revision - 1) }, 35, actor, controller.signal);
@@ -508,6 +510,7 @@ export function ForgeTwinApp() {
 
   const latestRun = state.runs.at(-1) ?? null;
   const firstFailedRun = state.runs.find((run) => run.status === 'failed') ?? null;
+  const startFailureReplay = (runId: string) => { setAnimationPlaying(false); patchUi({ replayRunId: runId, replayMode: 'failure' }); };
   const humanChallenge = state.phase === 'passed' && !state.humanConstraints.length;
   const humanEdited = state.humanConstraints.length > 0 && (!latestRun || latestRun.designHash !== state.designHash);
   const finalHumanPass = state.phase === 'passed' && state.humanConstraints.length > 0 && latestRun?.designHash === state.designHash;
@@ -516,7 +519,7 @@ export function ForgeTwinApp() {
     <header className="forge-header">
       <button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => patchUi({ screen: 'landing' })} disabled={busy}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button>
       <div className="header-center"><span className={`live-dot ${agentRuntime === 'server-model' || agentRuntime === 'session-model' ? 'cyan' : ''}`} />{agentRuntime === 'server-model' || agentRuntime === 'session-model' ? `${agentModel} connected` : 'Local engineer ready'} <span className="header-divider" /> REV {state.revision.toString().padStart(2, '0')} <span className="header-divider" /> {registeredTools === FORGE_TOOL_COUNT ? `${registeredTools} WebMCP tools live` : 'WebMCP host not connected'}</div>
-      <div className="header-actions"><button className="ghost-button chat-edit-button" disabled={busy} onClick={() => setSideTab('chat')}><MessageSquareText size={14} />Edit with chat</button><button className="ghost-button" disabled={busy} onClick={() => setAgentSettingsOpen(true)}><KeyRound size={14} />Agent</button><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Checkpoint</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare runs</button><button className="ghost-button" disabled={busy} onClick={() => { reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setAgentTrace([]); setEditMessages([]); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
+      <div className="header-actions"><button className="ghost-button chat-edit-button" disabled={busy} onClick={() => setSideTab('chat')}><MessageSquareText size={14} />Chat edit</button><button className="ghost-button" disabled={busy} onClick={() => setAgentSettingsOpen(true)}><KeyRound size={14} />Agent</button><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Checkpoint</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare runs</button><button className="ghost-button" disabled={busy} onClick={() => { setAnimationPlaying(false); reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setAgentTrace([]); setEditMessages([]); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
     </header>
     <main id="forge-main" className="forge-main">
       <aside className="catalog-panel" aria-label="World hierarchy">
@@ -528,12 +531,12 @@ export function ForgeTwinApp() {
         {selected && <ComponentInspector component={selected} state={state} busy={busy} onMove={(x) => handleEditableMove(selected.id, x)} onUpdate={manualUpdate} />}
       </aside>
       <section className="viewport-panel" aria-label="3D mechanical world">
-        <ForgeScene state={state} onComponentMove={handleEditableMove} onSelect={(id) => patchUi({ selectedComponentId: id || null })} />
-        <div className="viewport-topbar"><div className="scene-path"><span>{state.goal?.domain ?? 'Mechanical world'}</span><i>/</i><strong>{state.goal?.machineName ?? 'Empty sandbox'}</strong>{selected && <><i>/</i><b>{selected.role}</b></>}</div><div className="view-controls"><button onClick={() => patchUi({ xray: !state.xray })} aria-pressed={state.xray} className={state.xray ? 'active' : ''}><Layers3 size={14} />X-Ray</button><button onClick={() => setDrawer('telemetry')}><Gauge size={14} />Telemetry</button><button onClick={() => { setSideTab('history'); setDrawer('history'); }}><History size={14} />Revisions</button></div></div>
+        <ForgeScene state={state} operating={animationPlaying} onComponentMove={handleEditableMove} onSelect={(id) => patchUi({ selectedComponentId: id || null })} />
+        <div className="viewport-topbar"><div className="scene-path"><span>{state.goal?.domain ?? 'Mechanical world'}</span><i>/</i><strong>{state.goal?.machineName ?? 'Empty sandbox'}</strong>{selected && <><i>/</i><b>{selected.role}</b></>}</div><div className="view-controls"><button className={animationPlaying ? 'active animation-control' : 'animation-control'} onClick={() => { const next = !animationPlaying; if (next) patchUi({ replayRunId: null, replayMode: 'normal' }); setAnimationPlaying(next); setToast(next ? 'Operation animation playing' : 'Operation animation paused'); }} aria-pressed={animationPlaying} disabled={busy || !state.components.length}>{animationPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}{animationPlaying ? 'Pause animation' : 'Animate design'}</button><button onClick={() => patchUi({ xray: !state.xray })} aria-pressed={state.xray} className={state.xray ? 'active' : ''}><Layers3 size={14} />X-Ray</button><button onClick={() => setDrawer('telemetry')}><Gauge size={14} />Telemetry</button><button onClick={() => { setSideTab('history'); setDrawer('history'); }}><History size={14} />Revisions</button></div></div>
         <div className="viewport-status"><span className="live-dot cyan" />RAPIER MULTI-BODY <i />60 HZ <i />SEED 424242 <i />{state.components.length} BODIES · {state.joints.length} JOINTS</div>
         {!state.components.length && <div className="empty-machine-card"><span className="goal-avatar"><Sparkles size={18} /></span><span className="eyebrow">General-purpose physical sandbox</span><h1>Describe the system.<br />ForgeTwin builds the world.</h1><p>No profile selector. The agent creates reusable primitives, physical properties, joints, sensing, actuation, and control logic from scratch.</p><GoalComposer id="lab-design-goal" prompt={goalPrompt} error={promptError} busy={busy} compact agentRuntime={agentRuntime} onPromptChange={updateGoalPrompt} onGenerate={generateFromPrompt} /></div>}
-        {state.phase === 'failed' && latestRun && <FailureBanner run={latestRun} onReplay={() => patchUi({ replayRunId: latestRun.id, replayMode: 'failure' })} onFix={diagnoseAndFix} busy={busy} />}
-        {humanChallenge && <div className="challenge-banner"><span className="challenge-icon"><Move3D size={18} /></span><div><span className="eyebrow">Generated + physics verified</span><strong>Now perturb the shared world yourself.</strong><p>Select or drag the highlighted {state.goal?.editableLabel}. The agent must preserve your change and redesign around it.</p></div><div className="challenge-actions">{firstFailedRun && <button className="secondary" onClick={() => patchUi({ replayRunId: firstFailedRun.id, replayMode: 'failure' })}><TimerReset size={13} />Replay failure</button>}<button onClick={() => { patchUi({ selectedComponentId: state.goal?.editableComponentId ?? null, xray: true }); setToast(`Selected ${state.goal?.editableLabel}`); }}>Select editable body</button></div></div>}
+        {state.phase === 'failed' && latestRun && <FailureBanner run={latestRun} onReplay={() => startFailureReplay(latestRun.id)} onFix={diagnoseAndFix} busy={busy} />}
+        {humanChallenge && <div className="challenge-banner"><span className="challenge-icon"><Move3D size={18} /></span><div><span className="eyebrow">Generated + physics verified</span><strong>Now perturb the shared world yourself.</strong><p>Select or drag the highlighted {state.goal?.editableLabel}. The agent must preserve your change and redesign around it.</p></div><div className="challenge-actions">{firstFailedRun && <button className="secondary" onClick={() => startFailureReplay(firstFailedRun.id)}><TimerReset size={13} />Replay failure</button>}<button onClick={() => { patchUi({ selectedComponentId: state.goal?.editableComponentId ?? null, xray: true }); setToast(`Selected ${state.goal?.editableLabel}`); }}>Select editable body</button></div></div>}
         {humanEdited && <div className="challenge-banner human"><span className="challenge-icon"><Radio size={18} /></span><div><span className="eyebrow">Human edit detected</span><strong>{state.humanConstraints.length} {state.humanConstraints.length === 1 ? 'body has' : 'bodies have'} locked fields.</strong><p>{state.humanConstraints.map((item) => `${state.components.find((component) => component.id === item.componentId)?.role ?? item.componentId}: ${item.fields.join(', ')}`).join(' · ')}. The agent will preserve every field and redesign the surrounding world.</p></div><button onClick={retuneHumanEdit} disabled={busy}>{busy ? 'Redesigning…' : 'Redesign around my change'}</button></div>}
         {finalHumanPass && latestRun && <div className="pass-banner"><span><BadgeCheck size={20} /></span><div><strong>All constraints pass with the human edit preserved.</strong><p>{latestRun.metrics.measures.slice(0, 3).map((item) => `${item.label} ${item.value}${item.unit}`).join(' · ')}</p></div><button onClick={() => setDrawer('compare')}>Compare designs</button></div>}
       </section>
@@ -558,49 +561,33 @@ const GENERATION_PHASES: Array<{ id: GenerationPhase; label: string; short: stri
 ];
 
 function GenerationSequence({ state, onCancel }: { state: GenerationVisualState; onCancel: () => void }) {
-  const cancelRef = useRef<HTMLButtonElement>(null);
   const cancelActionRef = useRef(onCancel);
   const phaseRef = useRef(state.phase);
   const activeIndex = state.phase === 'optimizing' ? 4 : GENERATION_PHASES.findIndex((item) => item.id === state.phase);
   useEffect(() => { cancelActionRef.current = onCancel; }, [onCancel]);
   useEffect(() => { phaseRef.current = state.phase; }, [state.phase]);
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const timer = window.setTimeout(() => cancelRef.current?.focus(), 250);
     const handle = (event: KeyboardEvent) => { if (event.key === 'Escape' && phaseRef.current !== 'complete') { event.preventDefault(); cancelActionRef.current(); } };
     document.addEventListener('keydown', handle);
-    return () => { window.clearTimeout(timer); document.removeEventListener('keydown', handle); document.body.style.overflow = previousOverflow; };
+    return () => document.removeEventListener('keydown', handle);
   }, []);
   return <div className={`generation-backdrop phase-${state.phase}`}>
-    <div className="generation-grid" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
-    <div className="generation-scan" aria-hidden="true" />
-    <section className="generation-stage" role="dialog" aria-modal="true" aria-labelledby="generation-title" aria-describedby="generation-detail">
-      <header className="generation-header"><div className="generation-brand"><span className="brand-mark"><span>F</span></span><div><strong>ForgeTwin</strong><small>LIVE ENGINEERING SEQUENCE</small></div></div><span className="generation-model"><i />AGENT + RAPIER ONLINE</span></header>
-      <div className="generation-main">
-        <div className="generation-visual" aria-hidden="true">
-          <span className="blueprint-axis x" /><span className="blueprint-axis y" />
-          <div className="generation-orbit orbit-one"><i /><i /><i /></div>
-          <div className="generation-orbit orbit-two"><i /><i /><i /><i /></div>
-          <div className="generation-core"><span><Cpu size={34} /></span><b>{Math.round(state.progress)}%</b><small>{state.phase === 'optimizing' ? 'REDESIGN' : state.phase.toUpperCase()}</small></div>
-          <span className="generation-pulse one" /><span className="generation-pulse two" /><span className="generation-pulse three" />
-        </div>
-        <div className="generation-copy">
-          <span className="generation-kicker"><Sparkles size={13} />{state.machineName ?? 'New physical system'}</span>
-          <h2 id="generation-title">{state.headline}</h2>
-          <p id="generation-detail">{state.detail}</p>
-          <blockquote>“{state.goal}”</blockquote>
-          <div className="generation-counters">
-            <span><small>Physical bodies</small><strong>{state.totalBodies ? `${state.builtBodies ?? 0}/${state.totalBodies}` : '—'}</strong></span>
-            <span><small>Graph links</small><strong>{state.totalLinks ? `${state.builtLinks ?? 0}/${state.totalLinks}` : '—'}</strong></span>
-            <span><small>Physics clock</small><strong>60 Hz</strong></span>
-          </div>
+    <section className="generation-stage" aria-label="Live engineering progress">
+      <span className="sr-only" role="status" aria-live="polite" aria-label="Live engineering progress">{state.headline}</span>
+      <header className="generation-header"><span className="generation-live-icon"><Cpu size={16} /></span><div><small>BUILDING IN THE VISIBLE WORLD</small><strong>{state.headline}</strong></div><b>{Math.round(state.progress)}%</b></header>
+      <div className="generation-copy">
+        <span className="generation-kicker"><Sparkles size={12} />{state.machineName ?? 'Interpreting the physical system'}</span>
+        <p aria-hidden="true">{state.detail}</p>
+        <div className="generation-counters" aria-label="Build counters">
+          <span><small>Bodies</small><strong>{state.totalBodies ? `${state.builtBodies ?? 0}/${state.totalBodies}` : '—'}</strong></span>
+          <span><small>Links</small><strong>{state.totalLinks ? `${state.builtLinks ?? 0}/${state.totalLinks}` : '—'}</strong></span>
+          <span><small>Physics</small><strong>60 Hz</strong></span>
         </div>
       </div>
       <ol className="generation-timeline" aria-label="Engineering stages">
-        {GENERATION_PHASES.map((item, index) => <li key={item.id} className={index < activeIndex || state.phase === 'complete' ? 'done' : index === activeIndex ? 'active' : ''}><span>{index < activeIndex || state.phase === 'complete' ? <Check size={12} /> : index + 1}</span><div><strong>{item.label}</strong><small>{item.short}</small></div></li>)}
+        {GENERATION_PHASES.map((item, index) => <li key={item.id} title={item.short} className={index < activeIndex || state.phase === 'complete' ? 'done' : index === activeIndex ? 'active' : ''}><span>{index < activeIndex || state.phase === 'complete' ? <Check size={10} /> : index + 1}</span><strong>{item.label}</strong></li>)}
       </ol>
-      <footer className="generation-footer"><div className="generation-progress"><i style={{ width: `${state.progress}%` }} /></div><span>{state.progress < 100 ? 'Shared world is updating in real time' : 'Opening the verified engineering workspace'}</span><button ref={cancelRef} type="button" onClick={onCancel} disabled={state.phase === 'complete'}>{state.phase === 'complete' ? <><Check size={13} />Verified</> : <><X size={13} />Cancel run</>}</button></footer>
+      <footer className="generation-footer"><div className="generation-progress" role="progressbar" aria-label="Engineering progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(state.progress)}><i style={{ width: `${state.progress}%` }} /></div><button type="button" onClick={onCancel} disabled={state.phase === 'complete'}>{state.phase === 'complete' ? <><Check size={12} />Verified</> : <><X size={12} />Cancel</>}</button></footer>
     </section>
   </div>;
 }
@@ -622,7 +609,7 @@ function Landing({ state, toolCount, prompt, promptError, busy, agentRuntime, ag
   const modelConnected = agentRuntime === 'server-model' || agentRuntime === 'session-model';
   return <div className="landing-shell"><header className="landing-nav"><button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button><div><span className={`landing-status ${modelConnected ? 'model-connected' : ''}`}><i />{agentRuntime === 'checking' ? 'Checking agent' : modelConnected ? `${agentModel} connected` : 'Local engineer ready'}</span><button className="ghost-button" onClick={onConfigureAgent}><KeyRound size={13} />{modelConnected ? 'Agent settings' : 'Connect AI'}</button><button className="ghost-button" onClick={onEnter}>Open sandbox</button></div></header>
     <main className="landing-hero"><div className="hero-copy"><span className="hero-kicker"><Sparkles size={13} />Agent-native physical engineering</span><h1>Don’t generate it.<br /><em>Engineer it.</em></h1><p>Describe almost any mechanical system. ForgeTwin decomposes the goal into reusable primitives, creates a jointed physical world, simulates it, measures failures, and redesigns the causal parts until the constraints pass.</p><GoalComposer id="design-goal" prompt={prompt} error={promptError} busy={busy} agentRuntime={agentRuntime} onPromptChange={onPromptChange} onGenerate={onGenerate} /><div className={`agent-runtime-card ${modelConnected ? 'connected' : 'local'}`}><span><Bot size={16} /></span><div><strong>{modelConnected ? `Flagship engineering agent · ${agentModel}` : 'Local deterministic engineer'}</strong><p>{modelConnected ? 'GPT-5.6 Sol plans, edits the existing world through chat, and selects evidence-driven redesigns. Every action still passes through guarded tools.' : 'Fully functional offline build, physics, telemetry, and bounded chat edits. Connect the flagship model for model-selected reasoning.'}</p></div><button type="button" onClick={onConfigureAgent}>{modelConnected ? 'Manage' : 'Connect model'}</button></div><div className="quick-examples" aria-label="Example engineering systems">{CHALLENGE_EXAMPLES.slice(0, 7).map((example) => <button key={example.id} type="button" onClick={() => onExample(example)}>{example.title}</button>)}</div><div className="hero-actions"><button className="ghost-button hero-secondary" onClick={onEnter} type="button"><Code2 size={15} />Explore empty world</button></div><div className="hero-proof"><span><strong>{primitiveCatalog.length}</strong> reusable primitives</span><span><strong>8</strong> joint types</span><span><strong>60 Hz</strong> multi-body physics</span></div></div>
-      <div className="hero-machine"><ForgeScene state={state} preview onComponentMove={() => undefined} onSelect={() => undefined} /><div className="hero-hud top"><span>LIVE PHYSICAL WORLD</span><strong>PROMPT → PRIMITIVES → PHYSICS</strong></div><div className="hero-hud bottom"><span>NO COMPLETE-MACHINE TEMPLATES</span><strong>ASSEMBLIES ARE SYNTHESIZED</strong></div><div className="hero-orbit-label one"><i />Explicit mass + material</div><div className="hero-orbit-label two"><i />Joints + control graph</div></div></main>
+      <div className="hero-machine"><ForgeScene state={state} preview operating onComponentMove={() => undefined} onSelect={() => undefined} /><div className="hero-hud top"><span>LIVE PHYSICAL WORLD</span><strong>PROMPT → PRIMITIVES → PHYSICS</strong></div><div className="hero-hud bottom"><span>NO COMPLETE-MACHINE TEMPLATES</span><strong>ASSEMBLIES ARE SYNTHESIZED</strong></div><div className="hero-orbit-label one"><i />Explicit mass + material</div><div className="hero-orbit-label two"><i />Joints + control graph</div></div></main>
     <section className="landing-strip" aria-label="How ForgeTwin works"><article><Cpu size={17} /><div><strong>Agent decomposes</strong><span>Goals become capabilities, constraints, bodies, joints, and control channels.</span></div></article><article><AlertTriangle size={17} /><div><strong>Physics rejects</strong><span>Mass, geometry, support, torque, contacts, and control become evidence.</span></div></article><article><Redo2 size={17} /><div><strong>Optimizer redesigns</strong><span>The agent changes causal fields and reruns the same shared world.</span></div></article><small>{toolCount === FORGE_TOOL_COUNT ? `${toolCount}/${FORGE_TOOL_COUNT} WebMCP tools live in this browser host` : `WebMCP host not connected · ${FORGE_TOOL_COUNT} local tools available`}</small></section>
     <section className="sector-library" aria-labelledby="sector-heading"><div><span className="eyebrow">Editable engineering prompt gallery</span><h2 id="sector-heading">Start with a machine anyone can recognize.</h2><p>Choose a complete example, edit its goal, or write your own. Each card explains both what the machine does and the low-level parts ForgeTwin will assemble.</p></div><div className="sector-grid">{engineeringExamples.map((example) => <button key={example.id} aria-label={`Use ${example.title} prompt: ${example.description}`} onClick={() => { onExample(example); window.scrollTo({ top: 0, behavior: 'smooth' }); }}><span>{example.sector}</span><strong>{example.title}</strong><p>{example.description}</p><small><b>Builds</b>{example.builds}</small></button>)}</div><p className="simulation-disclosure">ForgeTwin is a concept-level rigid-body sandbox. Production structures, medical equipment, vehicles, and lifting systems require professional analysis and certification.</p></section>
   </div>;

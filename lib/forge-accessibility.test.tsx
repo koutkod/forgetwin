@@ -44,10 +44,17 @@ describe('ForgeTwin accessible world editor shell', () => {
     const { getByRole, findByRole, findByText } = render(<ForgeTwinApp />);
     await waitFor(() => expect(getByRole('button', { name: 'Engineer locally' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer locally' }));
-    expect(await findByRole('dialog', { name: /reading the engineering intent|architecture resolved|materializing the machine/i })).toBeTruthy();
+    expect(await findByRole('status', { name: 'Live engineering progress' })).toBeTruthy();
     expect(await findByText('Generated + physics verified', {}, { timeout: 20_000 })).toBeTruthy();
     expect(getByRole('button', { name: 'Compare runs' })).toBeTruthy();
     expect(getByRole('button', { name: 'Select editable body' })).toBeTruthy();
+    const animate = getByRole('button', { name: 'Animate design' });
+    await waitFor(() => expect(animate.hasAttribute('disabled')).toBe(false));
+    expect(animate.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(animate);
+    expect(getByRole('button', { name: 'Pause animation' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(getByRole('button', { name: 'Pause animation' }));
+    expect(getByRole('button', { name: 'Animate design' }).getAttribute('aria-pressed')).toBe('false');
   }, 25_000);
 
   it('routes a connected model decision into the guarded in-app agent loop', async () => {

@@ -2,13 +2,143 @@
 
 import { ContactShadows, Edges, Grid, Line, OrbitControls, RoundedBox } from '@react-three/drei';
 import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
-type Props = { state: ForgeState; preview?: boolean; onComponentMove: (componentId: string, x: number) => void; onSelect: (id: string) => void };
+type Props = { state: ForgeState; preview?: boolean; operating?: boolean; onComponentMove: (componentId: string, x: number) => void; onSelect: (id: string) => void };
+
+type OperatingContext = {
+  enabled: boolean;
+  machine: string;
+  drawbridgePivot: Vec3 | null;
+};
+
+const OperationTimeContext = createContext<{ current: number }>({ current: 0 });
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const smoothstep = (value: number) => {
+  const t = clamp01(value);
+  return t * t * (3 - 2 * t);
+};
+const suspensionTravel = (elapsed: number, index: number) => (.5 + .5 * Math.sin(elapsed * 1.25 + index * 1.17)) * .14;
+const operatingValue = (elapsed: number) => .5 + Math.sin(elapsed * 1.45) * .36;
+
+function routeProgress(progress: number, start: Vec3, split: Vec3, end: Vec3) {
+  if (progress < .64) {
+    const t = smoothstep(progress / .64);
+    return start.map((value, axis) => value + (split[axis] - value) * t) as Vec3;
+  }
+  const t = smoothstep((progress - .64) / .36);
+  return split.map((value, axis) => value + (end[axis] - value) * t) as Vec3;
+}
+
+function operationPose(component: MachineComponent, elapsed: number, context: OperatingContext) {
+  const position = [...component.position] as Vec3;
+  const rotation = [...component.rotation] as Vec3;
+  if (!context.enabled) return { position, rotation };
+  const role = component.role.toLowerCase();
+  const form = String(component.parameters.product_form ?? '');
+  const wave = .5 - Math.cos(elapsed * 1.45) * .5;
+  const signed = Math.sin(elapsed * 1.45);
+  const phaseSeed = Number(component.parameters.queue_index ?? component.parameters.operation_index ?? (component.id.length % 5));
+  const progress = (elapsed * .14 + phaseSeed * .19) % 1;
+
+  if (form) {
+    if (form.startsWith('package-')) {
+      const red = form.endsWith('red');
+      return { position: routeProgress(progress, [-3.15, 1.3, 0], [1.25, 1.3, 0], [3.62, .98, red ? -1.85 : 1.85]), rotation };
+    }
+    if (form === 'shipping-carton') {
+      const staged = progress < .2 ? progress * 1.25 : progress < .48 ? .25 : progress < .68 ? .25 + (progress - .48) * 1.25 : .5 + (progress - .68) * 1.56;
+      position[0] = -3.45 + Math.min(1, staged) * 7;
+      position[1] = 1.28;
+      position[2] = 0;
+      return { position, rotation };
+    }
+    if (form === 'tomato') {
+      const accepted = component.parameters.grade === 'ripe';
+      return { position: routeProgress(progress, [-3.25, 1.23, 0], [1.35, 1.15, 0], [3.12, .82, accepted ? -.98 : .98]), rotation };
+    }
+    if (['metal-can', 'plastic-bottle', 'reject-object'].includes(form)) {
+      const routeZ = form === 'metal-can' ? -1.65 : form === 'plastic-bottle' ? 0 : 1.65;
+      const routeX = form === 'reject-object' ? 2.05 : 3.45;
+      const routed = routeProgress(progress, [-3.15, 1.75, 0], [.35, 1.45, 0], [routeX, .75, routeZ]);
+      rotation[0] += elapsed * (form === 'metal-can' ? 1.9 : 1.1);
+      return { position: routed, rotation };
+    }
+  }
+
+  const wheelLike = component.primitive === 'wheel' || component.parameters.bicycle_wheel || component.parameters.road_vehicle_wheel || component.parameters.rover_wheel;
+  if (wheelLike) rotation[2] += elapsed * 3.4;
+  if (component.primitive === 'gear' || component.parameters.bicycle_sprocket) {
+    const direction = /output/.test(role) ? -1 : 1;
+    const teeth = Math.max(12, Number(component.parameters.teeth ?? 18));
+    rotation[2] += elapsed * (40.5 / teeth) * direction;
+  }
+  if (component.parameters.recycling_drum) rotation[0] += elapsed * 1.85;
+  else if (component.primitive === 'pulley') rotation[2] += elapsed * 1.85;
+
+  if (/solar|tracking/.test(context.machine)) {
+    if (component.parameters.solar_moving || component.parameters.panel || role.includes('cross rail')) {
+      const angle = signed * .38;
+      const pivotX = 0, pivotY = 2.58;
+      const dx = component.position[0] - pivotX, dy = component.position[1] - pivotY;
+      position[0] = pivotX + dx * Math.cos(angle) - dy * Math.sin(angle);
+      position[1] = pivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
+      rotation[2] += angle;
+    }
+    if (role.includes('simulated moving sun')) {
+      position[0] += Math.sin(elapsed * .36) * 1.35;
+      position[2] += Math.cos(elapsed * .36) * .85;
+    }
+  }
+
+  if (/patient/.test(context.machine)) {
+    if (/spreader|sling|strap|hanger|patient_load/.test(role) || component.parameters.patient_sling || component.parameters.sling_strap) position[1] += wave * .58;
+    if (role.includes('lifting boom')) rotation[2] += signed * .07;
+    if (role.includes('lift actuator')) position[1] += signed * .06;
+  } else if (/crane/.test(context.machine)) {
+    if (/hook|suspended payload|load cable/.test(role)) position[1] += wave * 1.05;
+    if (role.includes('boom head pulley')) rotation[2] += elapsed * 1.35;
+  }
+
+  if (/robotic arm|three-axis/.test(context.machine)) {
+    const match = role.match(/serial link (\d)/);
+    if (match) rotation[2] += Math.sin(elapsed * .7 + Number(match[1]) * .9) * (.055 + Number(match[1]) * .012);
+    if (/gripper|tool pose camera/.test(role)) position[1] += Math.sin(elapsed * .7 + 2.7) * .08;
+  }
+
+  if (/bridge/.test(context.machine) && !/drawbridge/.test(context.machine) && role.includes('moving design load')) position[0] += Math.sin(elapsed * .48) * 2.2;
+
+  if (/drawbridge/.test(context.machine) && context.drawbridgePivot && /deck|hinged span|chord|brace|design load|load gauge/.test(role)) {
+    const angle = -wave * .78;
+    const [pivotX, pivotY] = context.drawbridgePivot;
+    const dx = component.position[0] - pivotX;
+    const dy = component.position[1] - pivotY;
+    position[0] = pivotX + dx * Math.cos(angle) - dy * Math.sin(angle);
+    position[1] = pivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
+    rotation[2] += angle;
+  }
+  if (/drawbridge/.test(context.machine) && role.includes('counterweight')) position[1] -= wave * .45;
+
+  if (/suspension/.test(context.machine)) {
+    const suspensionIndex = Number(component.parameters.operation_index ?? 0);
+    const travel = suspensionTravel(elapsed, suspensionIndex);
+    if (/suspension chassis|passenger car body|passenger cabin/.test(role)) position[1] += Math.sin(elapsed * 1.25 + .35) * .024;
+    if (component.parameters.suspension_wheel || component.parameters.suspension_upright) position[1] += travel;
+    if (component.parameters.suspension_arm) rotation[0] += (travel - .07) * .72;
+    if (component.primitive === 'spring' && component.parameters.suspension_corner) position[1] += travel * .5;
+    if (component.parameters.road_bump) position[1] += travel;
+  }
+  if (component.parameters.buffer_gate) position[1] -= wave * .22;
+  if (component.parameters.sorting_diverter) rotation[1] += signed * .48;
+  if (component.parameters.fixture_clamp) position[1] -= wave * .13;
+  if (component.parameters.recycling_magnet) position[1] += Math.sin(elapsed * .8) * .035;
+  return { position, rotation };
+}
 
 function previewWorld() {
   const plan = compileDesignBrief(DEFAULT_DESIGN_PROMPT);
@@ -34,13 +164,21 @@ function Gear({ component, xray, selected }: { component: MachineComponent; xray
   return <group rotation={[Math.PI / 2, 0, 0]}><mesh castShadow><cylinderGeometry args={[radius, radius, component.dimensions[1], Math.max(18, teeth * 2)]} /><StandardMaterial color="#c89443" xray={xray} selected={selected} metalness={.72} roughness={.28} /></mesh>{Array.from({ length: teeth }, (_, index) => { const angle = index / teeth * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius, 0, Math.sin(angle) * radius]} rotation={[0, -angle, 0]}><boxGeometry args={[radius * .22, component.dimensions[1] * 1.08, radius * .2]} /><StandardMaterial color="#c89443" xray={xray} selected={selected} metalness={.72} roughness={.28} /></mesh>; })}<mesh><cylinderGeometry args={[radius * .28, radius * .28, component.dimensions[1] * 1.35, 28]} /><StandardMaterial color="#73838a" xray={xray} selected={selected} metalness={.88} roughness={.18} /></mesh><mesh><cylinderGeometry args={[radius * .1, radius * .1, component.dimensions[1] * 1.5, 20]} /><StandardMaterial color="#202a30" xray={xray} selected={selected} metalness={.7} roughness={.3} /></mesh></group>;
 }
 
-function Spring({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+function Spring({ component, xray, selected, operating }: { component: MachineComponent; xray: boolean; selected: boolean; operating: boolean }) {
   const turns = 18;
+  const springRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
   const points = Array.from({ length: turns * 5 }, (_, index) => {
     const t = index / (turns * 5 - 1); const angle = t * Math.PI * 2 * turns;
     return [Math.cos(angle) * component.dimensions[0], (t - .5) * component.dimensions[1], Math.sin(angle) * component.dimensions[0]] as Vec3;
   });
-  return <Line points={points} color={selected ? '#65e5ff' : component.color} lineWidth={xray ? 1 : 2} transparent opacity={xray ? .7 : 1} />;
+  useFrame(() => {
+    if (!springRef.current) return;
+    const index = Number(component.parameters.operation_index ?? 0);
+    const travel = operating && component.parameters.suspension_corner ? suspensionTravel(operationTime.current, index) : 0;
+    springRef.current.scale.y = Math.max(.72, 1 - travel / Math.max(.2, component.dimensions[1]));
+  });
+  return <group ref={springRef}><Line points={points} color={selected ? '#65e5ff' : component.color} lineWidth={xray ? 1 : 2} transparent opacity={xray ? .7 : 1} /></group>;
 }
 
 function IndustrialFrame({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -223,19 +361,32 @@ function MachinedPlate({ component, color, xray, selected }: { component: Machin
   </group>;
 }
 
-function RollerBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+function RollerBody({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
   const radius = component.dimensions[0] / 2, length = component.dimensions[1];
-  return <group rotation={[Math.PI / 2, 0, 0]}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 28]} /><StandardMaterial color="#9ba8ae" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .51, 0]}><cylinderGeometry args={[radius * .42, radius * .42, length * .08, 20]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.24} /></mesh>)}</group>;
+  const rollerRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (rollerRef.current) rollerRef.current.rotation.y = operating ? operationTime.current * 2.6 : 0; });
+  return <group rotation={[Math.PI / 2, 0, 0]}><group ref={rollerRef}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 28]} /><StandardMaterial color="#9ba8ae" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .51, 0]}><cylinderGeometry args={[radius * .42, radius * .42, length * .08, 20]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.24} /></mesh>)}</group></group>;
 }
 
-function ShaftBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+function ShaftBody({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
   const radius = component.dimensions[0] / 2, length = component.dimensions[1];
-  return <group><mesh castShadow><cylinderGeometry args={[radius, radius, length * .76, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.9} roughness={.17} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .43, 0]}><cylinderGeometry args={[radius * .7, radius * .7, length * .14, 24]} /><StandardMaterial color="#c5d0d4" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>)}<group position={[radius * .58, 0, 0]}><BoxBody size={[radius * .22, length * .42, radius * .18]} color="#273138" xray={xray} selected={selected} radius={.008} /></group></group>;
+  const shaftRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => {
+    if (!shaftRef.current) return;
+    const configured = Number(component.parameters.operation_spin ?? (component.bodyType === 'dynamic' && !component.parameters.solar_pivot_axle ? 1.85 : 0));
+    shaftRef.current.rotation.y = operating ? operationTime.current * configured : 0;
+  });
+  return <group ref={shaftRef}><mesh castShadow><cylinderGeometry args={[radius, radius, length * .76, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.9} roughness={.17} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .43, 0]}><cylinderGeometry args={[radius * .7, radius * .7, length * .14, 24]} /><StandardMaterial color="#c5d0d4" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>)}<group position={[radius * .58, 0, 0]}><BoxBody size={[radius * .22, length * .42, radius * .18]} color="#273138" xray={xray} selected={selected} radius={.008} /></group></group>;
 }
 
-function ServoBody({ component, color, xray, selected, actuatorValue }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number }) {
+function ServoBody({ component, color, xray, selected, actuatorValue, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean }) {
   const [x, y, z] = component.dimensions;
-  return <group><BoxBody size={[x, y, z]} color={color} xray={xray} selected={selected} radius={.055} metalness={.7} roughness={.26} /><mesh position={[0, y * .58, 0]}><cylinderGeometry args={[x * .2, x * .2, y * .18, 24]} /><StandardMaterial color="#dbe4e7" xray={xray} selected={selected} metalness={.92} roughness={.14} /></mesh><group position={[0, y * .69, 0]} rotation={[0, actuatorValue * Math.PI * .8, 0]}><BoxBody size={[x * .95, y * .12, z * .16]} color="#e8a246" xray={xray} selected={selected} radius={.018} /></group></group>;
+  const horn = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (horn.current) horn.current.rotation.y = operating ? Math.sin(operationTime.current * 1.45) * .75 : actuatorValue * Math.PI * .8; });
+  return <group><BoxBody size={[x, y, z]} color={color} xray={xray} selected={selected} radius={.055} metalness={.7} roughness={.26} /><mesh position={[0, y * .58, 0]}><cylinderGeometry args={[x * .2, x * .2, y * .18, 24]} /><StandardMaterial color="#dbe4e7" xray={xray} selected={selected} metalness={.92} roughness={.14} /></mesh><group ref={horn} position={[0, y * .69, 0]} rotation={[0, actuatorValue * Math.PI * .8, 0]}><BoxBody size={[x * .95, y * .12, z * .16]} color="#e8a246" xray={xray} selected={selected} radius={.018} /></group></group>;
 }
 
 function ControlCabinet({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -248,10 +399,11 @@ function ConveyorFrame({ component, color, xray, selected }: { component: Machin
   return <group><group position={[0, y * .42, z * .43]}><BoxBody size={[x, rail, rail]} color={color} xray={xray} selected={selected} radius={.02} /></group><group position={[0, y * .42, -z * .43]}><BoxBody size={[x, rail, rail]} color={color} xray={xray} selected={selected} radius={.02} /></group>{[-.42, .42].flatMap((xf) => [-.4, .4].map((zf) => <group key={`${xf}-${zf}`} position={[x * xf, 0, z * zf]}><BoxBody size={[leg, y, leg]} color={color} xray={xray} selected={selected} radius={.025} /><group position={[0, -y * .51, 0]}><BoxBody size={[leg * 2.2, .06, leg * 2.2]} color="#303c42" xray={xray} selected={selected} radius={.018} /></group></group>))}</group>;
 }
 
-function IndustrialConveyor({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+function IndustrialConveyor({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
   const [x, y, z] = component.dimensions;
   const moving = useRef<Group>(null);
-  useFrame(({ clock }) => { if (moving.current) moving.current.position.x = (clock.elapsedTime * .42) % Math.max(.22, x * .12) - x * .06; });
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (moving.current) moving.current.position.x = operating ? (operationTime.current * .42) % Math.max(.22, x * .12) - x * .06 : 0; });
   return <group><BoxBody size={[x, y * .76, z]} color="#34434a" xray={xray} selected={selected} radius={.06} metalness={.66} roughness={.3} /><group position={[0, y * .46, 0]}><BoxBody size={[x * .98, y * .22, z * .84]} color="#171d21" xray={xray} selected={selected} radius={.04} metalness={.1} roughness={.88} /></group><group ref={moving} position={[0, y * .59, 0]}>{Array.from({ length: 10 }, (_, index) => <mesh key={index} position={[-x * .52 + index * x * .12, 0, 0]}><boxGeometry args={[.028, .012, z * .75]} /><meshStandardMaterial color="#48545a" roughness={.65} /></mesh>)}</group>{[-1, 1].map((side) => <group key={side} position={[0, y * .58, side * z * .47]}><BoxBody size={[x, y * .48, .075]} color={color} xray={xray} selected={selected} radius={.022} metalness={.86} roughness={.2} /></group>)}{[-1, 1].map((side) => <mesh key={side} position={[side * x * .47, y * .38, 0]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[y * .45, y * .45, z * .86, 28]} /><StandardMaterial color="#6d7b82" xray={xray} selected={selected} metalness={.82} roughness={.22} /></mesh>)}</group>;
 }
 
@@ -274,10 +426,15 @@ function routeColor(route: unknown, fallback = '#5f7883') {
 function ProductItem({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
   const [x, y, z] = component.dimensions;
   const form = String(component.parameters.product_form ?? 'shipping-carton');
-  if (form === 'tomato') return <group>
-    <mesh castShadow scale={[x / 2, y / 2, z / 2]}><sphereGeometry args={[1, 28, 20]} /><StandardMaterial color={component.parameters.grade === 'large' ? '#e64032' : '#ef5741'} xray={xray} selected={selected} metalness={.02} roughness={.68} /></mesh>
+  if (form === 'tomato') {
+    const grade = String(component.parameters.grade ?? 'ripe');
+    const tomatoColor = grade === 'ripe' ? '#df3d32' : grade === 'damaged' ? '#6f6b32' : '#65a83f';
+    return <group>
+    <mesh castShadow scale={[x / 2, y / 2, z / 2]}><sphereGeometry args={[1, 28, 20]} /><StandardMaterial color={tomatoColor} xray={xray} selected={selected} metalness={.02} roughness={.68} /></mesh>
     <mesh position={[0, y * .52, 0]}><coneGeometry args={[x * .18, y * .18, 7]} /><StandardMaterial color="#418646" xray={xray} selected={selected} metalness={.02} roughness={.8} /></mesh>
+    {grade === 'damaged' && !xray && <mesh position={[x * .2, y * .1, z * .45]}><sphereGeometry args={[x * .09, 12, 10]} /><meshStandardMaterial color="#3d2b1d" roughness={.9} /></mesh>}
   </group>;
+  }
   if (form === 'metal-can') return <group>
     <mesh castShadow><cylinderGeometry args={[x / 2, x / 2, y, 32]} /><StandardMaterial color="#aebbc0" xray={xray} selected={selected} metalness={.88} roughness={.22} /></mesh>
     {[-1, 1].map((side) => <mesh key={side} position={[0, side * y * .49, 0]}><torusGeometry args={[x * .43, x * .045, 8, 30]} /><StandardMaterial color="#dce3e5" xray={xray} selected={selected} metalness={.94} roughness={.13} /></mesh>)}
@@ -335,6 +492,62 @@ function GearboxBearing({ component, color, xray, selected }: { component: Machi
   </group>;
 }
 
+function AnimatedZoneRoller({ position, radius, length, operating, xray, selected }: { position: Vec3; radius: number; length: number; operating: boolean; xray: boolean; selected: boolean }) {
+  const ref = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (ref.current) ref.current.rotation.x = operating ? operationTime.current * 3.4 : 0; });
+  return <group ref={ref} position={position} rotation={[Math.PI / 2, 0, 0]}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 24]} /><StandardMaterial color="#a8b4b9" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh><mesh><cylinderGeometry args={[radius * .32, radius * .32, length * 1.08, 16]} /><StandardMaterial color="#243139" xray={xray} selected={selected} /></mesh></group>;
+}
+
+function AccumulationBed({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const count = 12;
+  return <group>
+    <group position={[0, -y * .16, 0]}><BoxBody size={[x, y * .58, z]} color="#344149" xray={xray} selected={selected} radius={.045} metalness={.72} roughness={.28} /></group>
+    {Array.from({ length: count }, (_, index) => <AnimatedZoneRoller key={index} position={[-x * .44 + index / (count - 1) * x * .88, y * .32, 0]} radius={Math.max(.055, y * .28)} length={z * .82} operating={operating} xray={xray} selected={selected} />)}
+    {[-1, 1].map((side) => <group key={side} position={[0, y * .31, side * z * .48]}><BoxBody size={[x, y * .35, .07]} color={color} xray={xray} selected={selected} radius={.02} /></group>)}
+    {!xray && <group position={[0, -y * .5, z * .53]}><BoxBody size={[x * .76, y * .34, .025]} color={routeColor(component.parameters.zone_color, '#3b82a4')} xray={false} selected={selected} radius={.01} metalness={.08} roughness={.68} /></group>}
+  </group>;
+}
+
+function RecyclingDrum({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const radius = component.dimensions[0] / 2;
+  const length = component.dimensions[1];
+  return <group>
+    {[-.48, -.24, 0, .24, .48].map((factor) => <mesh key={factor} position={[factor * length, 0, 0]} rotation={[0, Math.PI / 2, 0]}><torusGeometry args={[radius, .055, 10, 42]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.24} /></mesh>)}
+    {Array.from({ length: 12 }, (_, index) => { const angle = index / 12 * Math.PI * 2; return <group key={index} rotation={[angle, 0, 0]} position={[0, Math.sin(angle) * radius, Math.cos(angle) * radius]}><BoxBody size={[length, .045, .045]} color="#829198" xray={xray} selected={selected} radius={.01} /></group>; })}
+    <mesh rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[radius * .94, radius * .94, length, 42, 1, true]} /><meshStandardMaterial color="#8ba0a8" wireframe transparent opacity={xray ? .34 : .16} /></mesh>
+    {[-1, 1].map((side) => <mesh key={side} position={[side * length * .52, 0, 0]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[radius * .16, radius * .16, length * .12, 22]} /><StandardMaterial color="#d2dbde" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>)}
+  </group>;
+}
+
+function RecyclingMagnet({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group><group position={[-x * .34, 0, 0]}><BoxBody size={[x * .28, y, z]} color="#d85055" xray={xray} selected={selected} radius={.08} /></group><group position={[x * .34, 0, 0]}><BoxBody size={[x * .28, y, z]} color="#4b83ce" xray={xray} selected={selected} radius={.08} /></group><group position={[0, y * .38, 0]}><BoxBody size={[x, y * .25, z]} color="#67757c" xray={xray} selected={selected} radius={.06} /></group><mesh position={[0, -y * .22, 0]}><boxGeometry args={[x * .42, y * .55, z * .35]} /><meshBasicMaterial color="#7fe6ff" transparent opacity={xray ? .24 : .055} /></mesh></group>;
+}
+
+function RecyclingHopper({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const wall = .08;
+  return <group>
+    <group position={[-x * .42, 0, 0]} rotation={[0, 0, -.16]}><BoxBody size={[wall, y, z]} color="#59676e" xray={xray} selected={selected} radius={.025} /></group>
+    <group position={[x * .42, 0, 0]} rotation={[0, 0, .16]}><BoxBody size={[wall, y, z]} color="#59676e" xray={xray} selected={selected} radius={.025} /></group>
+    {[-1, 1].map((side) => <group key={side} position={[0, 0, side * z * .45]} rotation={[side * -.14, 0, 0]}><BoxBody size={[x, y, wall]} color="#68777e" xray={xray} selected={selected} radius={.025} /></group>)}
+    <group position={[0, -y * .48, 0]}><BoxBody size={[x * .56, wall, z * .56]} color="#d48d39" xray={xray} selected={selected} radius={.02} /></group>
+    {!xray && <Line points={[[-x * .52, y * .5, -z * .52], [x * .52, y * .5, -z * .52], [x * .52, y * .5, z * .52], [-x * .52, y * .5, z * .52], [-x * .52, y * .5, -z * .52]]} color="#e6edf0" lineWidth={1.5} />}
+  </group>;
+}
+
+function CarBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <group position={[0, -y * .18, 0]}><BoxBody size={[x, y * .48, z]} color={color} xray={xray} selected={selected} radius={.16} metalness={.68} roughness={.28} /></group>
+    <group position={[-x * .08, y * .17, 0]}><BoxBody size={[x * .48, y * .55, z * .82]} color="#263d49" xray={xray} selected={selected} radius={.14} metalness={.2} roughness={.22} /></group>
+    <group position={[x * .31, y * .06, 0]}><BoxBody size={[x * .35, y * .28, z * .9]} color={color} xray={xray} selected={selected} radius={.1} /></group>
+    {!xray && <><group position={[x * .51, -.02, -z * .28]}><BoxBody size={[.04, y * .17, z * .2]} color="#f6f1c8" xray={false} selected={selected} radius={.02} metalness={.05} roughness={.25} /></group><group position={[x * .51, -.02, z * .28]}><BoxBody size={[.04, y * .17, z * .2]} color="#f6f1c8" xray={false} selected={selected} radius={.02} /></group></>}
+  </group>;
+}
+
 function BufferGate({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const [x, y, z] = component.dimensions;
   return <group><BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.035} metalness={.72} roughness={.3} />{!xray && [-.3, -.1, .1, .3].map((factor) => <group key={factor} position={[0, y * factor, z * .51]} rotation={[0, 0, -.45]}><BoxBody size={[x * 1.02, y * .12, .02]} color="#f2b54f" xray={false} selected={selected} radius={.005} /></group>)}</group>;
@@ -364,9 +577,12 @@ function SortingDiverter({ component, color, xray, selected }: { component: Mach
   return <group><group position={[-x * .42, -y * .35, 0]}><mesh><cylinderGeometry args={[z * .72, z * .72, y * 2.4, 24]} /><StandardMaterial color="#d1dade" xray={xray} selected={selected} metalness={.9} roughness={.14} /></mesh><mesh position={[0, y * 1.24, 0]}><cylinderGeometry args={[z * .38, z * .38, y * .18, 20]} /><StandardMaterial color="#f2aa46" xray={xray} selected={selected} /></mesh></group><group position={[x * .05, 0, 0]}><BoxBody size={[x * .9, y, z]} color={color} xray={xray} selected={selected} radius={.05} metalness={.7} roughness={.28} /></group><group position={[x * .42, 0, 0]}><BoxBody size={[.08, y * 1.7, z * 1.45]} color="#f6bd57" xray={xray} selected={selected} radius={.025} /></group></group>;
 }
 
-function LinearActuator({ component, color, xray, selected, actuatorValue }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number }) {
+function LinearActuator({ component, color, xray, selected, actuatorValue, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean }) {
   const [diameter, length] = component.dimensions;
-  return <group><mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .58, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.75} roughness={.24} /></mesh><mesh position={[0, length * (.18 + actuatorValue * .2), 0]}><cylinderGeometry args={[diameter * .24, diameter * .24, length * .72, 22]} /><StandardMaterial color="#d8e1e4" xray={xray} selected={selected} metalness={.95} roughness={.1} /></mesh>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .37, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[diameter * .48, diameter * .13, 9, 24]} /><StandardMaterial color="#3c4a51" xray={xray} selected={selected} /></mesh>)}</group>;
+  const rodRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (rodRef.current) rodRef.current.position.y = length * (.18 + (operating ? operatingValue(operationTime.current) : actuatorValue) * .2); });
+  return <group><mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .58, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.75} roughness={.24} /></mesh><group ref={rodRef} position={[0, length * (.18 + actuatorValue * .2), 0]}><mesh><cylinderGeometry args={[diameter * .24, diameter * .24, length * .72, 22]} /><StandardMaterial color="#d8e1e4" xray={xray} selected={selected} metalness={.95} roughness={.1} /></mesh></group>{[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .37, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[diameter * .48, diameter * .13, 9, 24]} /><StandardMaterial color="#3c4a51" xray={xray} selected={selected} /></mesh>)}</group>;
 }
 
 function BeltBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -517,15 +733,31 @@ function CopperPipe({ component, color, xray, selected }: { component: MachineCo
   </group>;
 }
 
-function FixtureClamp({ component, color, xray, selected, actuatorValue }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number }) {
+function FixtureClamp({ component, color, xray, selected, actuatorValue, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean }) {
   const side = Number(component.parameters.clamp_side ?? 1);
   const [diameter, length] = component.dimensions;
+  const rodRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  useFrame(() => { if (rodRef.current) rodRef.current.position.y = length * (.22 + (operating ? operatingValue(operationTime.current) : actuatorValue) * .13); });
   return <group>
     <mesh castShadow><cylinderGeometry args={[diameter / 2, diameter / 2, length * .62, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>
-    <mesh position={[0, length * (.22 + actuatorValue * .13), 0]}><cylinderGeometry args={[diameter * .24, diameter * .24, length * .58, 18]} /><StandardMaterial color="#dce5e8" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>
+    <group ref={rodRef} position={[0, length * (.22 + actuatorValue * .13), 0]}><mesh><cylinderGeometry args={[diameter * .24, diameter * .24, length * .58, 18]} /><StandardMaterial color="#dce5e8" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh></group>
     <group position={[-side * .34, length * .48, 0]}><BoxBody size={[.78, .13, .18]} color="#e3a44a" xray={xray} selected={selected} radius={.025} metalness={.65} roughness={.28} /></group>
     <group position={[-side * .72, length * .38, 0]}><BoxBody size={[.28, .15, .42]} color="#303d44" xray={xray} selected={selected} radius={.025} /></group>
   </group>;
+}
+
+function GripperBody({ component, color, xray, selected, actuatorValue, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean }) {
+  const jawRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  const jawPosition = (value: number) => component.dimensions[2] * (.48 - value * .18);
+  useFrame(() => {
+    const value = operating ? operatingValue(operationTime.current) : actuatorValue;
+    const [left, right] = jawRef.current?.children ?? [];
+    if (left) left.position.z = -jawPosition(value);
+    if (right) right.position.z = jawPosition(value);
+  });
+  return <group><BoxBody size={[component.dimensions[0], component.dimensions[1], component.dimensions[2] * .35]} color={color} xray={xray} selected={selected} /><group ref={jawRef}>{[-1, 1].map((side) => <group key={side} position={[component.dimensions[0] * .38, -.2, side * jawPosition(actuatorValue)]}><mesh><boxGeometry args={[component.dimensions[0] * .55, component.dimensions[1] * 1.6, component.dimensions[2] * .16]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh></group>)}</group></group>;
 }
 
 function LocatingPin({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -562,10 +794,15 @@ function LightBody({ component, color, xray, selected }: { component: MachineCom
   </group>;
 }
 
-function ComponentShape({ component, xray, selected, actuatorValue }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number }) {
+function ComponentShape({ component, xray, selected, actuatorValue, operating }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
   if (component.parameters.product_form) return <ProductItem component={component} xray={xray} selected={selected} />;
   if (component.parameters.patient_sling) return <PatientSling component={component} xray={xray} selected={selected} />;
+  if (component.parameters.automotive_body) return <CarBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.recycling_hopper) return <RecyclingHopper component={component} xray={xray} selected={selected} />;
+  if (component.parameters.recycling_drum) return <RecyclingDrum component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.recycling_magnet) return <RecyclingMagnet component={component} xray={xray} selected={selected} />;
+  if (component.parameters.accumulation_zone) return <AccumulationBed component={component} color={color} xray={xray} selected={selected} operating={operating} />;
   if (component.parameters.gearbox_housing) return <GearboxHousing component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.gearbox_bearing) return <GearboxBearing component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.buffer_gate) return <BufferGate component={component} color={color} xray={xray} selected={selected} />;
@@ -586,7 +823,7 @@ function ComponentShape({ component, xray, selected, actuatorValue }: { componen
   if (component.parameters.fixture_plate) return <FixturePlate component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.heat_exchanger_core) return <HeatExchangerCore component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.hvac_pipe) return <CopperPipe component={component} color={color} xray={xray} selected={selected} />;
-  if (component.parameters.fixture_clamp) return <FixtureClamp component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} />;
+  if (component.parameters.fixture_clamp) return <FixtureClamp component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operating} />;
   if (component.parameters.locating_pin) return <LocatingPin component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.sorting_sensor) return <SortingSensor component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.sorting_diverter) return <SortingDiverter component={component} color={color} xray={xray} selected={selected} />;
@@ -597,17 +834,17 @@ function ComponentShape({ component, xray, selected, actuatorValue }: { componen
   if (/lattice.*mast|tower mast/.test(component.role)) return <LatticeMast component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.panel) return <SolarPanel component={component} xray={xray} selected={selected} />;
   if (component.primitive === 'gear') return <Gear component={{ ...component, color }} xray={xray} selected={selected} />;
-  if (component.primitive === 'spring') return <Spring component={{ ...component, color }} xray={xray} selected={selected} />;
+  if (component.primitive === 'spring') return <Spring component={{ ...component, color }} xray={xray} selected={selected} operating={operating} />;
   if (component.primitive === 'frame') return <IndustrialFrame component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'beam') return <StructuralBeam component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'plate') return <MachinedPlate component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'wheel') return <Wheel component={component} color={color} xray={xray} selected={selected} />;
-  if (component.primitive === 'roller') return <RollerBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'roller') return <RollerBody component={component} color={color} xray={xray} selected={selected} operating={operating} />;
   if (component.primitive === 'pulley') return <Pulley component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'motor') return <DriveBody component={component} color={color} xray={xray} selected={selected} />;
-  if (component.primitive === 'servo') return <ServoBody component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} />;
-  if (component.primitive === 'shaft') return <ShaftBody component={component} color={color} xray={xray} selected={selected} />;
-  if (component.primitive === 'piston') return <LinearActuator component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} />;
+  if (component.primitive === 'servo') return <ServoBody component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operating} />;
+  if (component.primitive === 'shaft') return <ShaftBody component={component} color={color} xray={xray} selected={selected} operating={operating} />;
+  if (component.primitive === 'piston') return <LinearActuator component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operating} />;
   if (component.primitive === 'belt') return <BeltBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'cable') {
     const start = [Number(component.parameters.start_x), Number(component.parameters.start_y), Number(component.parameters.start_z)] as Vec3;
@@ -618,9 +855,9 @@ function ComponentShape({ component, xray, selected, actuatorValue }: { componen
   if (component.primitive === 'sensor' || component.primitive === 'camera') return <group><BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.035} /><mesh position={[0, 0, component.dimensions[2] * .58]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[component.dimensions[0] * .22, component.dimensions[0] * .22, component.dimensions[2] * .18, 22]} /><StandardMaterial color="#5ee8ff" xray={xray} selected={selected} metalness={.22} roughness={.14} /></mesh><mesh position={[0, 0, component.dimensions[2] * 2.2]}><coneGeometry args={[component.dimensions[0] * 1.4, component.dimensions[2] * 3.2, 16, 1, true]} /><meshBasicMaterial color="#57e5ff" transparent opacity={xray ? .19 : .06} depthWrite={false} /></mesh></group>;
   if (component.primitive === 'light') return <LightBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'controller') return <ControlCabinet component={component} color={color} xray={xray} selected={selected} />;
-  if (component.primitive === 'conveyor') return <IndustrialConveyor component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'conveyor') return <IndustrialConveyor component={component} color={color} xray={xray} selected={selected} operating={operating} />;
   if (component.primitive === 'ramp') return <TransferChute component={component} color={color} xray={xray} selected={selected} />;
-  if (component.primitive === 'gripper') return <group><BoxBody size={[component.dimensions[0], component.dimensions[1], component.dimensions[2] * .35]} color={color} xray={xray} selected={selected} />{[-1, 1].map((side) => <mesh key={side} position={[component.dimensions[0] * .38, -.2, side * component.dimensions[2] * (.48 - actuatorValue * .18)]}><boxGeometry args={[component.dimensions[0] * .55, component.dimensions[1] * 1.6, component.dimensions[2] * .16]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>)}</group>;
+  if (component.primitive === 'gripper') return <GripperBody component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operating} />;
   if (component.primitive === 'hook') return <mesh><torusGeometry args={[component.dimensions[0], component.dimensions[0] * .28, 12, 26, Math.PI * 1.55]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>;
   if (component.primitive === 'container' || component.primitive === 'counterweight') return <Crate component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'support') return <group><BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.055} /><group position={[0, -component.dimensions[1] * .5, 0]}><BoxBody size={[component.dimensions[0] * 1.35, Math.max(.08, component.dimensions[1] * .1), component.dimensions[2] * 1.35]} color="#35434a" xray={xray} selected={selected} /></group></group>;
@@ -638,34 +875,50 @@ function CameraDirector({ center, radius, signature }: { center: Vec3; radius: n
   return null;
 }
 
-function EditableBody({ component, xray, selected, actuatorValue, enabled, replay, onMove, onSelect }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; onMove: (componentId: string, x: number) => void; onSelect: () => void }) {
+function EditableBody({ component, xray, selected, actuatorValue, enabled, replay, operatingContext, onMove, onSelect }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; operatingContext: OperatingContext; onMove: (componentId: string, x: number) => void; onSelect: () => void }) {
   const [dragging, setDragging] = useState(false);
   const [draftX, setDraftX] = useState(component.position[0]);
+  const bodyRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
   const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -component.position[1]), [component.position]);
   const intersection = useMemo(() => new Vector3(), []);
   const x = dragging ? draftX : replay?.position[0] ?? component.position[0];
+  useFrame(() => {
+    if (!bodyRef.current || dragging || replay) return;
+    const pose = operationPose(component, operationTime.current, operatingContext);
+    bodyRef.current.position.set(...pose.position);
+    bodyRef.current.rotation.set(...pose.rotation);
+  });
   const move = (event: ThreeEvent<PointerEvent>) => { if (!dragging || !enabled) return; event.stopPropagation(); if (event.ray.intersectPlane(plane, intersection)) setDraftX(MathUtils.clamp(Math.round(intersection.x * 20) / 20, -12, 12)); };
   const end = (event: ThreeEvent<PointerEvent>) => { if (!dragging) return; event.stopPropagation(); setDragging(false); onMove(component.id, draftX); };
   const speed = replay ? Math.hypot(...replay.velocity) : 0;
   const vectorScale = speed > 0 ? Math.min(.45, 1.5 / speed) : 0;
-  return <group position={[x, replay?.position[1] ?? component.position[1], replay?.position[2] ?? component.position[2]]} rotation={replay ? undefined : component.rotation} quaternion={replay?.rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={(event) => { if (!enabled) return; event.stopPropagation(); setDraftX(component.position[0]); setDragging(true); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
-    <ComponentShape component={component} xray={xray} selected={selected} actuatorValue={actuatorValue} />
+  return <group ref={bodyRef} position={[x, replay?.position[1] ?? component.position[1], replay?.position[2] ?? component.position[2]]} rotation={replay ? undefined : component.rotation} quaternion={replay?.rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={(event) => { if (!enabled) return; event.stopPropagation(); setDraftX(component.position[0]); setDragging(true); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+    <ComponentShape component={component} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operatingContext.enabled} />
     {enabled && xray && <Line points={[[-2.5, component.dimensions[1], 0], [2.5, component.dimensions[1], 0]]} color="#55e4ff" dashed dashScale={3} transparent opacity={.55} />}
     {xray && replay && speed > .01 && <Line points={[[0, component.dimensions[1], 0], [replay.velocity[0] * vectorScale, component.dimensions[1] + replay.velocity[1] * vectorScale, replay.velocity[2] * vectorScale]]} color="#ffffff" transparent opacity={.76} />}
   </group>;
 }
 
-function Machine({ state, preview, frame, onComponentMove, onSelect }: Props & { frame: ReplayFrame | null }) {
+function Machine({ state, preview, operating = false, frame, onComponentMove, onSelect }: Props & { frame: ReplayFrame | null }) {
   const previewData = useMemo(() => previewWorld(), []);
+  const operationTime = useRef(0);
+  useEffect(() => { operationTime.current = 0; }, [state.designHash]);
+  useFrame((_, delta) => { if (operating) operationTime.current += Math.min(delta, .05); });
   const components = state.components.length ? state.components : preview ? previewData.components : [];
   const joints: Joint[] = state.components.length ? state.joints : preview ? previewData.joints : [];
   const byId = new Map(components.map((component) => [component.id, component]));
-  const lows = components.length ? [0, 1, 2].map((axis) => Math.min(...components.map((item) => item.position[axis] - item.dimensions[axis] / 2))) : [-2, 0, -2];
-  const highs = components.length ? [0, 1, 2].map((axis) => Math.max(...components.map((item) => item.position[axis] + item.dimensions[axis] / 2))) : [2, 3, 2];
+  const framedComponents = components.filter((item) => !item.parameters.solar_source);
+  const cameraComponents = framedComponents.length ? framedComponents : components;
+  const lows = cameraComponents.length ? [0, 1, 2].map((axis) => Math.min(...cameraComponents.map((item) => item.position[axis] - item.dimensions[axis] / 2))) : [-2, 0, -2];
+  const highs = cameraComponents.length ? [0, 1, 2].map((axis) => Math.max(...cameraComponents.map((item) => item.position[axis] + item.dimensions[axis] / 2))) : [2, 3, 2];
   const center = lows.map((value, axis) => (value + highs[axis]) / 2) as Vec3;
   const spans = lows.map((value, axis) => highs[axis] - value);
   const cameraRadius = Math.max(3.8, Math.min(13, Math.max(...spans) * 1.02));
-  return <>
+  const machine = `${state.goal?.machineName ?? (preview ? 'counterbalanced tower crane' : '')} ${state.goal?.brief ?? ''}`.toLowerCase();
+  const drawbridgeDeck = /drawbridge/.test(machine) ? components.filter((item) => /deck|hinged span/.test(item.role.toLowerCase())).sort((a, b) => a.position[0] - b.position[0])[0] : undefined;
+  const operatingContext: OperatingContext = { enabled: operating || operationTime.current > 0, machine, drawbridgePivot: drawbridgeDeck ? [drawbridgeDeck.position[0] - drawbridgeDeck.dimensions[0] / 2, drawbridgeDeck.position[1], drawbridgeDeck.position[2]] : null };
+  return <OperationTimeContext.Provider value={operationTime}><>
     <CameraDirector center={center} radius={cameraRadius} signature={`${state.designHash}-${preview ? 'preview' : 'world'}`} />
     <ambientLight intensity={.72} />
     <hemisphereLight color="#dff7ff" groundColor="#10161c" intensity={.7} />
@@ -673,18 +926,17 @@ function Machine({ state, preview, frame, onComponentMove, onSelect }: Props & {
     <pointLight position={[-4, 4, -3]} intensity={24} color="#2bd9ff" distance={12} />
     <pointLight position={[4, 3, 4]} intensity={18} color="#ff9c45" distance={11} />
     {components.map((component) => {
-      const vehicleMotion = Boolean(component.parameters.bicycle_wheel || component.parameters.road_vehicle_wheel || component.parameters.bicycle_sprocket);
-      const replaySafe = state.replayMode === 'failure' || vehicleMotion || Boolean(component.parameters.cad_form) || (state.goal?.capabilities.includes('transmit') && ['gear', 'shaft'].includes(component.primitive));
+      const replaySafe = state.replayMode === 'failure' && !state.goal?.capabilities.includes('transmit');
       const replay = replaySafe ? frame?.items.find((item) => item.id === component.id) : undefined;
       const targetJoint = joints.find((item) => item.componentB === component.id);
       const actuator = state.actuators.find((item) => item.jointId === targetJoint?.id);
-      const actuatorValue = actuator ? frame?.actuatorValues[actuator.id] ?? .55 : .55;
+      const actuatorValue = operating ? .5 + Math.sin((component.id.length + state.designRevision) * .7) * .08 : actuator ? frame?.actuatorValues[actuator.id] ?? .55 : .55;
       const selected = state.selectedComponentId === component.id;
       const enabled = !preview && state.phase !== 'simulating' && (selected || component.id === state.goal?.editableComponentId);
-      return <EditableBody key={component.id} component={component} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} onMove={onComponentMove} onSelect={() => onSelect(component.id)} />;
+      return <EditableBody key={component.id} component={component} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} operatingContext={operatingContext} onMove={onComponentMove} onSelect={() => onSelect(component.id)} />;
     })}
-    {frame?.items.filter((item) => item.id === 'test-payload' || item.id.startsWith('sort-package-')).map((item) => <ReplayPackage key={item.id} item={item} xray={state.xray} />)}
-    {frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[.16, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={.92} /></mesh>)}
+    {state.replayMode === 'failure' && frame?.items.filter((item) => item.id === 'test-payload' || item.id.startsWith('sort-package-')).map((item) => <ReplayPackage key={item.id} item={item} xray={state.xray} />)}
+    {state.replayMode === 'failure' && frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[.16, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={.92} /></mesh>)}
     {state.xray && joints.map((joint) => {
       const a = byId.get(joint.componentA), b = byId.get(joint.componentB); if (!a || !b) return null;
       const positionA = frame?.items.find((item) => item.id === a.id)?.position ?? a.position;
@@ -698,7 +950,7 @@ function Machine({ state, preview, frame, onComponentMove, onSelect }: Props & {
     <Grid position={[0, -.05, 0]} args={[state.world.bounds[0], state.world.bounds[2]]} cellColor="#21313a" sectionColor="#315363" fadeDistance={Math.max(state.world.bounds[0], state.world.bounds[2])} fadeStrength={1.45} />
     <ContactShadows position={[0, -.04, 0]} opacity={.58} scale={Math.max(state.world.bounds[0], state.world.bounds[2])} blur={2.4} far={7} />
     <OrbitControls makeDefault enablePan minDistance={2.5} maxDistance={30} minPolarAngle={.22} maxPolarAngle={1.5} target={center} />
-  </>;
+  </></OperationTimeContext.Provider>;
 }
 
 function useReplay(state: ForgeState) {
@@ -711,7 +963,7 @@ function useReplay(state: ForgeState) {
   const index = run && cursor.runId === run.id ? Math.max(start, Math.min(end, cursor.index)) : start;
   useEffect(() => { const media = window.matchMedia('(prefers-reduced-motion: reduce)'); const update = () => setReducedMotion(media.matches); update(); media.addEventListener('change', update); return () => media.removeEventListener('change', update); }, []);
   useEffect(() => {
-    if (!run || reducedMotion) return;
+    if (!run || reducedMotion || state.replayMode !== 'failure') return;
     const timer = window.setInterval(() => setCursor((current) => { const currentIndex = current.runId === run.id ? current.index : start; return { runId: run.id, index: currentIndex >= end ? start : Math.min(end, currentIndex + (state.replayMode === 'failure' ? 1 : 3)) }; }), state.replayMode === 'failure' ? 200 : 60);
     return () => window.clearInterval(timer);
   }, [run, start, end, state.replayMode, reducedMotion]);
@@ -721,6 +973,6 @@ function useReplay(state: ForgeState) {
 export function ForgeScene(props: Props) {
   const { run, frame } = useReplay(props.state);
   const label = props.state.goal ? `3D physical world for ${props.state.goal.machineName}. The adjacent world hierarchy and component inspector provide an accessible editing alternative.` : '3D general-purpose mechanical engineering world.';
-  const replayFrame = frame;
+  const replayFrame = props.state.replayMode === 'failure' ? frame : null;
   return <div className="canvas-wrap"><Canvas aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine {...props} frame={replayFrame} /></Suspense></Canvas>{!props.preview && <div className="sr-only">{run ? `${run.status} multi-body simulation ${props.state.replayMode === 'failure' ? 'failure replay' : 'result'} is active.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
 }
