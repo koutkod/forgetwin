@@ -1,5 +1,6 @@
 import { materialFor, primitiveCatalog } from './forge-data';
 import { SUPPORTED_METRICS } from './forge-metrics';
+import { roadVehicleDriveDirection } from './forge-motion';
 import type {
   CollisionEvent, FailureEvent, ForgeState, GoalConstraint, Joint,
   MetricReading, OptimizationAction, ReplayFrame, ReplayItem, SimulationRun,
@@ -491,7 +492,13 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       if (!driven?.isDynamic()) continue;
       const axis = targetJoint?.axis ?? [0, 1, 0];
       const norm = Math.hypot(...axis) || 1;
-      const target = motor.maxRpm * Math.PI / 30 * motor.direction;
+      const drivenComponentId = targetJoint?.componentB ?? motor.componentId;
+      const drivenComponent = state.components.find((item) => item.id === drivenComponentId);
+      // Normalize legacy persisted go-karts created before the forward-drive
+      // sign fix. A stopped motor stays stopped; any road-wheel drive command
+      // rolls toward +X instead of visually reversing the vehicle.
+      const direction = drivenComponent?.parameters.road_vehicle_wheel ? roadVehicleDriveDirection(motor.direction) : motor.direction;
+      const target = motor.maxRpm * Math.PI / 30 * direction;
       const current = driven.angvel();
       const along = (current.x * axis[0] + current.y * axis[1] + current.z * axis[2]) / norm;
       const maxDelta = motor.maxTorque / Math.max(.25, driven.mass()) * DT;

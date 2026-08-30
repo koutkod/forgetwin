@@ -104,6 +104,9 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
   it('keeps the electric go-kart assembled while all four road wheels rotate', async () => {
     const prompt = 'build an electric go kart';
     let state = assemblePlan(compileDesignBrief(prompt));
+    // Emulate a go-kart persisted before forward road-wheel direction was
+    // corrected. Simulation must safely normalize it without a reset.
+    state = { ...state, motors: state.motors.map((motor) => ({ ...motor, direction: 1 })) };
     let run = await simulateDesign(state);
     for (let pass = 0; pass < 3 && run.status === 'failed'; pass += 1) {
       state = commitSimulation(state, run, 'System').state;

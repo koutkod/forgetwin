@@ -20,6 +20,10 @@ export function roadVehicleWheelRoll(elapsed: number) {
   return -elapsed * 4.6;
 }
 
+export function roadVehicleDriveDirection(direction: number) {
+  return direction === 0 ? 0 : -Math.abs(direction);
+}
+
 export function roadVehicleSteeringWheelTurn(elapsed: number) {
   return roadVehicleSteeringCycle(elapsed) * 0.72;
 }

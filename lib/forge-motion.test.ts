@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw } from './forge-motion';
+import { roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw } from './forge-motion';
 
 describe('road vehicle operation motion', () => {
   it('rolls road wheels in the forward +X direction', () => {
     expect(roadVehicleWheelRoll(1)).toBeLessThan(0);
     expect(roadVehicleWheelRoll(2)).toBeLessThan(roadVehicleWheelRoll(1));
+    expect(roadVehicleDriveDirection(1)).toBe(-1);
+    expect(roadVehicleDriveDirection(-1)).toBe(-1);
+    expect(roadVehicleDriveDirection(0)).toBe(0);
   });
 
   it('steers both front wheels left and right while rear wheels stay straight', () => {
