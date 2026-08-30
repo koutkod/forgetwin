@@ -152,7 +152,10 @@ function worldAnalysis(state: ForgeState) {
     const area = Math.max(.0005, item.dimensions[1] * item.dimensions[2]);
     return sum + materialFor(item.materialId).strength * 1e6 * area * .000152;
   }, 0) / 9.81;
-  const continuousTravel = state.joints.some((item) => item.type === 'revolute' && !item.limits) ? motorRpm * 6 * state.world.duration : 0;
+  const continuousTravel = Math.max(0, ...state.motors.map((motor) => {
+    const drivenJoint = motor.jointId ? state.joints.find((item) => item.id === motor.jointId) : undefined;
+    return drivenJoint?.type === 'revolute' && !drivenJoint.limits ? motor.maxRpm * 6 * state.world.duration : 0;
+  }));
   const angularTravel = Math.max(continuousTravel, ...state.joints.filter((item) => item.type === 'revolute' && item.limits).map((item) => Math.abs(item.limits![1] - item.limits![0]) * 180 / Math.PI), 0);
   const piston = state.components.find((item) => item.primitive === 'piston' && Number(item.parameters.bore_m) > 0);
   const bore = Number(piston?.parameters.bore_m ?? 0);

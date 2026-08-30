@@ -13,7 +13,7 @@ const canonicalizeMechanicalTerms = (value: string) => value
   .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle')
   .replace(/\b(?:go\s*cart|go-cart|gokart)\b/gi, 'go-kart');
 const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text);
-const isRoadVehicleGoal = (text: string) => /\b(?:go-kart|kart|buggy|automobile|car|atv|all-terrain vehicle)\b/.test(text);
+const isRoadVehicleGoal = (text: string) => !/\bcar\s+(?:jack|lift|hoist)\b/.test(text) && /\b(?:go-kart|kart|buggy|automobile|car|atv|all-terrain vehicle)\b/.test(text);
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || 'part';
 const numeric = (value: string | undefined, fallback: number) => value ? Number(value.replaceAll(',', '')) : fallback;
 const NUMBER_WORDS: Record<string, number> = {
@@ -117,19 +117,19 @@ function parseValues(text: string): ParsedValues {
 
 function inferCapabilities(text: string): Capability[] {
   const capabilities = new Set<Capability>(['structure']);
-  if (/conveyor|packages?|boxes|sort|warehouse|factory line|buffer|singulat|feed|recycl|grader|routing/.test(text)) capabilities.add('transport');
-  if (/sort|separat|route|classif|inspect|reject|color|size|material|grader|recycl/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
+  if (/\b(?:conveyors?|packages?|boxes?|sort(?:er|ing|ed|s)?|warehouse|factory line|buffers?|singulat(?:e|ion)|feed(?:er|ing)?|recycl(?:e|ing)|graders?|routing)\b/.test(text)) capabilities.add('transport');
+  if (/\b(?:sort(?:er|ing|ed|s)?|separat(?:e|ion)|rout(?:e|ing)|classif(?:y|ication)|inspect(?:ion)?|reject|color|size|material|graders?|recycl(?:e|ing))\b/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
   if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient/.test(text)) capabilities.add('lift');
   if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge/.test(text)) capabilities.add('suspend');
-  if (/rover|vehicle|mobile robot|bicycle|go-kart|\bkart\b|buggy|automobile|\bcar\b|\batv\b|corridor|obstacle|\bwheels?\b|\bdrive\b/.test(text)) capabilities.add('mobile');
+  if (/\b(?:rover|vehicle|mobile robot|bicycle|go-kart|kart|buggy|automobile|car|atv|forklift|agv|truck|tractor|motorcycle)\b/.test(text) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(text)) capabilities.add('mobile');
   if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text)) capabilities.add('manipulate');
   if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(text)) capabilities.add('transmit');
   if (/suspension|spring|rough|uneven|tipping|stability|stabiliz|level/.test(text)) capabilities.add('stabilize');
-  const activeTracking = /(?:solar|sun|light source)[^.!?]{0,32}(?:track|follow|aim|orient)|(?:track|follow|aim|orient)[^.!?]{0,32}(?:solar|sun|light source)|turbine|blade pitch/.test(text);
+  const activeTracking = /(?:solar|sun|light source)[^.!?]{0,32}(?:track|follow|aim|orient)|(?:track|follow|aim|orient)[^.!?]{0,32}(?:solar|sun|light source)|blade pitch|turbine yaw/.test(text);
   if (activeTracking) capabilities.add('track');
   if (/buffer|queue|spacing|irregular|singulat/.test(text)) capabilities.add('buffer');
-  if (/bin|container|collect|recycling|reject|tank|reservoir/.test(text)) capabilities.add('contain');
-  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|pump/.test(text)) capabilities.add('rotate');
+  if (/\b(?:bins?|containers?|collect(?:or|ion)?|recycling|reject|tanks?|reservoirs?)\b/.test(text)) capabilities.add('contain');
+  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|reciprocat|piston pump|plunger pump|centrifugal pump/.test(text)) capabilities.add('rotate');
   if (/bearing|flange|coupling|sprocket|cam\b|impeller|propeller|fan\b|turbine|rotor/.test(text)) capabilities.add('rotate');
   if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text)) capabilities.add('measure');
   if (/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text)) capabilities.add('measure');
@@ -142,7 +142,8 @@ function identity(text: string, capabilities: Capability[]) {
     [/braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/, 'Brazed plate heat exchanger', 'HVAC thermal systems'],
     [/impeller|propeller|fan\b|turbine|rotor/, 'Parametric rotating assembly', 'Rotating machinery'],
     [/bearing|flange|coupling|sprocket|cam\b|bracket|housing|enclosure|casing|manifold/, 'Parametric mechanical part', 'Mechanical design'],
-    [/pump|reciprocat/, 'Reciprocating pump mechanism', 'Fluid power'],
+    [/centrifugal pump/, 'Centrifugal pump rotor assembly', 'Fluid power'],
+    [/reciprocat|piston pump|plunger pump/, 'Reciprocating pump mechanism', 'Fluid power'],
     [/four[- ]bar|linkage/, 'Parametric linkage mechanism', 'Mechanism design'],
     [/drawbridge|folding bridge/, 'Actuated folding span', 'Civil mechanisms'],
     [/bridge|truss/, 'Parametric load-bearing span', 'Structural engineering'],
@@ -158,7 +159,7 @@ function identity(text: string, capabilities: Capability[]) {
     [/\b(?:automobile|car)\b/, /electric/.test(text) ? 'Electric road vehicle' : 'Road vehicle', 'Vehicle engineering'],
     [/rover|vehicle|mobile robot/, 'Terrain-capable mobile platform', 'Mobile robotics'],
     [/solar|light source/, 'Single-axis tracking mechanism', 'Renewable energy'],
-    [/tomato|produce|fruit.*grad|grader.*fruit/, 'Gentle tomato grading system', 'Agricultural automation'],
+    [/tomato|\bproduce\s+(?:grader|sorting|line)\b|fruit.*grad|grader.*fruit/, 'Gentle tomato grading system', 'Agricultural automation'],
     [/warehouse|accumulation|buffer/, 'Zoned warehouse accumulation system', 'Warehouse automation'],
     [/recycl/, 'Material separation mechanism', 'Recycling'],
     [/red.*blue|blue.*red|package sort|box sort/, 'Two-color package sorting system', 'Logistics automation'],
@@ -178,9 +179,9 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     if (!result.some((item) => item.metric === metric)) result.push({ metric, label, operator, target, unit, source: key && values.supplied.has(String(key)) ? 'user' : 'inferred' });
   };
   const spanSystem = /bridge|truss|structural span/.test(text);
-  const reciprocating = /pump|reciprocat/.test(text);
+  const reciprocating = /reciprocat|piston pump|plunger pump/.test(text);
   const linkage = /four[- ]bar|linkage/.test(text);
-  const parametricRotor = /impeller|propeller|fan\b|turbine|rotor/.test(text);
+  const parametricRotor = /impeller|propeller|fan\b|turbine|rotor|centrifugal pump/.test(text);
   const brazedPlateExchanger = /braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/.test(text);
   const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
   const bicycle = isBicycleGoal(text);
@@ -757,31 +758,33 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
 
 function addRotaryTransmission(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
+  const scale = .125;
+  const scaled = (value: Vec3) => value.map((dimension) => dimension * scale) as Vec3;
   const assembly = builder.assembly('enclosed reduction gearbox', 'Supported input and output shafts, meshing gears, bearings, motor, and removable safety housing', rootAssemblyId);
-  const base = builder.component('frame', 'open gearbox housing', assembly, [0, .45, 0], [3.6, .32, 2.2], 'aluminum', 'fixed', { gearbox_housing: true });
-  const backPlate = builder.component('plate', 'gearbox rear housing plate', assembly, [0, 1.45, -.72], [3.35, 2.15, .16], 'aluminum', 'fixed', { gearbox_backplate: true });
+  const base = builder.component('frame', 'open gearbox housing', assembly, scaled([0, .45, 0]), scaled([3.6, .32, 2.2]), 'aluminum', 'fixed', { gearbox_housing: true });
+  const backPlate = builder.component('plate', 'gearbox rear housing plate', assembly, scaled([0, 1.45, -.72]), scaled([3.35, 2.15, .16]), 'aluminum', 'fixed', { gearbox_backplate: true });
   builder.joint('fixed', base, backPlate);
   for (const x of [-.85, .85]) {
-    const bearing = builder.component('support', `${x < 0 ? 'input' : 'output'} shaft bearing block`, assembly, [x, 1.45, .56], [.62, .72, .28], 'steel', 'fixed', { gearbox_bearing: true });
+    const bearing = builder.component('support', `${x < 0 ? 'input' : 'output'} shaft bearing block`, assembly, scaled([x, 1.45, .56]), scaled([.62, .72, .28]), 'steel', 'fixed', { gearbox_bearing: true });
     builder.joint('fixed', backPlate, bearing);
   }
-  const inputShaft = builder.component('shaft', 'input shaft', assembly, [-.85, 1.45, 0], [.16, 1.5, .16], 'steel', 'dynamic', { rpm: values.rpm, operation_spin: 2.25 });
-  const outputShaft = builder.component('shaft', 'output shaft', assembly, [.85, 1.45, 0], [.22, 1.5, .22], 'steel', 'dynamic', { operation_spin: -2.25 / Math.max(1, values.ratio) });
+  const inputShaft = builder.component('shaft', 'input shaft', assembly, scaled([-.85, 1.45, 0]), scaled([.16, 1.5, .16]), 'steel', 'dynamic', { rpm: values.rpm, operation_spin: 2.25 });
+  const outputShaft = builder.component('shaft', 'output shaft', assembly, scaled([.85, 1.45, 0]), scaled([.22, 1.5, .22]), 'steel', 'dynamic', { operation_spin: -2.25 / Math.max(1, values.ratio) });
   builder.rotate(inputShaft, [Math.PI / 2, 0, 0]); builder.rotate(outputShaft, [Math.PI / 2, 0, 0]);
-  const inputRadius = .32;
-  const outputRadius = Math.min(1.45, inputRadius * values.ratio);
-  const inputGear = builder.component('gear', 'input gear', assembly, [-.85, 1.45, 0], [inputRadius * 2, .18, inputRadius * 2], 'steel', 'dynamic', { teeth: 18, pitch_radius: inputRadius, mesh_efficiency: .85 });
-  const outputGear = builder.component('gear', 'output gear', assembly, [.85, 1.45, 0], [outputRadius * 2, .22, outputRadius * 2], 'steel', 'dynamic', { teeth: Math.round(18 * values.ratio), pitch_radius: outputRadius, mesh_efficiency: .85 });
+  const inputRadius = .32 * scale;
+  const outputRadius = Math.min(1.45 * scale, inputRadius * values.ratio);
+  const inputGear = builder.component('gear', 'input gear', assembly, scaled([-.85, 1.45, 0]), [inputRadius * 2, .18 * scale, inputRadius * 2], 'steel', 'dynamic', { teeth: 18, pitch_radius: inputRadius, mesh_efficiency: .85 });
+  const outputGear = builder.component('gear', 'output gear', assembly, scaled([.85, 1.45, 0]), [outputRadius * 2, .22 * scale, outputRadius * 2], 'steel', 'dynamic', { teeth: Math.round(18 * values.ratio), pitch_radius: outputRadius, mesh_efficiency: .85 });
   const inputJoint = builder.joint('revolute', base, inputShaft, [0, 0, 1]);
   builder.joint('fixed', inputShaft, inputGear);
   builder.joint('revolute', base, outputShaft, [0, 0, 1]);
   builder.joint('fixed', outputShaft, outputGear);
   builder.joint('gear', inputGear, outputGear, [0, 0, 1], { ratio: values.ratio });
-  const motor = builder.component('motor', 'input drive motor', assembly, [-.85, 1.45, -1.02], [.46, .64, .46], 'steel', 'kinematic');
+  const motor = builder.component('motor', 'input drive motor', assembly, scaled([-.85, 1.45, -1.02]), scaled([.46, .64, .46]), 'steel', 'kinematic');
   builder.rotate(motor, [Math.PI / 2, 0, 0]);
   builder.motor(motor, inputJoint, Math.max(15, values.torqueNm / values.ratio * .72), values.rpm);
   builder.connect(motor, inputShaft, 'power', 'input_torque');
-  const encoder = builder.component('sensor', 'output encoder', assembly, [.85, 1.78, .42], undefined, undefined, 'fixed');
+  const encoder = builder.component('sensor', 'output encoder', assembly, scaled([.85, 1.78, .42]), scaled([.28, .24, .28]), 'polymer', 'fixed');
   const sensor = builder.sensor(encoder, 'speed', 'output_rpm', outputShaft, 2);
   builder.control('speed governor', 'pid', [sensor], [], 'hold output speed at input rpm divided by gear ratio', values.rpm / values.ratio);
   builder.joint('fixed', encoder, base);
@@ -1237,7 +1240,7 @@ function addGenericMotion(context: ModuleContext): ModuleResult {
 function addParametricCadPart(context: ModuleContext): ModuleResult {
   const { builder, text, values, rootAssemblyId } = context;
   const assembly = builder.assembly('parametric cad part', 'Feature-driven part recipe composed from revolved, extruded, swept, and patterned primitive bodies', rootAssemblyId);
-  const rotatingBlade = /impeller|propeller|fan\b|turbine|rotor/.test(text);
+  const rotatingBlade = /impeller|propeller|fan\b|turbine|rotor|centrifugal pump/.test(text);
   if (rotatingBlade) {
     const base = builder.component('frame', 'rotor inspection stand', assembly, [0, .18, 0], [3.2, .3, 2.4], 'steel', 'fixed');
     const support = builder.component('beam', 'rotor bearing pedestal', assembly, [0, 1.35, -.42], [.36, 2.25, .36], 'steel', 'fixed');
@@ -1425,13 +1428,13 @@ const moduleRules: ModuleRule[] = [
   { id: 'patient-lift', matches: ({ text }) => /patient/.test(text), compose: addPatientLift },
   { id: 'parallel-guides', matches: ({ text, capabilities }) => capabilities.includes('lift') && !capabilities.includes('suspend') && !/bridge|truss|patient/.test(text), compose: addParallelGuides },
   { id: 'warehouse-buffer', matches: ({ text }) => /warehouse|accumulation|buffer/.test(text), compose: addWarehouseBuffer },
-  { id: 'tomato-grader', matches: ({ text }) => /tomato|produce|fruit.*grad|grader.*fruit/.test(text), compose: addTomatoGrader },
+  { id: 'tomato-grader', matches: ({ text }) => /tomato|\bproduce\s+(?:grader|sorting|line)\b|fruit.*grad|grader.*fruit/.test(text), compose: addTomatoGrader },
   { id: 'recycling-separator', matches: ({ text }) => /recycl|metal cans?|plastic bottles?/.test(text), compose: addRecyclingSeparator },
-  { id: 'material-flow', matches: ({ capabilities, text }) => capabilities.includes('transport') && !/warehouse|accumulation|buffer|tomato|produce|fruit|recycl|metal cans?|plastic bottles?/.test(text), compose: addMaterialFlow },
+  { id: 'material-flow', matches: ({ capabilities, text }) => capabilities.includes('transport') && !/warehouse|accumulation|buffer|tomato|\bproduce\s+(?:grader|sorting|line)\b|fruit|recycl|metal cans?|plastic bottles?/.test(text), compose: addMaterialFlow },
   { id: 'tracking-axis', matches: ({ capabilities }) => capabilities.includes('track'), compose: addTrackingAxis },
-  { id: 'reciprocating-linkage', matches: ({ text }) => /pump|reciprocat/.test(text), compose: addReciprocatingLinkage },
+  { id: 'reciprocating-linkage', matches: ({ text }) => /reciprocat|piston pump|plunger pump/.test(text), compose: addReciprocatingLinkage },
   { id: 'closed-linkage', matches: ({ text }) => /four[- ]bar|linkage/.test(text), compose: addFourBar },
-  { id: 'parametric-cad-part', matches: ({ text }) => /bearing|flange|coupling|sprocket|cam\b|impeller|propeller|fan\b|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe/.test(text) && !/hvac|heat exchanger|braz/.test(text), compose: addParametricCadPart },
+  { id: 'parametric-cad-part', matches: ({ text }) => /\b(?:bearing|flange|coupling|sprocket|cam|impeller|propeller|fan|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe)\b|centrifugal pump/.test(text) && !/heat exchanger|braz/.test(text), compose: addParametricCadPart },
 ];
 
 export function compileDesignBrief(raw: string): CompiledWorldPlan {
@@ -1451,10 +1454,17 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   const rootAssemblyId = builder.assembly('engineered world', 'Root assembly for independently composable mechanism modules');
   builder.setRoot(rootAssemblyId);
   const selectionContext = { text, capabilities, values };
-  const selectedRules = moduleRules.filter((rule) => rule.matches(selectionContext));
+  const subpartOnly = /\b(?:gearbox|pump|bicycle|bike|car|vehicle)\s+(?:mounting\s+)?(?:bracket|housing|bearing|fork)\b|\b(?:bracket|housing|bearing|fork)\s+(?:for|of)\s+(?:a\s+)?(?:gearbox|pump|bicycle|bike|car|vehicle)\b/.test(text);
+  const matchingRules = moduleRules.filter((rule) => rule.matches(selectionContext));
+  const selectedRules = subpartOnly ? matchingRules.filter((rule) => rule.id === 'parametric-cad-part') : matchingRules;
   const requested = requestedPrimitiveCounts(text);
   const explicitGenericMechanism = /hatch|door|gate|latch|lever|crank|flywheel|hinge|pivot|slider|stroke|actuat|\bmotor\b|\bservo\b|\bpiston\b|\bspring\b|\bsensor\b|\bcamera\b/.test(text);
-  if (!selectedRules.length && !requested.size && !explicitGenericMechanism) {
+  // Merely mentioning a low-level part (for example, “jaw plates” in a bench
+  // vise request) is not enough evidence for a faithful machine topology. A
+  // recognized module or explicit motion/actuation description must anchor the
+  // fallback; otherwise fail honestly instead of surrounding the named part
+  // with an unrelated generic motion stage.
+  if (!selectedRules.length && !explicitGenericMechanism) {
     const object = identity(text, capabilities).name.replace(/ mechanism$/, '');
     throw new Error(`UNSUPPORTED_TOPOLOGY: ForgeTwin could not identify a faithful primitive architecture for “${object}”. Name its main structure, moving parts, drive, and required motion instead of receiving an unrelated machine.`);
   }

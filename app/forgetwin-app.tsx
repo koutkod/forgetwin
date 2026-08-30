@@ -10,16 +10,18 @@ import { useEffect, useRef, useState } from 'react';
 import { ForgeScene } from '../components/forge/forge-scene';
 import {
   AgentRequestError, normalizeRedesignSequence, requestAgentEdit, requestAgentPlan, requestAgentRedesign, validateAgentKey,
-  type AgentEditAction, type AgentRuntimeMode, type AgentTraceItem,
+  type AgentEditAction, type AgentPlan, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
+import { compileAgentPlan, localAnchorAt, semanticParametersForEdit } from '../lib/forge-model-plan';
+import { translateInForgeCoordinates } from '../lib/forge-motion';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
 import { FORGE_TOOL_COUNT, useForge, useForgeWebMCP } from '../lib/use-forge';
 import type {
   EngineeringExample,
 } from '../lib/forge-data';
 import type {
-  Actor, ForgeState, ForgeToolName, MachineComponent, MetricReading, Metrics,
+  Actor, CompiledWorldPlan, ForgeState, ForgeToolName, MachineComponent, MetricReading, Metrics,
   PrimitiveKind, SimulationRun, ToolResult,
 } from '../lib/forge-types';
 
@@ -44,7 +46,7 @@ type GenerationVisualState = {
 
 export function ForgeTwinApp() {
   const forge = useForge();
-  const { state, hydrated, command, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot } = forge;
+  const { state, hydrated, command, commandBatch, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot } = forge;
   const registeredTools = useForgeWebMCP(command, runMachine, getSnapshot, hydrated);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -151,7 +153,7 @@ export function ForgeTwinApp() {
     setAgentTrace([{ id: `agent-trace-${traceSeq.current}`, kind: 'goal', title: 'New engineering mission', detail: requestedPrompt, at: new Date().toISOString() }]);
     try {
       let actor: Actor = runtimeActor();
-      let modelAssumptions: string[] = [];
+      let modelPlan: AgentPlan | null = null;
       let shouldUseModel = actor === 'ModelAgent';
       if (agentKey) { shouldUseModel = true; actor = 'ModelAgent'; setAgentRuntime('session-model'); }
       if (shouldUseModel) {
@@ -159,9 +161,9 @@ export function ForgeTwinApp() {
         addTrace('action', 'Asking the model to plan', 'Interpreting constraints, selecting a composable architecture, and choosing verification metrics.');
         try {
           const response = await requestAgentPlan(requestedPrompt, agentKey || undefined, controller.signal);
-          modelAssumptions = response.result.assumptions;
+          modelPlan = response.result;
           setAgentModel(response.model); setAgentConnectionError(null);
-          addTrace('reasoning', response.result.reasoning_summary, `Interpreted as: ${response.result.normalized_prompt}. Architecture: ${response.result.architecture.join(' · ')}. Verify: ${response.result.verification_focus.join(', ')}. The user's object identity remains authoritative.`);
+          addTrace('reasoning', response.result.reasoning_summary, `Interpreted as: ${response.result.normalized_prompt}. Architecture: ${response.result.architecture.join(' · ')}. The complete design graph passed ForgeTwin’s reference, grounding, connectivity, drive, and component-budget checks.`);
         } catch (caught) {
           actor = 'Deterministic';
           const failure = recordModelFailure(caught);
@@ -169,11 +171,22 @@ export function ForgeTwinApp() {
         }
       } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
 
-      let plan;
-      try { plan = compileDesignBrief(requestedPrompt); }
-      catch (caught) { throw new Error(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
+      let plan: CompiledWorldPlan;
+      if (modelPlan) {
+        try {
+          plan = compileAgentPlan(requestedPrompt, modelPlan);
+          addTrace('action', 'AI design graph accepted', `${modelPlan.machine_name} will be materialized directly from ${modelPlan.components.length} model-authored bodies and ${modelPlan.joints.length} model-authored joints.`);
+        } catch (caught) {
+          actor = 'Deterministic';
+          addTrace('fallback', 'AI graph could not be materialized', caught instanceof Error ? `${caught.message} Trying a known high-fidelity local mechanism instead.` : 'Trying a known high-fidelity local mechanism instead.');
+          try { plan = compileDesignBrief(requestedPrompt); }
+          catch (fallbackError) { throw new Error(fallbackError instanceof Error ? fallbackError.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
+        }
+      } else {
+        try { plan = compileDesignBrief(requestedPrompt); }
+        catch (caught) { throw new Error(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
+      }
       plan.brief = requestedPrompt; plan.goal.brief = requestedPrompt;
-      plan.assumptions = [...modelAssumptions, ...plan.assumptions].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
       setGenerationVisual((current) => current ? {
         ...current, phase: 'planning', progress: 22, machineName: plan.goal.machineName,
         headline: 'Architecture resolved',
@@ -255,7 +268,12 @@ export function ForgeTwinApp() {
       await pause(950);
     } catch (caught) {
       if (caught instanceof Error && caught.name === 'AbortError') { addTrace('observation', 'Engineering run stopped', 'The current agent run was cancelled. The last committed world revision is still available.'); setToast('Agent run cancelled'); }
-      else { const message = caught instanceof Error ? caught.message : 'The machine could not be engineered.'; setError(message); addTrace('error', 'Engineering run stopped', message); }
+      else {
+        const message = caught instanceof Error ? caught.message : 'The machine could not be engineered.';
+        if (getSnapshot().screen === 'landing') setPromptError(message);
+        else setError(message);
+        addTrace('error', 'Engineering run stopped', message);
+      }
     } finally { abortRef.current = null; setAgentCancelable(false); setBusy(false); setGenerationVisual(null); }
   };
 
@@ -367,17 +385,54 @@ export function ForgeTwinApp() {
   };
   const cancelAgentRun = () => { abortRef.current?.abort(); setAgentCancelable(false); };
 
-  const modelEditCommands = (actions: AgentEditAction[]): EditCommand[] => actions.map((action, index) => {
-    if (action.tool === 'set_dimensions') return { tool: action.tool, input: { component_id: action.component_id, dimensions: action.dimensions }, label: `Resize ${action.component_id}` };
-    if (action.tool === 'set_material') return { tool: action.tool, input: { component_id: action.component_id, material_id: action.material_id }, label: `Change ${action.component_id} material` };
-    if (action.tool === 'set_mass') return { tool: action.tool, input: { component_id: action.component_id, mass: action.mass }, label: `Retune ${action.component_id} mass` };
-    if (action.tool === 'move_component') return { tool: action.tool, input: { component_id: action.component_id, position: action.position }, label: `Move ${action.component_id}` };
-    if (action.tool === 'rotate_component') return { tool: action.tool, input: { component_id: action.component_id, rotation: action.rotation }, label: `Rotate ${action.component_id}` };
-    if (action.tool === 'remove_component') return { tool: action.tool, input: { component_id: action.component_id }, label: `Remove ${action.component_id}` };
-    if (action.tool === 'create_component') return { tool: action.tool, input: { component_id: action.component_id, primitive: action.primitive, assembly_id: action.assembly_id, role: action.role, position: action.position, rotation: action.rotation, dimensions: action.dimensions, material_id: action.material_id, body_type: action.body_type, ...(action.mass > 0 ? { mass: action.mass } : {}) }, label: `Create ${action.role || action.primitive}` };
-    if (action.tool === 'connect_components') return { tool: action.tool, input: { connection_id: `chat-edge-${getSnapshot().revision + index + 1}`, source_id: action.source_id, target_id: action.target_id, connection_type: action.connection_type, channel: action.channel || 'chat_edit' }, label: `Connect ${action.source_id} to ${action.target_id}` };
-    return { tool: 'create_joint', input: { joint_id: action.joint_id, joint_type: action.joint_type, component_a: action.source_id, component_b: action.target_id, anchor_a: [0, 0, 0], anchor_b: [0, 0, 0], axis: action.axis, limits: action.limits }, label: `Joint ${action.source_id} to ${action.target_id}` };
-  });
+  const modelEditCommands = (actions: AgentEditAction[]): EditCommand[] => {
+    const snapshot = getSnapshot();
+    const transforms = new Map(snapshot.components.map((item) => [item.id, { position: [...item.position] as [number, number, number], rotation: [...item.rotation] as [number, number, number] }]));
+    const commands: EditCommand[] = [];
+    for (const action of actions) {
+      if (action.tool === 'create_assembly') commands.push({ tool: action.tool, input: { assembly_id: action.assembly_id, name: action.name, purpose: action.purpose, ...(action.parent_id ? { parent_id: action.parent_id } : {}) }, label: `Create ${action.name}` });
+      else if (action.tool === 'set_dimensions') commands.push({ tool: action.tool, input: { component_id: action.component_id, dimensions: action.dimensions }, label: `Resize ${action.component_id}` });
+      else if (action.tool === 'set_material') commands.push({ tool: action.tool, input: { component_id: action.component_id, material_id: action.material_id }, label: `Change ${action.component_id} material` });
+      else if (action.tool === 'set_mass') commands.push({ tool: action.tool, input: { component_id: action.component_id, mass: action.mass }, label: `Retune ${action.component_id} mass` });
+      else if (action.tool === 'move_component') { const transform = transforms.get(action.component_id); if (transform) transform.position = [...action.position]; commands.push({ tool: action.tool, input: { component_id: action.component_id, position: action.position }, label: `Move ${action.component_id}` }); }
+      else if (action.tool === 'rotate_component') { const transform = transforms.get(action.component_id); if (transform) transform.rotation = [...action.rotation]; commands.push({ tool: action.tool, input: { component_id: action.component_id, rotation: action.rotation }, label: `Rotate ${action.component_id}` }); }
+      else if (action.tool === 'remove_component') { transforms.delete(action.component_id); commands.push({ tool: action.tool, input: { component_id: action.component_id }, label: `Remove ${action.component_id}` }); }
+      else if (action.tool === 'create_component') {
+        transforms.set(action.component_id, { position: [...action.position], rotation: [...action.rotation] });
+        commands.push({
+          tool: action.tool,
+          input: {
+            component_id: action.component_id, primitive: action.primitive, assembly_id: action.assembly_id, role: action.role,
+            position: action.position, rotation: action.rotation, dimensions: action.dimensions, material_id: action.material_id,
+            body_type: action.body_type, ...(action.mass > 0 ? { mass: action.mass } : {}), ...(action.color ? { color: action.color } : {}),
+            parameters: semanticParametersForEdit(action, snapshot.goal?.machineName ?? 'Mechanical system'),
+          },
+          label: `Create ${action.role}`,
+        });
+      } else if (action.tool === 'connect_components') commands.push({ tool: action.tool, input: { connection_id: action.connection_id, source_id: action.source_id, target_id: action.target_id, connection_type: action.connection_type, channel: action.channel }, label: `Connect ${action.source_id} to ${action.target_id}` });
+      else if (action.tool === 'create_joint') {
+        const a = transforms.get(action.component_a), b = transforms.get(action.component_b);
+        if (!a || !b) throw new Error(`The model joint ${action.joint_id} references a body without a known transform.`);
+        const shared = a.position.map((value, index) => (value + b.position[index]) / 2) as [number, number, number];
+        const anchorA = localAnchorAt(a, shared);
+        const anchorB = localAnchorAt(b, shared);
+        commands.push({ tool: action.tool, input: {
+          joint_id: action.joint_id, joint_type: action.joint_type, component_a: action.component_a, component_b: action.component_b,
+          anchor_a: anchorA, anchor_b: anchorB, axis: action.axis, ...(action.limits ? { limits: action.limits } : {}),
+          ...(action.ratio > 0 ? { ratio: action.ratio } : {}), ...(action.stiffness > 0 ? { stiffness: action.stiffness } : {}), ...(action.damping > 0 ? { damping: action.damping } : {}),
+        }, label: `Joint ${action.component_a} to ${action.component_b}` });
+      } else if (action.tool === 'remove_joint') commands.push({ tool: action.tool, input: { joint_id: action.joint_id }, label: `Remove joint ${action.joint_id}` });
+      else if (action.tool === 'add_motor') commands.push({ tool: action.tool, input: { motor_id: action.motor_id, component_id: action.component_id, ...(action.joint_id ? { joint_id: action.joint_id } : {}), max_torque: action.max_torque, max_rpm: action.max_rpm, direction: action.direction }, label: `Drive ${action.component_id}` });
+      else if (action.tool === 'set_motor_speed') commands.push({ tool: action.tool, input: { motor_id: action.motor_id, max_rpm: action.max_rpm, direction: action.direction }, label: `Retune ${action.motor_id}` });
+      else if (action.tool === 'add_sensor') commands.push({ tool: action.tool, input: { sensor_id: action.sensor_id, component_id: action.component_id, sensor_type: action.sensor_type, channel: action.channel, ...(action.target_id ? { target_id: action.target_id } : {}), range: action.range }, label: `Sense ${action.channel}` });
+      else if (action.tool === 'set_sensor_range') commands.push({ tool: action.tool, input: { sensor_id: action.sensor_id, range: action.range }, label: `Retune ${action.sensor_id}` });
+      else if (action.tool === 'add_actuator') commands.push({ tool: action.tool, input: { actuator_id: action.actuator_id, component_id: action.component_id, joint_id: action.joint_id, actuator_type: action.actuator_type, max_force: action.max_force, max_speed: action.max_speed, travel: action.travel }, label: `Actuate ${action.component_id}` });
+      else if (action.tool === 'set_actuator_timing') commands.push({ tool: action.tool, input: { actuator_id: action.actuator_id, max_speed: action.max_speed, travel: action.travel }, label: `Retune ${action.actuator_id}` });
+      else if (action.tool === 'set_control_logic') commands.push({ tool: action.tool, input: { control_id: action.control_id, name: action.name, mode: action.mode, sensor_ids: action.sensor_ids, actuator_ids: action.actuator_ids, expression: action.expression, setpoint: action.setpoint, kp: action.kp, ki: action.ki, kd: action.kd }, label: `Control ${action.name}` });
+      else commands.push({ tool: action.tool, input: { control_id: action.control_id, expression: action.expression, setpoint: action.setpoint, kp: action.kp, ki: action.ki, kd: action.kd }, label: `Retune ${action.control_id}` });
+    }
+    return commands;
+  };
 
   const localEditCommands = (instruction: string): EditCommand[] => {
     const world = getSnapshot();
@@ -387,26 +442,46 @@ export function ForgeTwinApp() {
     const aliases: Record<string, string[]> = {
       'metal recovery chute': ['metal recovery chute'], 'plastic recovery chute': ['plastic recovery chute'], 'reject recovery chute': ['reject recovery chute'],
       'trommel drum': ['perforated rotating trommel drum'], trommel: ['perforated rotating trommel drum'],
-      'optical sensor': ['bottle and reject optical sensor'], chute: ['recovery chute', 'feed chute'], hopper: ['feed hopper'],
+      'optical sensor': ['bottle and reject optical sensor'], 'speed sensor': ['speed sensor', 'speed pickup', 'encoder'],
+      'feedback sensor': ['feedback sensor', 'sensor', 'camera', 'encoder', 'pickup'], 'rotor speed encoder': ['rotor speed encoder'],
+      'vision portal': ['vision portal', 'vision tunnel', 'camera portal', 'color sensor'], 'vision camera': ['vision camera', 'camera'],
+      'output chute': ['output chute', 'recovery chute', 'sorting chute'], chute: ['recovery chute', 'feed chute', 'output chute'], hopper: ['feed hopper'],
       handlebar: ['handlebar'], saddle: ['saddle', 'seat'], seat: ['saddle', 'seat'], battery: ['battery'], chain: ['drive chain', 'sprocket'],
       headlight: ['headlight', 'light module'], lamp: ['headlight', 'light module'],
       'solar panel': ['solar charging panel'], panel: ['solar charging panel', 'tracked panel'], fork: ['front fork'], bicycle: ['top tube', 'chain stay'],
-      boom: ['boom'], mast: ['mast'], base: ['base', 'chassis'], wheel: ['wheel'], motor: ['motor'], counterweight: ['counterweight'],
-      sensor: ['sensor', 'camera', 'pickup'], gripper: ['gripper'], arm: ['serial link', 'link'], platform: ['platform'], bridge: ['span', 'deck'],
-      gear: ['gear', 'sprocket'], conveyor: ['conveyor', 'transport surface'], support: ['support', 'outrigger', 'stay'],
+      'crane carrier base': ['crane carrier base', 'carrier base', 'chassis'], 'lifting boom': ['lifting boom', 'boom'],
+      'rear counterweight': ['rear counterweight', 'counterweight'], boom: ['boom'], mast: ['mast'], base: ['base', 'chassis'],
+      'mobile chassis': ['mobile chassis', 'chassis'], wheelbase: ['mobile chassis', 'chassis', 'chassis rail'], 'payload deck': ['payload deck'],
+      wheel: ['wheel'], motor: ['motor'], counterweight: ['counterweight'], shaft: ['shaft'],
+      sensor: ['sensor', 'camera', 'pickup', 'encoder'], gripper: ['gripper'], 'final arm link': ['final arm link', 'wrist link', 'serial link'], arm: ['serial link', 'link'],
+      platform: ['platform'], 'bridge deck': ['bridge deck', 'span deck', 'deck'], 'span deck': ['span deck', 'bridge deck', 'deck'], bridge: ['span', 'deck'],
+      'output gear': ['output gear'], gear: ['gear', 'sprocket'], 'powered conveyor': ['powered conveyor', 'conveyor', 'transport surface'], conveyor: ['conveyor', 'transport surface'],
+      'aerodynamic blade': ['aerodynamic blade', 'blade'], 'primary support': ['primary support', 'main support', 'support'], support: ['support', 'outrigger', 'stay'],
     };
-    const named = Object.entries(aliases).find(([name]) => text.includes(name))?.[1] ?? [];
+    const namedEntry = Object.entries(aliases)
+      .filter(([name]) => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`).test(text))
+      .sort(([left], [right]) => right.length - left.length)[0];
+    const named = namedEntry?.[1] ?? [];
+    const exactRoleTargets = world.components.filter((item) => named.some((term) => item.role === term));
+    const primitiveTargets = world.components.filter((item) => named.some((term) => item.primitive === term || item.primitive === term.replace(/s$/, '')));
+    const fuzzyRoleTargets = world.components.filter((item) => named.some((term) => item.role.includes(term)));
+    const coarseNamedTargets = exactRoleTargets.length ? exactRoleTargets : primitiveTargets.length ? primitiveTargets : fuzzyRoleTargets;
+    const namedMatch = namedEntry ? text.match(new RegExp(`\\b${namedEntry[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?\\b`)) : null;
+    const qualifierContext = namedMatch?.index === undefined ? '' : text.slice(Math.max(0, namedMatch.index - 36), namedMatch.index);
+    const requestedQualifiers = ['front', 'rear', 'left', 'right', 'input', 'output', 'upper', 'lower'].filter((qualifier) => new RegExp(`\\b${qualifier}\\b`).test(qualifierContext));
+    const qualifiedTargets = requestedQualifiers.length ? coarseNamedTargets.filter((item) => requestedQualifiers.every((qualifier) => item.role.includes(qualifier))) : [];
+    const namedTargets = qualifiedTargets.length ? qualifiedTargets : coarseNamedTargets;
     const headlightMount = headlightRequest && addingComponent
       ? world.components.find((item) => item.role === 'handlebar stem')
         ?? world.components.find((item) => item.role === 'steering head tube')
         ?? world.components.find((item) => /front.*fork|front.*frame|vehicle.*frame/.test(item.role))
       : undefined;
     const target = headlightMount
-      ?? world.components.find((item) => named.some((term) => item.role === term))
-      ?? world.components.find((item) => named.some((term) => item.role.includes(term)))
-      ?? world.components.find((item) => item.id === world.selectedComponentId)
-      ?? world.components.find((item) => !item.humanLockedFields.length);
+      ?? namedTargets[0]
+      ?? world.components.find((item) => item.id === world.selectedComponentId);
     if (!target) throw new Error('Select or name a component to edit.');
+    const bulkRequest = /\b(?:all|both|every)\b/.test(text);
+    const editTargets = bulkRequest && namedTargets.length ? namedTargets : [target];
     const primitiveRequest = headlightRequest ? catalogFor('light') : primitiveCatalog.find((item) => new RegExp(`\\b${item.kind}s?\\b`).test(text));
     if (addingComponent && primitiveRequest) {
       const count = world.components.filter((item) => item.primitive === primitiveRequest.kind).length + 1;
@@ -424,36 +499,40 @@ export function ForgeTwinApp() {
         { tool: 'create_joint', input: { joint_id: `chat-fixed-${world.revision + 3}`, joint_type: 'fixed', component_a: target.id, component_b: id, anchor_a: anchorA, anchor_b: [0, 0, 0], axis: [0, 1, 0] }, label: `Fix ${primitiveRequest.name} to ${target.role}` },
       ];
     }
-    if (/\b(remove|delete)\b/.test(text)) return [{ tool: 'remove_component', input: { component_id: target.id }, label: `Remove ${target.role}` }];
+    if (/\b(remove|delete)\b/.test(text)) return editTargets.map((item) => ({ tool: 'remove_component', input: { component_id: item.id }, label: `Remove ${item.role}` }));
     const material = materials.find((item) => text.includes(item.id));
-    if (material) return [{ tool: 'set_material', input: { component_id: target.id, material_id: material.id }, label: `Use ${material.name}` }];
-    if (/\b(heavier|increase mass|more mass)\b/.test(text)) return [{ tool: 'set_mass', input: { component_id: target.id, mass: Number((target.mass * 1.25).toFixed(3)) }, label: `Increase ${target.role} mass` }];
-    if (/\b(lighter|reduce mass|less mass)\b/.test(text)) return [{ tool: 'set_mass', input: { component_id: target.id, mass: Number((target.mass * .8).toFixed(3)) }, label: `Reduce ${target.role} mass` }];
-    const distance = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:m|meter)/)?.[1] ?? .5);
-    const moved = [...target.position] as [number, number, number];
-    if (/\b(left)\b/.test(text)) moved[0] -= distance;
-    if (/\b(right)\b/.test(text)) moved[0] += distance;
-    if (/\b(up|higher|raise)\b/.test(text)) moved[1] += distance;
-    if (/\b(down|lower)\b/.test(text)) moved[1] -= distance;
-    if (/\b(forward)\b/.test(text)) moved[2] += distance;
-    if (/\b(back|backward)\b/.test(text)) moved[2] -= distance;
-    if (moved.some((value, index) => value !== target.position[index])) return [{ tool: 'move_component', input: { component_id: target.id, position: moved }, label: `Move ${target.role}` }];
+    if (material) return editTargets.map((item) => ({ tool: 'set_material', input: { component_id: item.id, material_id: material.id }, label: `Use ${material.name} for ${item.role}` }));
+    if (/\b(heavier|increase mass|more mass)\b/.test(text)) return editTargets.map((item) => ({ tool: 'set_mass', input: { component_id: item.id, mass: Number((item.mass * 1.25).toFixed(3)) }, label: `Increase ${item.role} mass` }));
+    if (/\b(lighter|reduce mass|less mass)\b/.test(text)) return editTargets.map((item) => ({ tool: 'set_mass', input: { component_id: item.id, mass: Number((item.mass * .8).toFixed(3)) }, label: `Reduce ${item.role} mass` }));
+    const distanceMatch = text.match(/(\d+(?:\.\d+)?)\s*(mm|millimeters?|cm|centimeters?|m|meters?)\b/);
+    const rawDistance = Number(distanceMatch?.[1] ?? .5);
+    const distance = distanceMatch?.[2]?.startsWith('mm') ? rawDistance / 1000 : distanceMatch?.[2]?.startsWith('c') ? rawDistance / 100 : rawDistance;
+    const movementContext = namedMatch?.index === undefined ? text : text.slice(namedMatch.index + namedMatch[0].length);
+    const movementRequested = /\b(?:left|right|up|higher|raise|down|lower|forward|back|backward)\b/.test(text);
+    if (movementRequested) return editTargets.map((item) => {
+      const moved = translateInForgeCoordinates(item.position, text, movementContext, distance);
+      return { tool: 'move_component', input: { component_id: item.id, position: moved }, label: `Move ${item.role}` };
+    });
     if (/\brotate|angle|tilt\b/.test(text)) {
       const degrees = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:°|degrees?)/)?.[1] ?? 15);
-      return [{ tool: 'rotate_component', input: { component_id: target.id, rotation: [target.rotation[0], target.rotation[1], target.rotation[2] + degrees * Math.PI / 180] }, label: `Rotate ${target.role}` }];
+      return editTargets.map((item) => ({ tool: 'rotate_component', input: { component_id: item.id, rotation: [item.rotation[0], item.rotation[1], item.rotation[2] + degrees * Math.PI / 180] }, label: `Rotate ${item.role}` }));
     }
+    const resizeIntent = /\b(longer|shorter|larger|bigger|smaller|wider|narrower|taller|height|width|lengthen|enlarge|resize|scale|reduce|shrink|stabilize|stabilise|outrigger)\b/.test(text);
+    if (!resizeIntent) throw new Error('The local chat editor cannot map that request safely. Name the component and action, or connect your OpenAI key for a generative in-place edit.');
     const reducing = /\b(shorter|smaller|narrower|reduce|shrink)\b/.test(text);
     const requestedPercent = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:%|percent)/)?.[1] ?? 0);
     const scale = requestedPercent > 0
       ? (reducing ? Math.max(.1, 1 - requestedPercent / 100) : 1 + requestedPercent / 100)
       : reducing ? .8 : /\b(much|significantly)\b/.test(text) ? 1.4 : 1.2;
-    const dimensions = [...target.dimensions] as [number, number, number];
-    if (/\b(taller|height)\b/.test(text)) dimensions[1] *= scale;
-    else if (/\b(wider|width|stabil|outrigger)\b/.test(text)) { dimensions[0] *= scale; dimensions[2] *= scale; }
-    else {
-      const axis = dimensions.indexOf(Math.max(...dimensions)); dimensions[axis] *= scale;
-    }
-    return [{ tool: 'set_dimensions', input: { component_id: target.id, dimensions: dimensions.map((value) => Number(value.toFixed(3))) }, label: `Resize ${target.role}` }];
+    return editTargets.map((item) => {
+      const dimensions = [...item.dimensions] as [number, number, number];
+      if (/\b(taller|height)\b/.test(text)) dimensions[1] *= scale;
+      else if (/\b(wider|width|stabil|outrigger)\b/.test(text)) { dimensions[0] *= scale; dimensions[2] *= scale; }
+      else {
+        const axis = dimensions.indexOf(Math.max(...dimensions)); dimensions[axis] *= scale;
+      }
+      return { tool: 'set_dimensions', input: { component_id: item.id, dimensions: dimensions.map((value) => Number(value.toFixed(3))) }, label: `Resize ${item.role}` };
+    });
   };
 
   const editWithChat = async (instruction: string) => {
@@ -468,21 +547,47 @@ export function ForgeTwinApp() {
       await call('inspect_workspace', { since_revision: Math.max(0, state.revision - 1) }, 35, actor, controller.signal);
       let commands: EditCommand[];
       let summary: string;
+      let expectedRevision = getSnapshot().revision;
+      let expectedDesignHash = getSnapshot().designHash;
+      let preserveComponentIds: string[] = [];
       if (actor === 'ModelAgent') {
         addTrace('action', 'Model is editing the current world', prompt);
         try {
           const current = getSnapshot();
+          expectedRevision = current.revision; expectedDesignHash = current.designHash;
+          const latest = current.runs.at(-1) ?? null;
           const response = await requestAgentEdit(prompt, {
+            revision: current.revision, design_hash: current.designHash,
             machine_name: current.goal?.machineName ?? 'Mechanical system', goal: current.goal?.brief ?? goalPrompt,
-            selected_component_id: current.selectedComponentId ?? '', assembly_ids: current.assemblies.map((item) => item.id),
-            components: current.components.map((item) => ({ id: item.id, role: item.role, primitive: item.primitive, assembly_id: item.assemblyId, position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId, body_type: item.bodyType, mass: item.mass, human_locked_fields: item.humanLockedFields })),
+            max_components: current.goal?.maxComponents ?? 80, selected_component_id: current.selectedComponentId ?? '',
+            world: { gravity: current.world.gravity, bounds: current.world.bounds, environment: current.world.environment },
+            goal_constraints: current.goal?.constraints.map((item) => ({ metric: item.metric, label: item.label, operator: item.operator, target: item.target, unit: item.unit })) ?? [],
+            assemblies: current.assemblies.map((item) => ({ id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId ?? '' })),
+            components: current.components.map((item) => ({
+              id: item.id, role: item.role, primitive: item.primitive, assembly_id: item.assemblyId,
+              position: item.position, rotation: item.rotation, dimensions: item.dimensions,
+              material_id: item.materialId, body_type: item.bodyType, mass: item.mass, color: item.color,
+              parameters: item.parameters, human_locked_fields: item.humanLockedFields,
+            })),
+            connections: current.connections.map((item) => ({ id: item.id, source_id: item.sourceId, target_id: item.targetId, connection_type: item.type, channel: item.channel })),
+            joints: current.joints.map((item) => ({ id: item.id, joint_type: item.type, component_a: item.componentA, component_b: item.componentB, axis: item.axis, limits: item.limits ?? null, ratio: item.ratio ?? null, stiffness: item.stiffness ?? null, damping: item.damping ?? null })),
+            motors: current.motors.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId ?? '', max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction })),
+            sensors: current.sensors.map((item) => ({ id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId ?? '', range: item.range })),
+            actuators: current.actuators.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel })),
+            controls: current.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
+            latest_run: latest ? { status: latest.status, score: latest.metrics.score, failed_metrics: latest.metrics.measures.filter((item) => item.status === 'fail').map((item) => item.metric) } : null,
+            conversation: [...editMessages.slice(-7), userMessage].map((item) => ({ role: item.role, text: item.text })),
           }, agentKey || undefined, controller.signal);
-          setAgentModel(response.model); setAgentConnectionError(null); summary = response.result.summary; commands = modelEditCommands(response.result.actions);
-          if (/\b(add|create|attach)\b/i.test(prompt) && /\b(headlights?|head lamps?|lamps?|bike lights?|work lights?)\b/i.test(prompt)) {
-            commands = localEditCommands(prompt);
-            summary = 'The agent mapped the request to a purpose-built LED light module and mounted it on the bicycle steering structure.';
-            addTrace('action', 'Guarded component mapping applied', 'Headlight intent → LED light primitive → steering mount. Industrial substitutions were rejected.');
+          setAgentModel(response.model); setAgentConnectionError(null);
+          if (response.result.needs_clarification) {
+            const question = response.result.clarification_question;
+            setEditMessages((messages) => [...messages, { id: `edit-agent-${Date.now()}`, role: 'agent' as const, text: question }].slice(-18));
+            addTrace('reasoning', 'Chat edit needs one detail', `${response.result.understanding} ${question}`);
+            setToast('The agent asked a clarification before changing the world');
+            return;
           }
+          summary = response.result.understanding; commands = modelEditCommands(response.result.actions);
+          preserveComponentIds = response.result.preserve_ids;
           addTrace('reasoning', 'Model proposed an in-place revision', summary);
         } catch (caught) {
           actor = 'Deterministic'; const failure = recordModelFailure(caught); commands = localEditCommands(prompt);
@@ -492,7 +597,10 @@ export function ForgeTwinApp() {
       } else {
         commands = localEditCommands(prompt); summary = `Local chat edit: ${commands.map((item) => item.label).join(' · ')}.`;
       }
-      for (const edit of commands) await call(edit.tool, edit.input, 45, actor, controller.signal);
+      ensureActive(controller.signal);
+      must(commandBatch(commands.map((edit) => ({ name: edit.tool, input: edit.input })), actor, { expectedRevision, expectedDesignHash, preserveComponentIds }));
+      await pause(Math.min(220, Math.max(45, commands.length * 25)));
+      ensureActive(controller.signal);
       addTrace('action', 'Chat revision committed', commands.map((item) => item.tool).join(' → '));
       must(await runMachine(actor));
       for (let iteration = 0; iteration < 2 && getSnapshot().runs.at(-1)?.status === 'failed'; iteration += 1) actor = await redesignRun(getSnapshot().runs.at(-1)!, `${goalPrompt}\nThe user then requested this in-place edit: ${prompt}`, actor, controller.signal);

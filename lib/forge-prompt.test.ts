@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engineeringExamples } from './forge-data';
+import { componentMass, engineeringExamples } from './forge-data';
 import { compileDesignBrief } from './forge-prompt';
 
 const briefs = {
@@ -103,6 +103,15 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(sevenBlade.components.filter((item) => item.parameters?.cad_form === 'aero_blade')).toHaveLength(7);
     expect(sevenBlade.components.filter((item) => item.parameters?.cad_form === 'aero_blade').every((item) => item.materialId === 'aluminum')).toBe(true);
     expect(sevenBlade.components.some((item) => item.parameters?.cad_form === 'rotor_shroud' && item.role === 'ventilation duct shroud')).toBe(true);
+  });
+
+  it('keeps a compact high-ratio gearbox at a credible bench-scale mass and size', () => {
+    const gearbox = compileDesignBrief('Build a compact 12:1 reduction gearbox with two supported shafts, meshing gears, a motor, and an output speed sensor.');
+    const housing = gearbox.components.find((item) => item.role === 'open gearbox housing')!;
+    const outputGear = gearbox.components.find((item) => item.role === 'output gear')!;
+    expect(housing.dimensions[0]).toBeLessThan(.6);
+    expect(outputGear.dimensions[0]).toBeLessThan(.5);
+    expect(gearbox.components.reduce((total, item) => total + (item.mass ?? componentMass(item.primitive, item.dimensions, item.materialId)), 0)).toBeLessThan(25);
   });
 
   it('changes physical sizing when numeric requirements change', () => {
@@ -308,5 +317,46 @@ describe('ForgeTwin world-first brief compiler', () => {
       expect(plan.components.some((item) => item.role.startsWith('serial link'))).toBe(false);
     }
     expect(detailed.goal.constraints.find((item) => item.metric === 'alignment_error')?.target).toBe(2);
+  });
+
+  it('does not let incidental substrings or parent-machine words select unrelated templates', () => {
+    const feedback = compileDesignBrief('Build a feedback-controlled four-bar linkage with 60 degree travel.');
+    expect(feedback.goal.summary).toContain('closed-linkage');
+    expect(feedback.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+
+    const buffer = compileDesignBrief('Build a buffer where Machine A produces a part every 2 seconds and Machine B pauses.');
+    expect(buffer.goal.summary).toContain('warehouse-buffer');
+    expect(buffer.goal.summary).not.toContain('tomato-grader');
+
+    const gearbox = compileDesignBrief('Build a compact 12:1 reduction gearbox.');
+    expect(gearbox.goal.summary).toContain('rotary-transmission');
+    expect(gearbox.goal.summary).not.toContain('parametric-manifold');
+
+    const products = compileDesignBrief('Build an inspection conveyor for consumer products.');
+    expect(products.goal.summary).toContain('material-flow');
+    expect(products.goal.summary).not.toContain('parametric-manifold');
+
+    const turbine = compileDesignBrief('Build a fixed-pitch wind turbine rotor.');
+    expect(turbine.goal.summary).toContain('parametric-rotor');
+    expect(turbine.goal.summary).not.toContain('tracking-axis');
+
+    const centrifugal = compileDesignBrief('Build a centrifugal pump for 20 liters per minute.');
+    expect(centrifugal.goal.summary).toContain('parametric-rotor');
+    expect(centrifugal.goal.summary).not.toContain('reciprocating-linkage');
+
+    const housing = compileDesignBrief('Build a sealed pump housing.');
+    expect(housing.goal.summary).toContain('parametric-housing');
+    expect(housing.goal.summary).not.toContain('reciprocating-linkage');
+
+    const duct = compileDesignBrief('Build an HVAC rectangular air duct.');
+    expect(duct.goal.summary).toContain('parametric-manifold');
+
+    const jack = compileDesignBrief('Build a car jack raising 1500 kg.');
+    expect(jack.goal.summary).toContain('parallel-guides');
+    expect(jack.components.some((item) => item.parameters?.road_vehicle_wheel)).toBe(false);
+
+    expect(() => compileDesignBrief('Build a bench vise with a screw drive.')).toThrow(/could not identify a faithful/i);
+    expect(() => compileDesignBrief('Build a bench vise with a screw drive and replaceable jaw plates.')).toThrow(/could not identify a faithful/i);
+    expect(() => compileDesignBrief('Build an assorted tool tray.')).toThrow(/could not identify a faithful/i);
   });
 });

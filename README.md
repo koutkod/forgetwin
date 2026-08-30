@@ -4,7 +4,7 @@ ForgeTwin is a browser-based, agent-native engineering sandbox. A person describ
 
 The runtime is explicit about what is doing the work:
 
-- **Model agent** — a user can connect their own OpenAI API key for the current tab. GPT-5.6 Sol then interprets the brief, edits the current world from chat, and selects the failure-analysis/redesign tool loop. The key is held only in React memory, sent only to the same-origin agent route, and never stored in browser storage or the project. `OPENAI_MODEL` can override the default model.
+- **Model agent** — a user can connect their own OpenAI API key for the current tab. GPT-5.6 Sol then authors the complete design graph—assemblies, bodies, transforms, joints, devices, controls, and measurable requirements—edits the live world from chat, and selects the failure-analysis/redesign loop. Model graphs pass strict schema, identity, quantity, reference, grounding, connectivity, drive, bounds, and component-budget checks before any world mutation. The key is held only in React memory, sent only to the same-origin agent route, and never stored in browser storage or the project. `OPENAI_MODEL` can override the default model.
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
 
@@ -68,6 +68,7 @@ ForgeTwin exposes small, state-aware engineering operations instead of one opaqu
 | `move_component`, `rotate_component` | Place bodies while respecting human locks. |
 | `connect_components`, `create_joint` | Create topology, anchors, axes, limits, ratios, stiffness, and damping. |
 | `add_motor`, `add_sensor`, `add_actuator`, `set_control_logic` | Build the sensing, actuation, and control graph. |
+| `set_motor_speed`, `set_sensor_range`, `set_actuator_timing`, `update_control_logic` | Retune existing behavior in place without duplicating devices. |
 | `run_simulation` | Execute the current immutable design revision. |
 | `inspect_telemetry`, `inspect_failure`, `measure_constraint` | Read evidence rather than guessing from appearance. |
 | `optimize_design` | Apply a bounded redesign to evidence-linked physical or control fields. |
@@ -92,13 +93,13 @@ Gear/belt power transmission and structural stress use disclosed reduced-order e
 
 After a design passes, drag or edit a component. ForgeTwin marks the changed physical field as human-owned and invalidates the prior calibration. The agent detects the new design hash, simulates the modified world, and redesigns surrounding unlocked fields without moving the human component back. Compare and version-history views make the preservation visible.
 
-The **Edit with chat** panel changes the existing world rather than silently starting over. Requests such as “lengthen the boom,” “widen the outriggers,” “move the sensor up 0.5 m,” “use aluminum for the gripper,” or “add another support” compile into small guarded component/joint operations. ForgeTwin commits the revision, runs physics, and—if the edit breaks a constraint—uses the same evidence-driven redesign loop. A bounded deterministic chat interpreter covers common geometry, transform, mass, material, add, and remove requests when no model key is connected.
+The **Edit with chat** panel changes the existing world rather than silently starting over. The connected model receives the bounded current graph, selected body, device/control state, latest failed metrics, human locks, and recent chat context. Requests such as “lengthen the boom,” “widen the outriggers,” “move the sensor up 0.5 m,” “reverse the drive motor,” “retune the PID,” or “add another support” compile into the smallest guarded action sequence. Multi-action revisions execute against a shadow world and commit atomically only if every action, stale-state guard, and preservation invariant passes. If a request is materially ambiguous, the agent asks one clarification before mutating anything. ForgeTwin then runs physics and uses the same evidence-driven redesign loop if a constraint fails. Without a model key, the bounded local interpreter handles recognized geometry, transform, mass, material, add, and remove requests and refuses unknown edits instead of changing an arbitrary part.
 
 The renderer uses the same primitive graph to produce industrial frames, rounded structural members, geared shafts, grooved pulleys, rigging, wheels with hubs and tread, drive housings, crates, solar panels, conveyors, supports, and control devices. Camera framing is derived from the current world bounds, so a compact gearbox and a tall crane both fill the workspace without machine-specific camera presets.
 
 ## Security model
 
-- The design brief is treated as untrusted data, never executable instructions. The model route wraps it as design data and rejects model output that does not match the strict planning or redesign schema.
+- The design brief is treated as untrusted data, never executable instructions. The model route wraps it as `USER_DATA`, uses strict Structured Outputs, and performs one feedback-guided repair if a structurally valid answer violates mechanical or prompt-fidelity invariants.
 - Control expressions are declarative text and numeric parameters; arbitrary JavaScript is never evaluated.
 - IDs, transforms, dimensions, materials, masses, joints, limits, ratios, forces, speeds, and control values are schema-validated and bounded.
 - The simulator rejects incomplete motion systems and broken references rather than substituting a hidden template.
@@ -122,8 +123,9 @@ Key modules:
 - `lib/forge-prompt.ts` — free-form goal parsing and compositional world synthesis.
 - `lib/forge-engine.ts` — guarded state transitions, ownership, hashing, optimization, compare, and restore.
 - `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
-- `lib/forge-agent.ts` — strict model-plan/redesign/chat-edit schemas, client boundary, status, and temporary-key transport.
-- `lib/use-forge.ts` — Zod tool schemas, WebMCP registration, persistence, and optimistic concurrency.
+- `lib/forge-agent.ts` — strict model-plan/redesign/chat-edit schemas, semantic validation, client boundary, status, and temporary-key transport.
+- `lib/forge-model-plan.ts` — conversion from a validated model-authored design graph into the executable world plan and renderer semantics.
+- `lib/use-forge.ts` — Zod tool schemas, atomic edit batches, WebMCP registration, persistence, and optimistic concurrency.
 - `components/forge/forge-scene.tsx` — generic 3D primitive renderer and X-Ray world view.
 - `app/forgetwin-app.tsx` — agent loop, editor, activity feed, telemetry, compare, and demo UX.
 - `app/api/agent/route.ts` — same-origin server/edge model endpoint using structured Responses API output.
@@ -161,6 +163,6 @@ npm test
 npm run build
 ```
 
-The test suite covers strict model-agent boundaries, explicit no-key fallback, distinct generated world graphs, prompt-sensitive geometry, novel lower-level composition, guarded shared state, exact human Undo, agent-preserved human locks, generic Rapier execution, failure-to-redesign loops across multiple machine families, and automated accessibility checks.
+The test suite covers strict model-agent boundaries and schema compatibility, semantic repair, prompt-identity and count preservation, false-positive prompt families, model-authored graph compilation, atomic edit rollback, device/control retuning, explicit no-key fallback, distinct generated worlds, guarded shared state, exact human Undo, human locks, Rapier execution, failure-to-redesign loops, and automated accessibility checks.
 
 > The AI didn’t generate a picture of a machine. It engineered one, watched it fail, learned from the physics, and fixed it.

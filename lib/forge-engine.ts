@@ -1,4 +1,5 @@
 import { catalogFor, componentMass, materialFor, materials, primitiveCatalog } from './forge-data';
+import { localPointToWorld, worldPointToLocal } from './forge-motion';
 import type {
   Actor, Assembly, BodyType, Capability, ControlMode, DesignGoal, DesignSnapshot,
   ForgeState, ForgeToolName, GoalConstraint, JointType, MachineComponent,
@@ -10,7 +11,8 @@ const now = () => new Date().toISOString();
 const mutationTools = new Set<ForgeToolName>([
   'set_design_goal', 'create_assembly', 'create_component', 'set_dimensions', 'set_material', 'set_mass',
   'move_component', 'rotate_component', 'connect_components', 'create_joint', 'add_motor', 'add_sensor',
-  'add_actuator', 'set_control_logic', 'optimize_design', 'remove_component', 'remove_joint', 'restore_revision',
+  'set_motor_speed', 'set_sensor_range', 'add_actuator', 'set_actuator_timing', 'set_control_logic',
+  'update_control_logic', 'optimize_design', 'remove_component', 'remove_joint', 'restore_revision',
 ]);
 
 function stablePayload(state: ForgeState) {
@@ -388,14 +390,32 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   }
   if (name === 'move_component') {
     const target = component(state, input.component_id); lockField(state, target, 'position', actor);
-    target.position = position(input.position, state);
+    const nextPosition = position(input.position, state);
+    for (const mount of state.joints.filter((item) => item.componentA === target.id || item.componentB === target.id)) {
+      const targetIsA = mount.componentA === target.id;
+      const other = component(state, targetIsA ? mount.componentB : mount.componentA);
+      const targetAnchor = targetIsA ? mount.anchorA : mount.anchorB;
+      const relocatedWorldAnchor = localPointToWorld(nextPosition, target.rotation, targetAnchor);
+      const relocatedOtherAnchor = worldPointToLocal(other.position, other.rotation, relocatedWorldAnchor);
+      if (targetIsA) mount.anchorB = relocatedOtherAnchor; else mount.anchorA = relocatedOtherAnchor;
+    }
+    target.position = nextPosition;
     state = designMutation(state, name, `${target.role} moved`, actor, `${actor === 'Human' ? 'Human locked' : 'Moved'} ${target.id} at [${target.position.join(', ')}].`);
     if (actor === 'Human') state = addActivity(state, 'human_drag', `Shared geometry changed at revision ${state.revision}; the optimizer must preserve it.`, actor);
     return { state, result: success(state, 'Component moved.', target) };
   }
   if (name === 'rotate_component') {
     const target = component(state, input.component_id); lockField(state, target, 'rotation', actor);
-    target.rotation = rotation(input.rotation);
+    const nextRotation = rotation(input.rotation);
+    for (const mount of state.joints.filter((item) => item.componentA === target.id || item.componentB === target.id)) {
+      const targetIsA = mount.componentA === target.id;
+      const other = component(state, targetIsA ? mount.componentB : mount.componentA);
+      const otherAnchor = targetIsA ? mount.anchorB : mount.anchorA;
+      const fixedWorldAnchor = localPointToWorld(other.position, other.rotation, otherAnchor);
+      const rotatedTargetAnchor = worldPointToLocal(target.position, nextRotation, fixedWorldAnchor);
+      if (targetIsA) mount.anchorA = rotatedTargetAnchor; else mount.anchorB = rotatedTargetAnchor;
+    }
+    target.rotation = nextRotation;
     state = designMutation(state, name, `${target.role} rotated`, actor, `${actor === 'Human' ? 'Human locked' : 'Rotated'} ${target.id}.`);
     return { state, result: success(state, 'Component rotated.', target) };
   }
@@ -444,6 +464,15 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state = designMutation(state, name, 'Motor drive added', actor, `Motor ${value.id}: ${value.maxTorque} N·m at ${value.maxRpm} rpm.`);
     return { state, result: success(state, 'Motor added.', value) };
   }
+  if (name === 'set_motor_speed') {
+    const target = state.motors.find((item) => item.id === input.motor_id);
+    if (!target) throw new Error(`INVALID_INPUT: motor “${String(input.motor_id)}” was not found.`);
+    const maxRpm = Number(input.max_rpm); const direction = Number(input.direction);
+    if (!Number.isFinite(maxRpm) || maxRpm <= 0 || maxRpm > 100000 || !Number.isFinite(direction) || direction < -1 || direction > 1) throw new Error('INVALID_INPUT: motor rpm and direction are outside the supported range.');
+    target.maxRpm = maxRpm; target.direction = direction;
+    state = designMutation(state, name, 'Motor speed retuned', actor, `Set ${target.id} to ${target.maxRpm} rpm with direction ${target.direction}.`);
+    return { state, result: success(state, 'Motor speed updated.', target) };
+  }
   if (name === 'add_sensor') {
     const target = component(state, input.component_id); if (!['sensor', 'camera'].includes(target.primitive)) throw new Error('INVALID_INPUT: add_sensor targets a sensor or camera primitive.');
     if (input.target_id) component(state, input.target_id);
@@ -457,6 +486,14 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state = designMutation(state, name, 'Sensor channel added', actor, `${value.id} measures ${value.channel}${value.targetId ? ` on ${value.targetId}` : ''}.`);
     return { state, result: success(state, 'Sensor added.', value) };
   }
+  if (name === 'set_sensor_range') {
+    const target = state.sensors.find((item) => item.id === input.sensor_id);
+    if (!target) throw new Error(`INVALID_INPUT: sensor “${String(input.sensor_id)}” was not found.`);
+    const range = Number(input.range); if (!Number.isFinite(range) || range <= 0 || range > 100) throw new Error('INVALID_INPUT: sensor range must be 0–100 m.');
+    target.range = range;
+    state = designMutation(state, name, 'Sensor range retuned', actor, `Set ${target.id} range to ${target.range} m.`);
+    return { state, result: success(state, 'Sensor range updated.', target) };
+  }
   if (name === 'add_actuator') {
     const target = component(state, input.component_id); const targetJoint = joint(state, input.joint_id);
     if (!['motor', 'servo', 'piston'].includes(target.primitive)) throw new Error('INVALID_INPUT: actuator body must be motor, servo, or piston.');
@@ -466,6 +503,15 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state.actuators.push(value);
     state = designMutation(state, name, 'Actuator added', actor, `${value.id} drives ${targetJoint.id} with ${value.maxForce} N limit.`);
     return { state, result: success(state, 'Actuator added.', value) };
+  }
+  if (name === 'set_actuator_timing') {
+    const target = state.actuators.find((item) => item.id === input.actuator_id);
+    if (!target) throw new Error(`INVALID_INPUT: actuator “${String(input.actuator_id)}” was not found.`);
+    const maxSpeed = Number(input.max_speed); const travel = Number(input.travel);
+    if (![maxSpeed, travel].every(Number.isFinite) || maxSpeed <= 0 || maxSpeed > 10000 || travel <= 0 || travel > 100) throw new Error('INVALID_INPUT: actuator speed and travel are outside the supported range.');
+    target.maxSpeed = maxSpeed; target.travel = travel;
+    state = designMutation(state, name, 'Actuator timing retuned', actor, `Set ${target.id} to ${target.maxSpeed} m/s over ${target.travel} m travel.`);
+    return { state, result: success(state, 'Actuator timing updated.', target) };
   }
   if (name === 'set_control_logic') {
     const sensorIds = Array.isArray(input.sensor_ids) ? input.sensor_ids.map(String) : [];
@@ -482,6 +528,15 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state.controls.push(value);
     state = designMutation(state, name, 'Control logic added', actor, `${value.mode} controller “${value.id}” connects ${sensorIds.length} sensor${sensorIds.length === 1 ? '' : 's'} to ${actuatorIds.length} actuator${actuatorIds.length === 1 ? '' : 's'}.`);
     return { state, result: success(state, 'Control logic set.', value) };
+  }
+  if (name === 'update_control_logic') {
+    const target = state.controls.find((item) => item.id === input.control_id);
+    if (!target) throw new Error(`INVALID_INPUT: control “${String(input.control_id)}” was not found.`);
+    const setpoint = Number(input.setpoint), kp = Number(input.kp), ki = Number(input.ki), kd = Number(input.kd);
+    if (![setpoint, kp, ki, kd].every(Number.isFinite) || [kp, ki, kd].some((value) => value < 0 || value > 10)) throw new Error('INVALID_INPUT: control values must be finite and PID gains must be 0–10.');
+    target.expression = String(input.expression).slice(0, 180); target.setpoint = setpoint; target.kp = kp; target.ki = ki; target.kd = kd;
+    state = designMutation(state, name, 'Control logic retuned', actor, `Updated ${target.id} setpoint and gains in place.`);
+    return { state, result: success(state, 'Control logic updated.', target) };
   }
   if (name === 'optimize_design') {
     const latest = runFor(state, input.run_id);

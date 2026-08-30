@@ -72,6 +72,19 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
   }, 30_000);
 
+  it('credits continuous angular travel only to the motor bound to that revolute joint', async () => {
+    const connected = assemblePlan(compileDesignBrief('Build an aluminum six-blade impeller and animate it at 120 rpm.'));
+    const shaftJoint = connected.joints.find((item) => item.type === 'revolute')!;
+    expect(shaftJoint.limits).toBeUndefined();
+    const connectedRun = await simulateDesign(connected);
+    const connectedTravel = connectedRun.metrics.measures.find((item) => item.metric === 'angular_travel')!;
+    expect(connectedTravel.value).toBeCloseTo(connected.motors[0].maxRpm * 6 * connected.world.duration, 0);
+
+    const disconnected = { ...connected, motors: connected.motors.map((motor) => ({ ...motor, jointId: undefined })) };
+    const disconnectedRun = await simulateDesign(disconnected);
+    expect(disconnectedRun.metrics.measures.find((item) => item.metric === 'angular_travel')?.value).toBe(0);
+  }, 30_000);
+
   it('keeps the solar e-bike together while animating its centered wheel drive', async () => {
     const prompt = 'build a solar powered electric bycicle';
     let state = assemblePlan(compileDesignBrief(prompt));

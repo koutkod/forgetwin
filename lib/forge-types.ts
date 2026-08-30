@@ -21,7 +21,8 @@ export type ForgeToolName =
   | 'create_assembly' | 'create_component' | 'set_dimensions' | 'set_material'
   | 'set_mass' | 'move_component' | 'rotate_component' | 'connect_components'
   | 'create_joint' | 'add_motor' | 'add_sensor' | 'add_actuator'
-  | 'set_control_logic' | 'run_simulation' | 'inspect_telemetry'
+  | 'set_motor_speed' | 'set_sensor_range' | 'set_actuator_timing'
+  | 'set_control_logic' | 'update_control_logic' | 'run_simulation' | 'inspect_telemetry'
   | 'inspect_failure' | 'measure_constraint' | 'optimize_design'
   | 'remove_component' | 'remove_joint' | 'compare_designs' | 'restore_revision';
 

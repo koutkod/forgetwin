@@ -5,7 +5,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
-import { roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw } from '../../lib/forge-motion';
+import { createMechanismMotionGraph, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
@@ -15,6 +15,7 @@ type OperatingContext = {
   enabled: boolean;
   machine: string;
   drawbridgePivot: Vec3 | null;
+  mechanismMotion: MechanismMotionGraph | null;
 };
 
 const OperationTimeContext = createContext<{ current: number }>({ current: 0 });
@@ -37,8 +38,8 @@ function routeProgress(progress: number, start: Vec3, split: Vec3, end: Vec3) {
 }
 
 function operationPose(component: MachineComponent, elapsed: number, context: OperatingContext) {
-  const position = [...component.position] as Vec3;
-  const rotation = [...component.rotation] as Vec3;
+  let position = [...component.position] as Vec3;
+  let rotation = [...component.rotation] as Vec3;
   if (!context.enabled) return { position, rotation };
   const role = component.role.toLowerCase();
   const form = String(component.parameters.product_form ?? '');
@@ -72,20 +73,33 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     }
   }
 
+  // Model-authored bodies are driven from their actual joint graph;
+  // deterministic showcase machines retain the bespoke choreography below.
+  // Road wheels animate internally so steering and tire roll remain independent
+  // and must not receive a second body transform.
+  const selfAnimatedShape = Boolean(component.parameters.road_vehicle_wheel || component.parameters.road_vehicle_steering_wheel)
+    || ['servo', 'piston', 'spring', 'gripper', 'conveyor'].includes(component.primitive);
+  const mechanismPose = !selfAnimatedShape ? context.mechanismMotion?.poseAt(component.id, elapsed) : null;
+  const jointPoseApplied = Boolean(mechanismPose?.animated);
+  if (jointPoseApplied && mechanismPose) {
+    position = [...mechanismPose.position];
+    rotation = [...mechanismPose.rotation];
+  }
+
   const independentlyRollingWheel = (component.primitive === 'wheel' || component.parameters.bicycle_wheel || component.parameters.rover_wheel)
     && !component.parameters.road_vehicle_wheel
     && !component.parameters.road_vehicle_steering_wheel;
-  if (independentlyRollingWheel) rotation[2] -= elapsed * 3.4;
-  if ((component.primitive === 'gear' || component.parameters.bicycle_sprocket) && !component.parameters.road_vehicle_brake) {
+  if (!jointPoseApplied && independentlyRollingWheel) rotation[2] -= elapsed * 3.4;
+  if (!jointPoseApplied && (component.primitive === 'gear' || component.parameters.bicycle_sprocket) && !component.parameters.road_vehicle_brake) {
     const direction = /output/.test(role) ? -1 : 1;
     const teeth = Math.max(12, Number(component.parameters.teeth ?? 18));
     rotation[2] += elapsed * (40.5 / teeth) * direction;
   }
-  if (component.parameters.recycling_drum) rotation[0] += elapsed * 1.85;
-  else if (component.primitive === 'pulley') rotation[2] += elapsed * 1.85;
+  if (!jointPoseApplied && component.parameters.recycling_drum) rotation[0] += elapsed * 1.85;
+  else if (!jointPoseApplied && (component.primitive === 'pulley' || component.parameters.operation_spin)) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? 1.85);
   if (component.parameters.road_vehicle_steering_rack) position[2] += roadVehicleRackTravel(elapsed);
 
-  if (/solar|tracking/.test(context.machine)) {
+  if (!jointPoseApplied && /solar|tracking/.test(context.machine)) {
     if (component.parameters.solar_moving || component.parameters.panel || role.includes('cross rail')) {
       const angle = signed * .38;
       const pivotX = 0, pivotY = 2.58;
@@ -100,24 +114,24 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     }
   }
 
-  if (/patient/.test(context.machine)) {
+  if (!jointPoseApplied && /patient/.test(context.machine)) {
     if (/spreader|sling|strap|hanger|patient_load/.test(role) || component.parameters.patient_sling || component.parameters.sling_strap) position[1] += wave * .58;
     if (role.includes('lifting boom')) rotation[2] += signed * .07;
     if (role.includes('lift actuator')) position[1] += signed * .06;
-  } else if (/crane/.test(context.machine)) {
+  } else if (!jointPoseApplied && /crane/.test(context.machine)) {
     if (/hook|suspended payload|load cable/.test(role)) position[1] += wave * 1.05;
     if (role.includes('boom head pulley')) rotation[2] += elapsed * 1.35;
   }
 
-  if (/robotic arm|three-axis/.test(context.machine)) {
+  if (!jointPoseApplied && /robotic arm|three-axis/.test(context.machine)) {
     const match = role.match(/serial link (\d)/);
     if (match) rotation[2] += Math.sin(elapsed * .7 + Number(match[1]) * .9) * (.055 + Number(match[1]) * .012);
     if (/gripper|tool pose camera/.test(role)) position[1] += Math.sin(elapsed * .7 + 2.7) * .08;
   }
 
-  if (/bridge/.test(context.machine) && !/drawbridge/.test(context.machine) && role.includes('moving design load')) position[0] += Math.sin(elapsed * .48) * 2.2;
+  if (!jointPoseApplied && /bridge/.test(context.machine) && !/drawbridge/.test(context.machine) && role.includes('moving design load')) position[0] += Math.sin(elapsed * .48) * 2.2;
 
-  if (/drawbridge/.test(context.machine) && context.drawbridgePivot && /deck|hinged span|chord|brace|design load|load gauge/.test(role)) {
+  if (!jointPoseApplied && /drawbridge/.test(context.machine) && context.drawbridgePivot && /deck|hinged span|chord|brace|design load|load gauge/.test(role)) {
     const angle = -wave * .78;
     const [pivotX, pivotY] = context.drawbridgePivot;
     const dx = component.position[0] - pivotX;
@@ -126,9 +140,9 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     position[1] = pivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
     rotation[2] += angle;
   }
-  if (/drawbridge/.test(context.machine) && role.includes('counterweight')) position[1] -= wave * .45;
+  if (!jointPoseApplied && /drawbridge/.test(context.machine) && role.includes('counterweight')) position[1] -= wave * .45;
 
-  if (/suspension/.test(context.machine)) {
+  if (!jointPoseApplied && /suspension/.test(context.machine)) {
     const suspensionIndex = Number(component.parameters.operation_index ?? 0);
     const travel = suspensionTravel(elapsed, suspensionIndex);
     if (/suspension chassis|passenger car body|passenger cabin/.test(role)) position[1] += Math.sin(elapsed * 1.25 + .35) * .024;
@@ -137,10 +151,10 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     if (component.primitive === 'spring' && component.parameters.suspension_corner) position[1] += travel * .5;
     if (component.parameters.road_bump) position[1] += travel;
   }
-  if (component.parameters.buffer_gate) position[1] -= wave * .22;
-  if (component.parameters.sorting_diverter) rotation[1] += signed * .48;
-  if (component.parameters.fixture_clamp) position[1] -= wave * .13;
-  if (component.parameters.recycling_magnet) position[1] += Math.sin(elapsed * .8) * .035;
+  if (!jointPoseApplied && component.parameters.buffer_gate) position[1] -= wave * .22;
+  if (!jointPoseApplied && component.parameters.sorting_diverter) rotation[1] += signed * .48;
+  if (!jointPoseApplied && component.parameters.fixture_clamp) position[1] -= wave * .13;
+  if (!jointPoseApplied && component.parameters.recycling_magnet) position[1] += Math.sin(elapsed * .8) * .035;
   return { position, rotation };
 }
 
@@ -949,8 +963,19 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
   const previewData = useMemo(() => previewWorld(), []);
   const operationTime = useRef(0);
   useFrame((_, delta) => { if (operating) operationTime.current += Math.min(delta, .05); });
-  const components = state.components.length ? state.components : preview ? previewData.components : [];
-  const joints: Joint[] = state.components.length ? state.joints : preview ? previewData.joints : [];
+  const components = useMemo(
+    () => state.components.length ? state.components : preview ? previewData.components : [],
+    [preview, previewData.components, state.components],
+  );
+  const joints: Joint[] = useMemo(
+    () => state.components.length ? state.joints : preview ? previewData.joints : [],
+    [preview, previewData.joints, state.components.length, state.joints],
+  );
+  const modelAuthored = /GPT-5\.6 design graph/i.test(state.goal?.simulationModel ?? '');
+  const mechanismMotion = useMemo(
+    () => modelAuthored ? createMechanismMotionGraph(components, joints, state.motors, state.actuators) : null,
+    [components, joints, modelAuthored, state.motors, state.actuators],
+  );
   const byId = new Map(components.map((component) => [component.id, component]));
   const framedComponents = components.filter((item) => !item.parameters.solar_source);
   const cameraComponents = framedComponents.length ? framedComponents : components;
@@ -958,10 +983,10 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
   const highs = cameraComponents.length ? [0, 1, 2].map((axis) => Math.max(...cameraComponents.map((item) => item.position[axis] + item.dimensions[axis] / 2))) : [2, 3, 2];
   const center = lows.map((value, axis) => (value + highs[axis]) / 2) as Vec3;
   const spans = lows.map((value, axis) => highs[axis] - value);
-  const cameraRadius = Math.max(3.8, Math.min(13, Math.max(...spans) * 1.02));
+  const cameraRadius = Math.max(.5, Math.min(13, Math.max(...spans) * 1.02));
   const machine = `${state.goal?.machineName ?? (preview ? 'counterbalanced tower crane' : '')} ${state.goal?.brief ?? ''}`.toLowerCase();
   const drawbridgeDeck = /drawbridge/.test(machine) ? components.filter((item) => /deck|hinged span/.test(item.role.toLowerCase())).sort((a, b) => a.position[0] - b.position[0])[0] : undefined;
-  const operatingContext: OperatingContext = { enabled: operating, machine, drawbridgePivot: drawbridgeDeck ? [drawbridgeDeck.position[0] - drawbridgeDeck.dimensions[0] / 2, drawbridgeDeck.position[1], drawbridgeDeck.position[2]] : null };
+  const operatingContext: OperatingContext = { enabled: operating, machine, drawbridgePivot: drawbridgeDeck ? [drawbridgeDeck.position[0] - drawbridgeDeck.dimensions[0] / 2, drawbridgeDeck.position[1], drawbridgeDeck.position[2]] : null, mechanismMotion };
   return <OperationTimeContext.Provider value={operationTime}><>
     <CameraDirector center={center} radius={cameraRadius} signature={`${state.designHash}-${preview ? 'preview' : 'world'}`} />
     <ambientLight intensity={.72} />
@@ -993,7 +1018,7 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
     <mesh position={[0, -.16, 0]} receiveShadow><boxGeometry args={[state.world.bounds[0], .2, state.world.bounds[2]]} /><meshStandardMaterial color="#0a0e12" roughness={.82} /></mesh>
     <Grid position={[0, -.05, 0]} args={[state.world.bounds[0], state.world.bounds[2]]} cellColor="#21313a" sectionColor="#315363" fadeDistance={Math.max(state.world.bounds[0], state.world.bounds[2])} fadeStrength={1.45} />
     <ContactShadows position={[0, -.04, 0]} opacity={.58} scale={Math.max(state.world.bounds[0], state.world.bounds[2])} blur={2.4} far={7} />
-    <OrbitControls makeDefault enablePan minDistance={2.5} maxDistance={30} minPolarAngle={.22} maxPolarAngle={1.5} target={center} />
+    <OrbitControls makeDefault enablePan minDistance={.5} maxDistance={30} minPolarAngle={.22} maxPolarAngle={1.5} target={center} />
   </></OperationTimeContext.Provider>;
 }
 

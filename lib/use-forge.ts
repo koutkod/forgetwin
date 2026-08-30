@@ -32,9 +32,13 @@ export const schemas = {
   connect_components: z.object({ connection_id: id.optional(), source_id: id, target_id: id, connection_type: z.enum(['mechanical', 'power', 'signal']), channel: key, ...guard }).strict(),
   create_joint: z.object({ joint_id: id, joint_type: z.enum(['fixed', 'revolute', 'prismatic', 'spherical', 'spring', 'rope', 'gear', 'belt']), component_a: id, component_b: id, anchor_a: vec3, anchor_b: vec3, axis: vec3, limits: z.tuple([z.number().finite(), z.number().finite()]).optional(), ratio: z.number().finite().positive().optional(), stiffness: z.number().finite().positive().optional(), damping: z.number().finite().nonnegative().optional(), ...guard }).strict(),
   add_motor: z.object({ motor_id: id, component_id: id, joint_id: id.optional(), max_torque: z.number().finite().positive(), max_rpm: z.number().finite().positive(), direction: z.number().finite().min(-1).max(1).optional(), ...guard }).strict(),
+  set_motor_speed: z.object({ motor_id: id, max_rpm: z.number().finite().positive().max(100000), direction: z.number().finite().min(-1).max(1), ...guard }).strict(),
   add_sensor: z.object({ sensor_id: id, component_id: id, sensor_type: z.enum(['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence']), channel: key, target_id: id.optional(), range: z.number().finite().positive().max(100), ...guard }).strict(),
+  set_sensor_range: z.object({ sensor_id: id, range: z.number().finite().positive().max(100), ...guard }).strict(),
   add_actuator: z.object({ actuator_id: id, component_id: id, joint_id: id, actuator_type: z.enum(['rotary-motor', 'servo', 'linear', 'piston', 'winch']), max_force: z.number().finite().positive(), max_speed: z.number().finite().positive(), travel: z.number().finite().positive(), ...guard }).strict(),
+  set_actuator_timing: z.object({ actuator_id: id, max_speed: z.number().finite().positive().max(10000), travel: z.number().finite().positive().max(100), ...guard }).strict(),
   set_control_logic: z.object({ control_id: id, name: z.string().min(1).max(80), mode: z.enum(['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized']), sensor_ids: z.array(id).max(12), actuator_ids: z.array(id).max(12), expression: z.string().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10), calibration_x: z.number().finite().min(-60).max(60).optional(), ...guard }).strict(),
+  update_control_logic: z.object({ control_id: id, expression: z.string().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10), ...guard }).strict(),
   run_simulation: z.object(guard).strict(),
   inspect_telemetry: z.object({ run_id: z.string().max(80).optional() }).strict(),
   inspect_failure: z.object({ run_id: z.string().max(80).optional() }).strict(),
@@ -64,9 +68,13 @@ const descriptions: Record<ForgeToolName, string> = {
   connect_components: 'Create a declared mechanical, power, or signal graph edge between two bodies.',
   create_joint: 'Create a fixed, revolute, prismatic, spherical, spring, rope, gear, or belt joint with anchors, axis, limits, and physical parameters.',
   add_motor: 'Attach a torque- and rpm-limited motor to a physical motor body and optional joint.',
+  set_motor_speed: 'Retune the speed and direction of an existing motor without replacing its body or joint.',
   add_sensor: 'Register a typed measurement channel on a sensor or camera body.',
+  set_sensor_range: 'Retune the measurement range of an existing sensor while preserving its mounting and channel.',
   add_actuator: 'Bind a per-joint rotary, servo, linear, piston, or winch actuator with force, speed, and travel limits.',
+  set_actuator_timing: 'Retune the speed and travel envelope of an existing actuator without rebuilding the mechanism.',
   set_control_logic: 'Create bounded declarative PID, tracking, synchronized, threshold, timed, or state-machine logic between device IDs.',
+  update_control_logic: 'Retune an existing control expression, setpoint, and PID gains in place.',
   run_simulation: 'Instantiate the current bodies and supported joints in a fixed-step Rapier world and capture telemetry, replay, contacts, and measured constraints.',
   inspect_telemetry: 'Read physics configuration, time-series channels, constraint evidence, objective, and recommended changes.',
   inspect_failure: 'Read causal failed constraints, involved component IDs, evidence channels, contacts, and bounded redesign recommendations.',
@@ -96,6 +104,20 @@ function failure(state: ForgeState, error: unknown): ToolResult {
   return { ok: false, workspace_id: state.workspaceId, workspace_nonce: state.workspaceNonce, revision: state.revision, error: { code, message: error instanceof z.ZodError ? 'Arguments did not match the controlled world-tool schema.' : rest.join(': ') || message } };
 }
 
+function preservationFingerprint(state: ForgeState, componentId: string) {
+  const component = state.components.find((item) => item.id === componentId);
+  if (!component) return null;
+  const joints = state.joints.filter((item) => item.componentA === componentId || item.componentB === componentId).sort((a, b) => a.id.localeCompare(b.id));
+  const connections = state.connections.filter((item) => item.sourceId === componentId || item.targetId === componentId).sort((a, b) => a.id.localeCompare(b.id));
+  const jointIds = new Set(joints.map((item) => item.id));
+  const motors = state.motors.filter((item) => item.componentId === componentId || Boolean(item.jointId && jointIds.has(item.jointId))).sort((a, b) => a.id.localeCompare(b.id));
+  const sensors = state.sensors.filter((item) => item.componentId === componentId || item.targetId === componentId).sort((a, b) => a.id.localeCompare(b.id));
+  const actuators = state.actuators.filter((item) => item.componentId === componentId || jointIds.has(item.jointId)).sort((a, b) => a.id.localeCompare(b.id));
+  const deviceIds = new Set([...motors.map((item) => item.id), ...sensors.map((item) => item.id), ...actuators.map((item) => item.id)]);
+  const controls = state.controls.filter((item) => [...item.sensorIds, ...item.actuatorIds].some((id) => deviceIds.has(id))).sort((a, b) => a.id.localeCompare(b.id));
+  return JSON.stringify({ component, joints, connections, motors, sensors, actuators, controls });
+}
+
 export function useForge() {
   const [state, setState] = useState<ForgeState>(createInitialForgeState);
   const [hydrated, setHydrated] = useState(false);
@@ -119,6 +141,40 @@ export function useForge() {
       const input = schemas[name].parse(enriched) as Record<string, unknown>;
       const applied = applyForgeTool(current, name, input, actor); commit(applied.state); return applied.result;
     } catch (error) { return failure(current, error); }
+  }, [commit]);
+
+  const commandBatch = useCallback((
+    steps: Array<{ name: ForgeToolName; input?: Record<string, unknown> }>,
+    actor: Actor = 'UI',
+    options: { expectedRevision?: number; expectedDesignHash?: string; preserveComponentIds?: string[] } = {},
+  ): ToolResult => {
+    const before = stateRef.current;
+    if (!steps.length) return failure(before, new Error('INVALID_INPUT: An atomic command batch needs at least one action.'));
+    if (actor === 'WebMCP') return failure(before, new Error('INVALID_INPUT: WebMCP actions must remain individually revision-guarded.'));
+    if (options.expectedRevision !== undefined && options.expectedRevision !== before.revision) return failure(before, new Error('STALE_REVISION: The world changed while the edit was being planned. Inspect it and retry.'));
+    if (options.expectedDesignHash && options.expectedDesignHash !== before.designHash) return failure(before, new Error('STALE_REVISION: The design changed while the edit was being planned. Inspect it and retry.'));
+    const preserved = new Map((options.preserveComponentIds ?? []).map((componentId) => [componentId, preservationFingerprint(before, componentId)]));
+    if ([...preserved.values()].some((item) => !item)) return failure(before, new Error('INVALID_STATE: The edit tried to preserve a component that no longer exists.'));
+    let next = before;
+    let finalResult: ToolResult | null = null;
+    try {
+      for (const step of steps) {
+        if (!guardedTools.has(step.name) || step.name === 'run_simulation') throw new Error(`INVALID_INPUT: ${step.name} cannot run inside an atomic edit batch.`);
+        const rawInput = step.input ?? {};
+        const enriched = guardedTools.has(step.name)
+          ? { ...rawInput, expected_revision: next.revision, expected_workspace_nonce: next.workspaceNonce }
+          : rawInput;
+        const input = schemas[step.name].parse(enriched) as Record<string, unknown>;
+        const applied = applyForgeTool(next, step.name, input, actor);
+        next = applied.state;
+        finalResult = applied.result;
+      }
+      for (const [componentId, original] of preserved) if (preservationFingerprint(next, componentId) !== original) throw new Error(`HUMAN_LOCKED: The edit changed preserved component ${componentId} or its functional graph.`);
+      commit(next);
+      return finalResult!;
+    } catch (error) {
+      return failure(before, error);
+    }
   }, [commit]);
 
   const runMachine = useCallback(async (actor: Actor = 'UI', rawInput: Record<string, unknown> = {}) => {
@@ -147,7 +203,7 @@ export function useForge() {
   const patchUi = useCallback((patch: Parameters<typeof toggleUi>[1]) => commit(toggleUi(stateRef.current, patch)), [commit]);
   const checkpoint = useCallback((label: string) => commit(createCheckpoint(stateRef.current, label)), [commit]);
   const reset = useCallback((screen: ForgeState['screen'] = 'lab') => { try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* Reset still works in memory. */ } commit(createInitialForgeState(screen)); }, [commit]);
-  return { state, hydrated, command, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot };
+  return { state, hydrated, command, commandBatch, runMachine, moveComponentAsHuman, patchUi, checkpoint, reset, getSnapshot };
 }
 
 function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
@@ -171,9 +227,13 @@ function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
     connect_components: { properties: { connection_id: identifier, source_id: identifier, target_id: identifier, connection_type: { enum: ['mechanical', 'power', 'signal'] }, channel: metricKey, ...common }, required: ['source_id', 'target_id', 'connection_type', 'channel', ...requiredCommon] },
     create_joint: { properties: { joint_id: identifier, joint_type: { enum: ['fixed', 'revolute', 'prismatic', 'spherical', 'spring', 'rope', 'gear', 'belt'] }, component_a: identifier, component_b: identifier, anchor_a: vector, anchor_b: vector, axis: vector, limits: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } }, ratio: { type: 'number', exclusiveMinimum: 0 }, stiffness: { type: 'number', exclusiveMinimum: 0 }, damping: { type: 'number', minimum: 0 }, ...common }, required: ['joint_id', 'joint_type', 'component_a', 'component_b', 'anchor_a', 'anchor_b', 'axis', ...requiredCommon] },
     add_motor: { properties: { motor_id: identifier, component_id: identifier, joint_id: identifier, max_torque: { type: 'number', exclusiveMinimum: 0 }, max_rpm: { type: 'number', exclusiveMinimum: 0 }, direction: { type: 'number', minimum: -1, maximum: 1 }, ...common }, required: ['motor_id', 'component_id', 'max_torque', 'max_rpm', ...requiredCommon] },
+    set_motor_speed: { properties: { motor_id: identifier, max_rpm: { type: 'number', exclusiveMinimum: 0, maximum: 100000 }, direction: { type: 'number', minimum: -1, maximum: 1 }, ...common }, required: ['motor_id', 'max_rpm', 'direction', ...requiredCommon] },
     add_sensor: { properties: { sensor_id: identifier, component_id: identifier, sensor_type: { enum: ['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence'] }, channel: metricKey, target_id: identifier, range: { type: 'number', exclusiveMinimum: 0 }, ...common }, required: ['sensor_id', 'component_id', 'sensor_type', 'channel', 'range', ...requiredCommon] },
+    set_sensor_range: { properties: { sensor_id: identifier, range: { type: 'number', exclusiveMinimum: 0, maximum: 100 }, ...common }, required: ['sensor_id', 'range', ...requiredCommon] },
     add_actuator: { properties: { actuator_id: identifier, component_id: identifier, joint_id: identifier, actuator_type: { enum: ['rotary-motor', 'servo', 'linear', 'piston', 'winch'] }, max_force: { type: 'number', exclusiveMinimum: 0 }, max_speed: { type: 'number', exclusiveMinimum: 0 }, travel: { type: 'number', exclusiveMinimum: 0 }, ...common }, required: ['actuator_id', 'component_id', 'joint_id', 'actuator_type', 'max_force', 'max_speed', 'travel', ...requiredCommon] },
+    set_actuator_timing: { properties: { actuator_id: identifier, max_speed: { type: 'number', exclusiveMinimum: 0, maximum: 10000 }, travel: { type: 'number', exclusiveMinimum: 0, maximum: 100 }, ...common }, required: ['actuator_id', 'max_speed', 'travel', ...requiredCommon] },
     set_control_logic: { properties: { control_id: identifier, name: { type: 'string' }, mode: { enum: ['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized'] }, sensor_ids: { type: 'array', items: identifier }, actuator_ids: { type: 'array', items: identifier }, expression: { type: 'string' }, setpoint: { type: 'number' }, kp: { type: 'number' }, ki: { type: 'number' }, kd: { type: 'number' }, calibration_x: { type: 'number', minimum: -60, maximum: 60 }, ...common }, required: ['control_id', 'name', 'mode', 'sensor_ids', 'actuator_ids', 'expression', 'setpoint', 'kp', 'ki', 'kd', ...requiredCommon] },
+    update_control_logic: { properties: { control_id: identifier, expression: { type: 'string' }, setpoint: { type: 'number' }, kp: { type: 'number', minimum: 0, maximum: 10 }, ki: { type: 'number', minimum: 0, maximum: 10 }, kd: { type: 'number', minimum: 0, maximum: 10 }, ...common }, required: ['control_id', 'expression', 'setpoint', 'kp', 'ki', 'kd', ...requiredCommon] },
     run_simulation: { properties: common, required: requiredCommon },
     inspect_telemetry: { properties: { run_id: { type: 'string' } }, required: [] },
     inspect_failure: { properties: { run_id: { type: 'string' } }, required: [] },
