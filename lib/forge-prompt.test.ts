@@ -131,7 +131,7 @@ describe('ForgeTwin world-first brief compiler', () => {
       agriculture: (plan) => plan.components.filter((item) => item.parameters?.product_form === 'tomato').length === 6 && ['ripe', 'unripe', 'damaged'].every((grade) => plan.components.some((item) => item.parameters?.grade === grade)) && plan.components.filter((item) => item.parameters?.grading_roller).length === 6,
       recycling: (plan) => ['metal-can', 'plastic-bottle', 'reject-object'].every((form) => plan.components.some((item) => item.parameters?.product_form === form)) && plan.components.some((item) => item.parameters?.recycling_drum) && plan.components.some((item) => item.parameters?.recycling_magnet) && plan.components.filter((item) => item.parameters?.sorting_bin).length === 3 && !plan.components.some((item) => item.parameters?.sorting_diverter || item.parameters?.industrial_conveyor),
       'hvac-fixture': (plan) => plan.components.some((item) => item.parameters?.fixture_plate) && plan.components.some((item) => item.parameters?.heat_exchanger_core) && plan.components.filter((item) => item.parameters?.hvac_pipe).length >= 2,
-      drawbridge: (plan) => plan.components.some((item) => item.role.startsWith('hinged span')) && plan.components.some((item) => item.primitive === 'pulley') && plan.components.some((item) => item.primitive === 'counterweight'),
+      drawbridge: (plan) => plan.components.some((item) => item.parameters?.drawbridge_deck && item.dimensions[2] > 2) && plan.components.some((item) => item.parameters?.water_surface) && plan.components.filter((item) => item.parameters?.bridge_abutment).length === 2 && plan.components.some((item) => item.parameters?.bridge_tower) && plan.components.some((item) => item.parameters?.drawbridge_pulley) && plan.components.some((item) => item.parameters?.drawbridge_counterweight),
     };
     for (const example of engineeringExamples) {
       const plan = compileDesignBrief(example.prompt);
@@ -307,6 +307,10 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(drawbridge.components.some((item) => item.primitive === 'pulley')).toBe(true);
     expect(drawbridge.components.some((item) => item.primitive === 'counterweight')).toBe(true);
     expect(drawbridge.joints.some((item) => item.type === 'revolute')).toBe(true);
+    expect(drawbridge.components.some((item) => item.parameters?.water_surface)).toBe(true);
+    expect(drawbridge.components.filter((item) => item.parameters?.bridge_abutment)).toHaveLength(2);
+    expect(drawbridge.components.some((item) => item.parameters?.drawbridge_hinge)).toBe(true);
+    expect(drawbridge.components.some((item) => item.role === 'moving design load')).toBe(false);
 
     const unknown = compileDesignBrief('Build an automatic rotating hatch that opens one meter and senses obstructions.');
     expect(unknown.components.length).toBeGreaterThan(3);

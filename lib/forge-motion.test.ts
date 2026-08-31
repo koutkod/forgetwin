@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
+import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -49,6 +49,16 @@ describe('cable operation motion', () => {
     expect(lifted.start).toEqual(start.start);
     expect(lifted.end[1] - start.end[1]).toBeCloseTo(1.05, 6);
     expect(lifted.end[1]).toBeLessThan(lifted.start[1]);
+  });
+
+  it('keeps the tower end fixed while the drawbridge cable follows the rising leaf', () => {
+    const cable = { ...body('bridge-cable', [0, 2, 0]), primitive: 'cable' as const, parameters: { start_x: -2.5, start_y: 3, start_z: 0, end_x: 1, end_y: 1.4, end_z: 0, drawbridge_cable: 'deck', drawbridge_pivot_x: -2, drawbridge_pivot_y: 1.2, drawbridge_direction: 1 } };
+    const closed = animatedCableEndpoints(cable, 0, true)!;
+    const open = animatedCableEndpoints(cable, Math.PI / 1.45, true)!;
+    expect(open.start).toEqual(closed.start);
+    expect(open.end[1]).toBeGreaterThan(closed.end[1] + 2);
+    expect(drawbridgeLiftAngle(Math.PI / 1.45, 1)).toBeGreaterThan(0);
+    expect(drawbridgeLiftAngle(Math.PI / 1.45, -1)).toBeLessThan(0);
   });
 });
 

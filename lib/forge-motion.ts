@@ -20,6 +20,17 @@ export function animatedCableEndpoints(component: MachineComponent, elapsed: num
   if (![...start, ...end].every(Number.isFinite)) return null;
   if (!operating) return { start, end };
   const liftWave = .5 - Math.cos(elapsed * 1.45) * .5;
+  if (component.parameters.drawbridge_cable === 'deck') {
+    const pivotX = Number(component.parameters.drawbridge_pivot_x);
+    const pivotY = Number(component.parameters.drawbridge_pivot_y);
+    const direction = Number(component.parameters.drawbridge_direction ?? 1);
+    const angle = drawbridgeLiftAngle(elapsed, direction);
+    const dx = end[0] - pivotX;
+    const dy = end[1] - pivotY;
+    end[0] = pivotX + dx * Math.cos(angle) - dy * Math.sin(angle);
+    end[1] = pivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
+  }
+  if (component.parameters.drawbridge_cable === 'counterweight') end[1] -= liftWave * .62;
   if (component.parameters.rigging) end[1] += liftWave * 1.05;
   if (component.parameters.winch_cable && component.parameters.cable_segment === 'load') end[1] += liftWave * Math.min(1.6, Number(component.parameters.winch_travel_m ?? 1));
   return { start, end };
@@ -191,6 +202,11 @@ export function roadVehicleSteeringWheelTurn(elapsed: number) {
 
 export function roadVehicleRackTravel(elapsed: number) {
   return roadVehicleSteeringCycle(elapsed) * 0.055;
+}
+
+export function drawbridgeLiftAngle(elapsed: number, direction = 1) {
+  const liftWave = .5 - Math.cos(elapsed * 1.45) * .5;
+  return (direction < 0 ? -1 : 1) * liftWave * .96;
 }
 
 /**

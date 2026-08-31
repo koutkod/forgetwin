@@ -5,7 +5,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
-import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
+import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
@@ -242,16 +242,18 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
 
   if (!jointPoseApplied && /bridge/.test(context.machine) && !/drawbridge/.test(context.machine) && role.includes('moving design load')) position[0] += Math.sin(elapsed * .48) * 2.2;
 
-  if (!jointPoseApplied && /drawbridge/.test(context.machine) && context.drawbridgePivot && /deck|hinged span|chord|brace|design load|load gauge/.test(role)) {
-    const angle = -wave * .78;
-    const [pivotX, pivotY] = context.drawbridgePivot;
+  if (!jointPoseApplied && component.parameters.drawbridge_moving) {
+    const pivotX = Number(component.parameters.drawbridge_pivot_x);
+    const pivotY = Number(component.parameters.drawbridge_pivot_y);
+    const angle = drawbridgeLiftAngle(elapsed, Number(component.parameters.drawbridge_direction ?? 1));
     const dx = component.position[0] - pivotX;
     const dy = component.position[1] - pivotY;
     position[0] = pivotX + dx * Math.cos(angle) - dy * Math.sin(angle);
     position[1] = pivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
     rotation[2] += angle;
   }
-  if (!jointPoseApplied && /drawbridge/.test(context.machine) && role.includes('counterweight')) position[1] -= wave * .45;
+  if (!jointPoseApplied && component.parameters.drawbridge_counterweight) position[1] -= wave * .62;
+  else if (!jointPoseApplied && /drawbridge/.test(context.machine) && role.includes('counterweight')) position[1] -= wave * .45;
 
   if (!jointPoseApplied && /suspension/.test(context.machine)) {
     const suspensionIndex = Number(component.parameters.operation_index ?? 0);
@@ -643,6 +645,42 @@ function SolarPanel({ component, xray, selected }: { component: MachineComponent
   return <group>
     <BoxBody size={component.dimensions} color="#132f47" xray={xray} selected={selected} radius={.025} metalness={.34} roughness={.24} />
     {!xray && <>{[-.375, -.25, -.125, 0, .125, .25, .375].map((factor) => <Line key={`x-${factor}`} points={[[x * factor, y * .54, -z * .48], [x * factor, y * .54, z * .48]]} color="#6aa6c4" lineWidth={1} />)}{[-.4, -.2, 0, .2, .4].map((factor) => <Line key={`z-${factor}`} points={[[x * -.48, y * .54, z * factor], [x * .48, y * .54, z * factor]]} color="#6aa6c4" lineWidth={1} />)}<Line points={[[-x * .5, y * .58, -z * .5], [x * .5, y * .58, -z * .5], [x * .5, y * .58, z * .5], [-x * .5, y * .58, z * .5], [-x * .5, y * .58, -z * .5]]} color="#d0d9dc" lineWidth={2} /></>}
+  </group>;
+}
+
+function DrawbridgeDeck({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <BoxBody size={[x, y, z]} color="#4b5960" xray={xray} selected={selected} radius={.035} metalness={.78} roughness={.3} />
+    <group position={[0, y * .56, 0]}><BoxBody size={[x * .98, .035, z * .88]} color="#242a2d" xray={xray} selected={selected} radius={.02} metalness={.04} roughness={.94} /></group>
+    {[-1, 1].map((side) => <group key={side} position={[0, -y * .12, side * z * .48]}><BoxBody size={[x, y * .72, .1]} color="#72848c" xray={xray} selected={selected} radius={.018} metalness={.82} roughness={.24} /></group>)}
+    {!xray && Array.from({ length: Math.max(3, Math.floor(x / .7)) }, (_, index) => <group key={index} position={[-x * .38 + index * x * .76 / Math.max(1, Math.floor(x / .7) - 1), y * .68, 0]}><BoxBody size={[Math.min(.34, x * .11), .018, .045]} color="#f3d66c" xray={false} selected={false} radius={.006} metalness={.02} roughness={.72} /></group>)}
+  </group>;
+}
+
+function BridgeAbutment({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <BoxBody size={[x, y, z]} color="#7f888a" xray={xray} selected={selected} radius={.08} metalness={.02} roughness={.88} />
+    <group position={[0, y * .46, 0]}><BoxBody size={[x * 1.08, y * .14, z * 1.03]} color="#a0a7a8" xray={xray} selected={selected} radius={.035} metalness={.03} roughness={.78} /></group>
+    {[-1, 1].map((side) => <group key={side} position={[0, y * .08, side * z * .46]}><BoxBody size={[x * 1.5, y * .78, z * .12]} color="#737d80" xray={xray} selected={selected} radius={.04} metalness={.03} roughness={.86} /></group>)}
+  </group>;
+}
+
+function WaterChannel({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <mesh receiveShadow><boxGeometry args={[x, y, z]} /><meshStandardMaterial color={selected ? '#58e5ff' : '#123f58'} metalness={.08} roughness={.28} transparent opacity={xray ? .22 : .78} /></mesh>
+    {!xray && [-.36, -.18, 0, .18, .36].map((factor) => <Line key={factor} points={[[-x * .48, y * .58, z * factor], [x * .48, y * .58, z * factor]]} color="#4c9fbd" lineWidth={.8} transparent opacity={.42} />)}
+  </group>;
+}
+
+function BridgeHingePin({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const radius = component.dimensions[0] / 2;
+  const length = component.dimensions[1];
+  return <group>
+    <mesh><cylinderGeometry args={[radius, radius, length, 30]} /><StandardMaterial color="#c8d2d5" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, side * length * .44, 0]}><cylinderGeometry args={[radius * 1.7, radius * 1.7, length * .12, 26]} /><StandardMaterial color="#64757c" xray={xray} selected={selected} metalness={.86} roughness={.2} /></mesh>)}
   </group>;
 }
 
@@ -1041,6 +1079,10 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.parameters.recycling_hopper) return <RecyclingHopper component={component} xray={xray} selected={selected} />;
   if (component.parameters.recycling_drum) return <RecyclingDrum component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.recycling_magnet) return <RecyclingMagnet component={component} xray={xray} selected={selected} />;
+  if (component.parameters.water_surface) return <WaterChannel component={component} xray={xray} selected={selected} />;
+  if (component.parameters.bridge_abutment) return <BridgeAbutment component={component} xray={xray} selected={selected} />;
+  if (component.parameters.drawbridge_deck || component.parameters.drawbridge_approach) return <DrawbridgeDeck component={component} xray={xray} selected={selected} />;
+  if (component.parameters.drawbridge_hinge) return <BridgeHingePin component={component} xray={xray} selected={selected} />;
   if (component.parameters.tracker_foundation) return <TrackerFoundation component={component} xray={xray} selected={selected} />;
   if (component.parameters.accumulation_zone) return <AccumulationBed component={component} color={color} xray={xray} selected={selected} operating={operating} speedScale={operationSpeed} />;
   if (component.parameters.gearbox_housing) return <GearboxHousing component={component} color={color} xray={xray} selected={selected} />;

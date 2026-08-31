@@ -452,10 +452,104 @@ class WorldBuilder {
   }
 }
 
+function addDrawbridgeSpan(context: ModuleContext, assembly: string): ModuleResult {
+  const { builder, text, values } = context;
+  const twoLeaves = /(?:two|2)[ -]+(?:hinged[ -]+)?spans?/.test(text);
+  const leafCount = twoLeaves ? 2 : 1;
+  const leafLength = values.spanM / leafCount;
+  const deckY = 1.18;
+  const loadMass = values.payloadKg === 25 ? 2000 : values.payloadKg;
+  const motionLimit = Math.max(55, Math.min(78, values.angleDeg)) * Math.PI / 180;
+  const counterbalanced = /pulley|cable|counterweight/.test(text);
+  const hydraulic = /hydraulic|piston/.test(text);
+
+  builder.component('plate', 'water channel beneath movable span', assembly, [0, .08, 0], [values.spanM * 1.18, .08, 3.8], 'composite', 'fixed', { water_surface: true, canal_gap: true }, 18);
+  const left = builder.component('support', 'left concrete bridge abutment', assembly, [-values.spanM / 2 - .48, .54, 0], [1.2, 1.08, 3.15], 'concrete', 'fixed', { bridge_abutment: true, bank_side: 'left', ground_contact: true }, 820);
+  const right = builder.component('support', 'right concrete bridge abutment', assembly, [values.spanM / 2 + .48, .54, 0], [1.2, 1.08, 3.15], 'concrete', 'fixed', { bridge_abutment: true, bank_side: 'right', ground_contact: true }, 820);
+  builder.component('plate', 'left asphalt approach', assembly, [-values.spanM / 2 - 1.42, 1.12, 0], [1.9, .18, 2.38], 'steel', 'fixed', { drawbridge_approach: true, road_surface: true }, 180);
+  builder.component('plate', 'right asphalt approach', assembly, [values.spanM / 2 + 1.42, 1.12, 0], [1.9, .18, 2.38], 'steel', 'fixed', { drawbridge_approach: true, road_surface: true }, 180);
+
+  const decks: string[] = [];
+  const actuators: string[] = [];
+  let driveId = '';
+  let gaugeId = '';
+  let sensorId = '';
+  for (let index = 0; index < leafCount; index += 1) {
+    const direction = index === 0 ? 1 : -1;
+    const pivotX = index === 0 ? -values.spanM / 2 : values.spanM / 2;
+    const centerX = pivotX + direction * leafLength / 2;
+    const supportId = index === 0 ? left : right;
+    const supportBody = builder.components.find((item) => item.id === supportId)!;
+    const motion = { drawbridge_moving: true, drawbridge_leaf: index + 1, drawbridge_pivot_x: pivotX, drawbridge_pivot_y: deckY, drawbridge_direction: direction };
+    const deck = builder.component('plate', `hinged span ${index + 1}`, assembly, [centerX, deckY, 0], [leafLength, .2, 2.34], 'steel', 'dynamic', { ...motion, drawbridge_deck: true, road_surface: true, span_m: leafLength, payload_kg: loadMass / leafCount }, 260 + loadMass / leafCount);
+    decks.push(deck);
+    const hinge = builder.joint('revolute', supportId, deck, [0, 0, 1], {
+      limits: direction > 0 ? [0, motionLimit] : [-motionLimit, 0],
+      anchorA: [pivotX - supportBody.position[0], deckY - supportBody.position[1], 0],
+      anchorB: [pivotX - centerX, 0, 0],
+    });
+    const hingePin = builder.component('shaft', `visible leaf ${index + 1} hinge pin`, assembly, [pivotX, deckY, 0], [.26, 2.72, .26], 'steel', 'fixed', { drawbridge_hinge: true, drawbridge_leaf: index + 1 }, 18);
+    builder.rotate(hingePin, [Math.PI / 2, 0, 0]);
+    builder.connect(hingePin, deck, 'mechanical', 'bascule_hinge_pin');
+
+    for (const side of [-1, 1]) {
+      const sideName = side < 0 ? 'left' : 'right';
+      const chord = builder.component('beam', `leaf ${index + 1} ${sideName} upper truss chord`, assembly, [centerX, 1.82, side * 1.05], [leafLength * .96, .12, .12], 'steel', 'fixed', { ...motion, drawbridge_truss: true });
+      builder.connect(deck, chord, 'mechanical', 'moving_leaf_truss');
+      const endPostX = centerX + direction * leafLength * .43;
+      const endPost = builder.component('beam', `leaf ${index + 1} ${sideName} end post`, assembly, [endPostX, 1.5, side * 1.05], [.14, .7, .14], 'steel', 'fixed', { ...motion, drawbridge_truss: true });
+      builder.connect(deck, endPost, 'mechanical', 'moving_leaf_end_post');
+      for (let brace = 0; brace < 3; brace += 1) {
+        const x0 = centerX - leafLength / 2 + brace * leafLength / 3;
+        const x1 = centerX - leafLength / 2 + (brace + 1) * leafLength / 3;
+        const start: Vec3 = [brace % 2 ? x0 : x1, 1.3, side * 1.05];
+        const end: Vec3 = [brace % 2 ? x1 : x0, 1.82, side * 1.05];
+        const diagonal = builder.member('beam', `leaf ${index + 1} ${sideName} diagonal brace ${brace + 1}`, assembly, start, end, .085, 'steel', 'fixed', { ...motion, drawbridge_truss: true, span_brace: true });
+        builder.connect(deck, diagonal, 'mechanical', 'moving_leaf_diagonal');
+      }
+    }
+
+    const drive = builder.component(hydraulic ? 'piston' : 'motor', hydraulic ? `leaf ${index + 1} hydraulic cylinder` : `leaf ${index + 1} bridge drive motor`, assembly, [pivotX - direction * .2, .78, -1.38], hydraulic ? [.34, 1.12, .34] : [.52, .66, .52], 'steel', 'kinematic', { drawbridge_drive: true, drawbridge_leaf: index + 1 });
+    if (hydraulic) builder.rotate(drive, [0, 0, direction * -.56]);
+    if (!driveId) driveId = drive;
+    actuators.push(builder.actuator(drive, hinge, hydraulic ? 'piston' : 'servo', Math.max(3600, loadMass * 9.81 * .72), .58, motionLimit));
+    if (!hydraulic) builder.motor(drive, hinge, Math.max(420, loadMass * leafLength * 1.8), 14, direction);
+
+    if (counterbalanced) {
+      const towerX = pivotX - direction * .52;
+      const towerLegs = [-1.08, 1.08].map((z, legIndex) => builder.component('beam', `leaf ${index + 1} lifting tower leg ${legIndex + 1}`, assembly, [towerX, 2.02, z], [.24, 2.18, .24], 'steel', 'fixed', { bridge_tower: true, tower_leaf: index + 1 }));
+      const crosshead = builder.component('beam', `leaf ${index + 1} lifting tower crosshead`, assembly, [towerX, 3.08, 0], [.3, .22, 2.48], 'steel', 'fixed', { bridge_tower: true, tower_leaf: index + 1 });
+      towerLegs.forEach((leg) => builder.connect(leg, crosshead, 'mechanical', 'tower_crosshead'));
+      const pulley = builder.component('pulley', `leaf ${index + 1} balance sheave`, assembly, [towerX, 2.82, 0], [.62, .2, .62], 'steel', 'dynamic', { drawbridge_pulley: true, tower_leaf: index + 1 });
+      builder.rotate(pulley, [Math.PI / 2, 0, 0]);
+      builder.joint('revolute', crosshead, pulley, [0, 0, 1]);
+      const counter = builder.component('counterweight', `leaf ${index + 1} hanging counterweight`, assembly, [towerX, 1.62, 0], [.76, .92, .76], 'concrete', 'kinematic', { drawbridge_counterweight: true, drawbridge_leaf: index + 1, payload_kg: loadMass * .38 / leafCount }, loadMass * .38 / leafCount);
+      builder.connect(crosshead, counter, 'mechanical', 'guided_counterweight');
+      const deckAttach: Vec3 = [pivotX + direction * leafLength * .77, deckY + .24, 0];
+      const deckCable = builder.member('cable', `leaf ${index + 1} lifting cable`, assembly, [towerX, 2.82, 0], deckAttach, .028, 'steel', 'kinematic', { drawbridge_cable: 'deck', drawbridge_pivot_x: pivotX, drawbridge_pivot_y: deckY, drawbridge_direction: direction });
+      const counterCable = builder.member('cable', `leaf ${index + 1} counterweight cable`, assembly, [towerX, 2.82, 0], [towerX, 2.08, 0], .028, 'steel', 'kinematic', { drawbridge_cable: 'counterweight', drawbridge_leaf: index + 1 });
+      builder.connect(deckCable, pulley, 'mechanical', 'lifting_cable_over_sheave');
+      builder.connect(counterCable, pulley, 'mechanical', 'counterweight_cable_over_sheave');
+      builder.connect(counterCable, counter, 'mechanical', 'counterweight_termination');
+    }
+
+    if (index === 0) {
+      gaugeId = builder.component('sensor', 'bascule hinge angle encoder', assembly, [pivotX, 1.46, -1.25], [.24, .2, .24], 'polymer', 'fixed', { drawbridge_gauge: true });
+      sensorId = builder.sensor(gaugeId, 'angle', 'span_angle', deck, values.spanM);
+    }
+  }
+
+  if (leafCount === 1) builder.connect(decks[0], right, 'mechanical', 'far_bank_closing_seat');
+  else builder.connect(decks[0], decks[1], 'mechanical', 'center_closing_joint');
+  builder.control('bascule span motion', 'tracking', [sensorId], actuators, 'open the bridge only after both road approaches are clear, then track the commanded leaf angle inside hinge and cable limits', values.angleDeg);
+  return { id: 'span-members', mountId: left, editableId: gaugeId, handles: ['structure', 'rotate', 'lift'], driveId, outputId: decks[0] };
+}
+
 function addSpanMembers(context: ModuleContext): ModuleResult {
   const { builder, text, values, rootAssemblyId } = context;
   const assembly = builder.assembly('span members', 'Supports, deck plates, braces, bearings, and optional hinge drive', rootAssemblyId);
   const folding = /drawbridge|fold|hing|open|raise/.test(text);
+  if (folding) return addDrawbridgeSpan(context, assembly);
   const spanCount = folding && /(?:two|2)[ -]+(?:hinged[ -]+)?spans?/.test(text) ? 2 : 1;
   const left = builder.component('support', 'left bearing support', assembly, [-values.spanM / 2, .55, 0], [.55, 1.25, 1.35], 'concrete', 'fixed');
   const right = builder.component('support', 'right bearing support', assembly, [values.spanM / 2, .55, 0], [.55, 1.25, 1.35], 'concrete', 'fixed');
