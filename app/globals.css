@@ -304,6 +304,11 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .assembly-group.nested { border-left:1px solid rgba(93,219,245,.2); padding-left:6px; }
 .component-inspector label { display:block; margin-top:11px; color:#7b8991; font-size:9px; font-weight:650; }
 .component-inspector>p:first-of-type { display:block; color:#66737c; }
+.component-inspector .drag-help { display:flex; align-items:center; gap:5px; margin-top:8px; color:#66dff8; font-size:8px; }
+.axis-control { padding:7px 0 3px; border-top:1px solid rgba(255,255,255,.045); }
+.axis-control label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:0; }
+.axis-control label code { color:#91a2aa; font-size:8px; white-space:nowrap; }
+.axis-control input[type="range"] { width:100%; margin:7px 0 2px; accent-color:#55dff7; }
 .inspector-actions { display:grid!important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; margin-top:9px!important; }
 .inspector-actions button,.catalog-drawer button { min-height:34px; border:1px solid var(--line); border-radius:6px; background:#0d1419; color:#8f9ca4; padding:6px; font-size:8px; font-weight:700; }
 .inspector-actions button:hover,.catalog-drawer button:hover { border-color:rgba(73,220,255,.28); color:#75e6ff; }

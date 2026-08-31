@@ -5,11 +5,11 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
-import { createMechanismMotionGraph, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
+import { animatedCableEndpoints, createMechanismMotionGraph, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
-type Props = { state: ForgeState; preview?: boolean; operating?: boolean; onComponentMove: (componentId: string, x: number) => void; onSelect: (id: string) => void };
+type Props = { state: ForgeState; preview?: boolean; operating?: boolean; onComponentMove: (componentId: string, position: Vec3) => void; onSelect: (id: string) => void };
 
 type OperatingContext = {
   enabled: boolean;
@@ -223,7 +223,7 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     if (role.includes('lifting boom')) rotation[2] += signed * .07;
     if (role.includes('lift actuator')) position[1] += signed * .06;
   } else if (!jointPoseApplied && /crane/.test(context.machine)) {
-    if (/hook|suspended payload|load cable/.test(role)) position[1] += wave * 1.05;
+    if (/hook|suspended payload/.test(role)) position[1] += wave * 1.05;
     if (role.includes('boom head pulley')) rotation[2] += elapsed * 1.35;
   }
 
@@ -993,6 +993,26 @@ function LightBody({ component, color, xray, selected }: { component: MachineCom
   </group>;
 }
 
+function CableBody({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
+  const cableRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  const placeCable = (elapsed: number) => {
+    const group = cableRef.current;
+    const endpoints = animatedCableEndpoints(component, elapsed, operating);
+    if (!group || !endpoints) return;
+    const start = new Vector3(...endpoints.start);
+    const end = new Vector3(...endpoints.end);
+    const direction = end.clone().sub(start);
+    const length = Math.max(.001, direction.length());
+    group.position.copy(start.add(end).multiplyScalar(.5).sub(new Vector3(...component.position)));
+    group.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), direction.normalize());
+    group.scale.set(1, length, 1);
+  };
+  useFrame(() => placeCable(operationTime.current));
+  const radius = Math.max(.012, component.dimensions[0]);
+  return <group ref={cableRef}><mesh castShadow><cylinderGeometry args={[radius, radius, 1, 12]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.32} /></mesh></group>;
+}
+
 function ComponentShape({ component, xray, selected, actuatorValue, operating, operationSpeed = 1 }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean; operationSpeed?: number }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
   if (component.parameters.product_form) return <ProductItem component={component} xray={xray} selected={selected} />;
@@ -1047,10 +1067,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.primitive === 'piston') return <LinearActuator component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operating} />;
   if (component.primitive === 'belt') return <BeltBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'cable') {
-    const start = [Number(component.parameters.start_x), Number(component.parameters.start_y), Number(component.parameters.start_z)] as Vec3;
-    const end = [Number(component.parameters.end_x), Number(component.parameters.end_y), Number(component.parameters.end_z)] as Vec3;
-    const hasPath = [...start, ...end].every(Number.isFinite);
-    return hasPath ? <Line points={[start.map((value, index) => value - component.position[index]) as Vec3, end.map((value, index) => value - component.position[index]) as Vec3]} color={selected ? '#65e5ff' : color} lineWidth={Math.max(1.5, component.dimensions[0] * 38)} /> : <mesh><cylinderGeometry args={[Math.max(.015, component.dimensions[0]), Math.max(.015, component.dimensions[0]), component.dimensions[1], 10]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>;
+    return animatedCableEndpoints(component, 0, false) ? <CableBody component={component} color={color} xray={xray} selected={selected} operating={operating} /> : <mesh><cylinderGeometry args={[Math.max(.015, component.dimensions[0]), Math.max(.015, component.dimensions[0]), component.dimensions[1], 10]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>;
   }
   if (component.primitive === 'sensor' || component.primitive === 'camera') return <group><BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.035} /><mesh position={[0, 0, component.dimensions[2] * .58]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[component.dimensions[0] * .22, component.dimensions[0] * .22, component.dimensions[2] * .18, 22]} /><StandardMaterial color="#5ee8ff" xray={xray} selected={selected} metalness={.22} roughness={.14} /></mesh><mesh position={[0, 0, component.dimensions[2] * 2.2]}><coneGeometry args={[component.dimensions[0] * 1.4, component.dimensions[2] * 3.2, 16, 1, true]} /><meshBasicMaterial color="#57e5ff" transparent opacity={xray ? .19 : .06} depthWrite={false} /></mesh></group>;
   if (component.primitive === 'light') return <LightBody component={component} color={color} xray={xray} selected={selected} />;
@@ -1086,14 +1103,15 @@ function CameraRig({ center, radius, signature, dragging }: { center: Vec3; radi
   </>;
 }
 
-function EditableBody({ component, xray, selected, actuatorValue, enabled, replay, operatingContext, operationSpeed, onMove, onSelect, onDragChange }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; operatingContext: OperatingContext; operationSpeed: number; onMove: (componentId: string, x: number) => void; onSelect: () => void; onDragChange: (dragging: boolean) => void }) {
+function EditableBody({ component, bounds, xray, selected, actuatorValue, enabled, replay, operatingContext, operationSpeed, onMove, onSelect, onDragChange }: { component: MachineComponent; bounds: Vec3; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; operatingContext: OperatingContext; operationSpeed: number; onMove: (componentId: string, position: Vec3) => void; onSelect: () => void; onDragChange: (dragging: boolean) => void }) {
   const [dragging, setDragging] = useState(false);
-  const [draftX, setDraftX] = useState(component.position[0]);
+  const [draftPosition, setDraftPosition] = useState<Vec3>(component.position);
+  const verticalDrag = useRef({ active: false, startClientY: 0, startY: component.position[1] });
   const bodyRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
   const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -component.position[1]), [component.position]);
   const intersection = useMemo(() => new Vector3(), []);
-  const x = dragging ? draftX : replay?.position[0] ?? component.position[0];
+  const renderedPosition = dragging ? draftPosition : replay?.position ?? component.position;
   useFrame(() => {
     if (!bodyRef.current || dragging || replay) return;
     const elapsed = operationTime.current;
@@ -1101,13 +1119,26 @@ function EditableBody({ component, xray, selected, actuatorValue, enabled, repla
     bodyRef.current.position.set(...pose.position);
     bodyRef.current.rotation.set(...pose.rotation);
   });
-  const move = (event: ThreeEvent<PointerEvent>) => { if (!dragging || !enabled) return; event.stopPropagation(); if (event.ray.intersectPlane(plane, intersection)) setDraftX(MathUtils.clamp(Math.round(intersection.x * 20) / 20, -12, 12)); };
-  const end = (event: ThreeEvent<PointerEvent>) => { if (!dragging) return; event.stopPropagation(); setDragging(false); onDragChange(false); const target = event.target as unknown as { hasPointerCapture?(id: number): boolean; releasePointerCapture?(id: number): void }; if (target.hasPointerCapture?.(event.pointerId)) target.releasePointerCapture?.(event.pointerId); onMove(component.id, draftX); };
+  const move = (event: ThreeEvent<PointerEvent>) => {
+    if (!dragging || !enabled) return;
+    event.stopPropagation();
+    if (verticalDrag.current.active) {
+      const y = MathUtils.clamp(verticalDrag.current.startY + (verticalDrag.current.startClientY - event.clientY) * .018, 0, bounds[1]);
+      setDraftPosition((current) => [current[0], Math.round(y * 20) / 20, current[2]]);
+    } else if (event.ray.intersectPlane(plane, intersection)) {
+      setDraftPosition((current) => [
+        MathUtils.clamp(Math.round(intersection.x * 20) / 20, -bounds[0] / 2, bounds[0] / 2),
+        current[1],
+        MathUtils.clamp(Math.round(intersection.z * 20) / 20, -bounds[2] / 2, bounds[2] / 2),
+      ]);
+    }
+  };
+  const end = (event: ThreeEvent<PointerEvent>) => { if (!dragging) return; event.stopPropagation(); setDragging(false); verticalDrag.current.active = false; onDragChange(false); const target = event.target as unknown as { hasPointerCapture?(id: number): boolean; releasePointerCapture?(id: number): void }; if (target.hasPointerCapture?.(event.pointerId)) target.releasePointerCapture?.(event.pointerId); onMove(component.id, draftPosition); };
   const speed = replay ? Math.hypot(...replay.velocity) : 0;
   const vectorScale = speed > 0 ? Math.min(.45, 1.5 / speed) : 0;
-  return <group ref={bodyRef} position={[x, replay?.position[1] ?? component.position[1], replay?.position[2] ?? component.position[2]]} rotation={replay ? undefined : component.rotation} quaternion={replay?.rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={(event) => { if (!enabled) return; event.stopPropagation(); setDraftX(component.position[0]); setDragging(true); onDragChange(true); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
+  return <group ref={bodyRef} position={renderedPosition} rotation={replay ? undefined : component.rotation} quaternion={replay?.rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={(event) => { if (!enabled) return; event.stopPropagation(); setDraftPosition(component.position); verticalDrag.current = { active: event.shiftKey, startClientY: event.clientY, startY: component.position[1] }; setDragging(true); onDragChange(true); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
     <ComponentShape component={component} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operatingContext.enabled} operationSpeed={operationSpeed} />
-    {enabled && xray && <Line points={[[-2.5, component.dimensions[1], 0], [2.5, component.dimensions[1], 0]]} color="#55e4ff" dashed dashScale={3} transparent opacity={.55} />}
+    {enabled && xray && <><Line points={[[-2.5, 0, 0], [2.5, 0, 0]]} color="#ff6478" dashed dashScale={3} transparent opacity={.72} /><Line points={[[0, -2.5, 0], [0, 2.5, 0]]} color="#65e58d" dashed dashScale={3} transparent opacity={.72} /><Line points={[[0, 0, -2.5], [0, 0, 2.5]]} color="#55a8ff" dashed dashScale={3} transparent opacity={.72} /></>}
     {xray && replay && speed > .01 && <Line points={[[0, component.dimensions[1], 0], [replay.velocity[0] * vectorScale, component.dimensions[1] + replay.velocity[1] * vectorScale, replay.velocity[2] * vectorScale]]} color="#ffffff" transparent opacity={.76} />}
   </group>;
 }
@@ -1160,7 +1191,7 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
       const connectedMotorIds = state.connections.filter((connection) => connection.type === 'power' && (connection.sourceId === component.id || connection.targetId === component.id)).flatMap((connection) => [connection.sourceId, connection.targetId]);
       const driveRpm = state.motors.filter((motor) => motor.componentId === component.id || connectedMotorIds.includes(motor.componentId) || (motor.jointId && targetJoint?.id === motor.jointId)).reduce((maximum, motor) => Math.max(maximum, motor.maxRpm), 0);
       const operationSpeed = driveRpm > 0 ? MathUtils.clamp(driveRpm / 100, .35, 3) : 1;
-      return <EditableBody key={component.id} component={component} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} operatingContext={operatingContext} operationSpeed={operationSpeed} onMove={onComponentMove} onSelect={() => onSelect(component.id)} onDragChange={setComponentDragging} />;
+      return <EditableBody key={component.id} component={component} bounds={state.world.bounds} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} operatingContext={operatingContext} operationSpeed={operationSpeed} onMove={onComponentMove} onSelect={() => onSelect(component.id)} onDragChange={setComponentDragging} />;
     })}
     {state.replayMode === 'failure' && frame?.items.filter((item) => item.id === 'test-payload' || item.id.startsWith('sort-package-')).map((item) => <ReplayPackage key={item.id} item={item} xray={state.xray} />)}
     {state.replayMode === 'failure' && frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[.16, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={.92} /></mesh>)}

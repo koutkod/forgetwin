@@ -12,6 +12,17 @@ export type MechanismMotionGraph = {
   poseAt(componentId: string, elapsed: number): MechanismOperationPose | null;
 };
 
+export function animatedCableEndpoints(component: MachineComponent, elapsed: number, operating: boolean): { start: Vec3; end: Vec3 } | null {
+  const start = [Number(component.parameters.start_x), Number(component.parameters.start_y), Number(component.parameters.start_z)] as Vec3;
+  const end = [Number(component.parameters.end_x), Number(component.parameters.end_y), Number(component.parameters.end_z)] as Vec3;
+  if (![...start, ...end].every(Number.isFinite)) return null;
+  if (!operating) return { start, end };
+  const liftWave = .5 - Math.cos(elapsed * 1.45) * .5;
+  if (component.parameters.rigging) end[1] += liftWave * 1.05;
+  if (component.parameters.winch_cable && component.parameters.cable_segment === 'load') end[1] += liftWave * Math.min(1.6, Number(component.parameters.winch_travel_m ?? 1));
+  return { start, end };
+}
+
 export function translateInForgeCoordinates(position: Vec3, instruction: string, lateralInstruction: string, distance: number): Vec3 {
   const moved = [...position] as Vec3;
   if (/\bleft\b/.test(lateralInstruction)) moved[2] -= distance;

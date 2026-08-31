@@ -194,11 +194,16 @@ export function useForge() {
     }
   }, [commit]);
 
-  const moveComponentAsHuman = useCallback((componentId: string, x: number) => {
+  const moveComponentAsHuman = useCallback((componentId: string, position: Vec3) => {
     const current = stateRef.current;
     const target = current.components.find((item) => item.id === componentId);
     if (!target) return failure(current, new Error('INVALID_PHASE: generate or select a component before editing geometry.'));
-    return command('move_component', { component_id: target.id, position: [Math.min(current.world.bounds[0] / 2, Math.max(-current.world.bounds[0] / 2, Math.round(x * 20) / 20)), target.position[1], target.position[2]] }, 'Human');
+    const bounded: Vec3 = [
+      Math.min(current.world.bounds[0] / 2, Math.max(-current.world.bounds[0] / 2, Math.round(position[0] * 20) / 20)),
+      Math.min(current.world.bounds[1], Math.max(0, Math.round(position[1] * 20) / 20)),
+      Math.min(current.world.bounds[2] / 2, Math.max(-current.world.bounds[2] / 2, Math.round(position[2] * 20) / 20)),
+    ];
+    return command('move_component', { component_id: target.id, position: bounded }, 'Human');
   }, [command]);
   const patchUi = useCallback((patch: Parameters<typeof toggleUi>[1]) => commit(toggleUi(stateRef.current, patch)), [commit]);
   const checkpoint = useCallback((label: string) => commit(createCheckpoint(stateRef.current, label)), [commit]);

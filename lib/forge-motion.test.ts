@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { createMechanismMotionGraph, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
+import { animatedCableEndpoints, createMechanismMotionGraph, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -38,6 +38,17 @@ describe('road vehicle operation motion', () => {
     const phase = Math.PI / (2 * 0.82);
     expect(roadVehicleSteeringWheelTurn(phase)).toBeGreaterThan(0);
     expect(roadVehicleRackTravel(phase)).toBeGreaterThan(0);
+  });
+});
+
+describe('cable operation motion', () => {
+  it('keeps the crane cable top fixed while its lower termination follows the lifted hook', () => {
+    const cable = { ...body('load-cable', [2, 3, 0]), primitive: 'cable' as const, parameters: { start_x: 2, start_y: 5, start_z: 0, end_x: 2, end_y: 1.5, end_z: 0, rigging: true } };
+    const start = animatedCableEndpoints(cable, 0, true)!;
+    const lifted = animatedCableEndpoints(cable, Math.PI / 1.45, true)!;
+    expect(lifted.start).toEqual(start.start);
+    expect(lifted.end[1] - start.end[1]).toBeCloseTo(1.05, 6);
+    expect(lifted.end[1]).toBeLessThan(lifted.start[1]);
   });
 });
 
