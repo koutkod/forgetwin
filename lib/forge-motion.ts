@@ -2,6 +2,8 @@ import { Euler, Quaternion, Vector3 } from 'three';
 import type { Actuator, Joint, MachineComponent, Motor, Vec3 } from './forge-types';
 
 const STEERING_RATE = 0.82;
+const ACCUMULATION_ZONE_SECONDS = 1.45;
+const ACCUMULATION_ZONE_COUNT = 4;
 
 export type MechanismOperationPose = { position: Vec3; rotation: Vec3; animated: boolean };
 
@@ -189,4 +191,17 @@ export function roadVehicleSteeringWheelTurn(elapsed: number) {
 
 export function roadVehicleRackTravel(elapsed: number) {
   return roadVehicleSteeringCycle(elapsed) * 0.055;
+}
+
+/**
+ * Returns a smooth 0..1 drive command for one zero-pressure accumulation
+ * zone. Only one zone is released at a time, matching the state-machine
+ * control rule instead of making every roller bank spin continuously.
+ */
+export function accumulationZoneActivity(elapsed: number, zoneIndex: number) {
+  const normalizedIndex = Math.max(0, Math.min(ACCUMULATION_ZONE_COUNT - 1, Math.floor(zoneIndex)));
+  const phase = ((elapsed / ACCUMULATION_ZONE_SECONDS) % ACCUMULATION_ZONE_COUNT + ACCUMULATION_ZONE_COUNT) % ACCUMULATION_ZONE_COUNT;
+  const local = (phase - normalizedIndex + ACCUMULATION_ZONE_COUNT) % ACCUMULATION_ZONE_COUNT;
+  if (local >= .82) return 0;
+  return Math.sin(Math.PI * local / .82) ** 2;
 }

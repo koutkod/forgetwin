@@ -1581,24 +1581,34 @@ function addMaterialFlow(context: ModuleContext): ModuleResult {
 function addTrackingAxis(context: ModuleContext): ModuleResult {
   const { builder, rootAssemblyId } = context;
   const assembly = builder.assembly('ground-mounted solar tracker', 'Concrete foundation, bolted pedestal, bearing yoke, visible pivot axle, framed photovoltaic array, single geared actuator, and panel-mounted light sensing', rootAssemblyId);
-  const foundation = builder.component('support', 'concrete tracker foundation', assembly, [0, .18, 0], [2.35, .36, 1.8], 'concrete', 'fixed', { tracker_foundation: true }, 240);
-  const basePlate = builder.component('plate', 'bolted steel pedestal plate', assembly, [0, .4, 0], [1.3, .12, 1.05], 'steel', 'fixed', { fixture_plate: true }, 24);
-  const mast = builder.component('beam', 'grounded tracker pedestal', assembly, [0, 1.45, 0], [.42, 2.05, .42], 'steel', 'fixed', { hollow_section: true });
+  const foundation = builder.component('support', 'cast concrete tracker footing', assembly, [0, .2, 0], [2.75, .4, 2.15], 'concrete', 'fixed', { tracker_foundation: true, ground_contact: true }, 360);
+  const basePlate = builder.component('plate', 'four-bolt steel pedestal plate', assembly, [0, .46, 0], [1.38, .12, 1.12], 'steel', 'fixed', { fixture_plate: true, anchored_base: true }, 28);
+  const mast = builder.component('beam', 'grounded tracker pedestal', assembly, [0, 1.5, 0], [.46, 1.98, .46], 'steel', 'fixed', { hollow_section: true, grounded_structure: true });
   builder.joint('fixed', foundation, basePlate); builder.joint('fixed', basePlate, mast);
-  const leftYoke = builder.component('beam', 'left bearing yoke', assembly, [0, 2.32, -.72], [.24, .72, .24], 'steel', 'fixed', { tracker_yoke: true });
-  const rightYoke = builder.component('beam', 'right bearing yoke', assembly, [0, 2.32, .72], [.24, .72, .24], 'steel', 'fixed', { tracker_yoke: true });
-  builder.joint('fixed', mast, leftYoke); builder.joint('fixed', mast, rightYoke);
-  const axle = builder.component('shaft', 'solar array pivot axle', assembly, [0, 2.58, 0], [.18, 1.75, .18], 'steel', 'dynamic', { solar_pivot_axle: true, solar_moving: true }, 8.5);
+  const braceEndpoints: Array<[Vec3, Vec3]> = [
+    [[-.52, .52, -.42], [-.16, 1.03, -.16]], [[-.52, .52, .42], [-.16, 1.03, .16]],
+    [[.52, .52, -.42], [.16, 1.03, -.16]], [[.52, .52, .42], [.16, 1.03, .16]],
+  ];
+  braceEndpoints.forEach(([start, end], index) => {
+    const brace = builder.member('beam', `pedestal foundation brace ${index + 1}`, assembly, start, end, .075, 'steel', 'fixed', { tracker_brace: true, grounded_structure: true });
+    builder.connect(basePlate, brace, 'mechanical', 'foundation_brace'); builder.connect(brace, mast, 'mechanical', 'mast_stiffener');
+  });
+  const yokeBridge = builder.component('beam', 'pedestal bearing crosshead', assembly, [0, 2.34, 0], [.34, .24, 1.68], 'steel', 'fixed', { tracker_crosshead: true });
+  builder.joint('fixed', mast, yokeBridge);
+  const leftYoke = builder.component('beam', 'left bearing yoke', assembly, [0, 2.5, -.72], [.28, .48, .28], 'steel', 'fixed', { tracker_yoke: true });
+  const rightYoke = builder.component('beam', 'right bearing yoke', assembly, [0, 2.5, .72], [.28, .48, .28], 'steel', 'fixed', { tracker_yoke: true });
+  builder.joint('fixed', yokeBridge, leftYoke); builder.joint('fixed', yokeBridge, rightYoke);
+  const axle = builder.component('shaft', 'solar array pivot axle', assembly, [0, 2.6, 0], [.2, 1.78, .2], 'steel', 'dynamic', { solar_pivot_axle: true, solar_moving: true }, 9.2);
   builder.rotate(axle, [Math.PI / 2, 0, 0]);
-  const hinge = builder.joint('revolute', mast, axle, [0, 0, 1], { limits: [-1.05, 1.05], anchorA: [0, 1.13, 0], anchorB: [0, 0, 0] });
-  const crossRail = builder.component('beam', 'solar array cross rail', assembly, [0, 2.58, 0], [3.3, .18, .2], 'aluminum', 'dynamic', { solar_rail: true, solar_moving: true });
-  const panel = builder.component('plate', 'tracked panel', assembly, [0, 2.67, 0], [3.55, .13, 2.15], 'composite', 'dynamic', { panel: true, solar_array: true, solar_moving: true });
+  const hinge = builder.joint('revolute', yokeBridge, axle, [0, 0, 1], { limits: [-1.05, 1.05], anchorA: [0, .26, 0], anchorB: [0, 0, 0] });
+  const crossRail = builder.component('beam', 'solar array cross rail', assembly, [0, 2.6, 0], [3.3, .18, .2], 'aluminum', 'dynamic', { solar_rail: true, solar_moving: true });
+  const panel = builder.component('plate', 'tracked panel', assembly, [0, 2.69, 0], [3.55, .13, 2.15], 'composite', 'dynamic', { panel: true, solar_array: true, solar_moving: true });
   builder.joint('fixed', axle, crossRail); builder.joint('fixed', crossRail, panel);
-  const servo = builder.component('servo', 'single geared tracking actuator', assembly, [-.46, 2.12, -.5], [.46, .42, .46], 'steel', 'kinematic', { tracker_drive: true });
+  const servo = builder.component('servo', 'single geared tracking actuator', assembly, [-.48, 2.13, -.48], [.46, .42, .46], 'steel', 'kinematic', { tracker_drive: true });
   const actuator = builder.actuator(servo, hinge, 'servo', 700, .7, 2.5);
-  const driveLink = builder.member('beam', 'actuator torque link', assembly, [-.43, 2.25, -.38], [-.74, 2.58, -.38], .09, 'steel', 'fixed', { tracker_drive_link: true });
+  const driveLink = builder.member('beam', 'actuator torque link', assembly, [-.44, 2.25, -.38], [-.74, 2.6, -.38], .09, 'steel', 'fixed', { tracker_drive_link: true });
   builder.connect(servo, driveLink, 'mechanical', 'actuator_crank'); builder.connect(driveLink, crossRail, 'mechanical', 'array_torque_link');
-  const sensorBody = builder.component('sensor', 'panel-mounted dual light sensor', assembly, [-1.25, 2.78, 0], [.24, .18, .24], 'polymer', 'dynamic', { solar_moving: true, dual_light_sensor: true });
+  const sensorBody = builder.component('sensor', 'panel-mounted dual light sensor', assembly, [-1.25, 2.8, 0], [.24, .18, .24], 'polymer', 'dynamic', { solar_moving: true, dual_light_sensor: true });
   builder.joint('fixed', panel, sensorBody);
   const sensor = builder.sensor(sensorBody, 'light', 'light_error', panel, 10);
   const lightTarget = builder.component('light', 'simulated moving sun', assembly, [4.2, 5.2, -2.2], [.52, .38, .38], 'aluminum', 'fixed', { solar_source: true, beam_range: 7 }, .4);

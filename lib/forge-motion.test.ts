@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { animatedCableEndpoints, createMechanismMotionGraph, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
+import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -49,6 +49,17 @@ describe('cable operation motion', () => {
     expect(lifted.start).toEqual(start.start);
     expect(lifted.end[1] - start.end[1]).toBeCloseTo(1.05, 6);
     expect(lifted.end[1]).toBeLessThan(lifted.start[1]);
+  });
+});
+
+describe('zero-pressure accumulation motion', () => {
+  it('drives only one roller zone at a time and advances through all four zones', () => {
+    const samples = [0.58, 2.03, 3.48, 4.93];
+    samples.forEach((elapsed, expectedZone) => {
+      const commands = [0, 1, 2, 3].map((zone) => accumulationZoneActivity(elapsed, zone));
+      expect(commands[expectedZone]).toBeGreaterThan(.8);
+      expect(commands.filter((command) => command > .01)).toHaveLength(1);
+    });
   });
 });
 

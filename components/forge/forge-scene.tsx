@@ -5,7 +5,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
-import { animatedCableEndpoints, createMechanismMotionGraph, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
+import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
@@ -77,7 +77,7 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   // deterministic showcase machines retain the bespoke choreography below.
   // Road wheels animate internally so steering and tire roll remain independent
   // and must not receive a second body transform.
-  const selfAnimatedShape = Boolean(component.parameters.road_vehicle_wheel || component.parameters.road_vehicle_steering_wheel)
+  const selfAnimatedShape = Boolean(component.parameters.road_vehicle_wheel || component.parameters.road_vehicle_steering_wheel || component.parameters.buffer_gate)
     || ['servo', 'piston', 'spring', 'gripper', 'conveyor'].includes(component.primitive);
   const mechanismPose = !selfAnimatedShape ? context.mechanismMotion?.poseAt(component.id, elapsed) : null;
   const jointPoseApplied = Boolean(mechanismPose?.animated);
@@ -262,7 +262,10 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     if (component.primitive === 'spring' && component.parameters.suspension_corner) position[1] += travel * .5;
     if (component.parameters.road_bump) position[1] += travel;
   }
-  if (!jointPoseApplied && component.parameters.buffer_gate) position[1] -= wave * .22;
+  if (!jointPoseApplied && component.parameters.buffer_gate) {
+    const zoneIndex = Number(component.parameters.operation_index ?? 0);
+    position[1] -= accumulationZoneActivity(elapsed, zoneIndex) * .18;
+  }
   if (!jointPoseApplied && component.parameters.sorting_diverter) rotation[1] += signed * .48;
   if (!jointPoseApplied && component.parameters.fixture_clamp) position[1] -= wave * .13;
   if (!jointPoseApplied && component.parameters.recycling_magnet) position[1] += Math.sin(elapsed * .8) * .035;
@@ -643,6 +646,19 @@ function SolarPanel({ component, xray, selected }: { component: MachineComponent
   </group>;
 }
 
+function TrackerFoundation({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const boltRadius = Math.max(.035, Math.min(x, z) * .025);
+  return <group>
+    <group position={[0, -y * .06, 0]}><BoxBody size={[x, y * .88, z]} color="#7c8587" xray={xray} selected={selected} radius={.12} metalness={.02} roughness={.9} /></group>
+    <group position={[0, y * .46, 0]}><BoxBody size={[x * .58, y * .2, z * .58]} color="#90999b" xray={xray} selected={selected} radius={.055} metalness={.03} roughness={.82} /></group>
+    {!xray && [[-.31, -.29], [-.31, .29], [.31, -.29], [.31, .29]].map(([xFactor, zFactor], index) => <group key={index} position={[x * xFactor, y * .56, z * zFactor]}>
+      <mesh castShadow><cylinderGeometry args={[boltRadius, boltRadius, y * .34, 16]} /><meshStandardMaterial color="#cad3d6" metalness={.9} roughness={.16} /></mesh>
+      <mesh position={[0, y * .18, 0]}><cylinderGeometry args={[boltRadius * 1.7, boltRadius * 1.7, y * .1, 6]} /><meshStandardMaterial color="#aeb9bd" metalness={.88} roughness={.18} /></mesh>
+    </group>)}
+  </group>;
+}
+
 function GearboxHousing({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const [x, y, z] = component.dimensions;
   return <group>
@@ -662,19 +678,23 @@ function GearboxBearing({ component, color, xray, selected }: { component: Machi
   </group>;
 }
 
-function AnimatedZoneRoller({ position, radius, length, operating, speedScale = 1, xray, selected }: { position: Vec3; radius: number; length: number; operating: boolean; speedScale?: number; xray: boolean; selected: boolean }) {
+function AnimatedZoneRoller({ position, radius, length, operating, zoneIndex, speedScale = 1, xray, selected }: { position: Vec3; radius: number; length: number; operating: boolean; zoneIndex: number; speedScale?: number; xray: boolean; selected: boolean }) {
   const ref = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  useFrame(() => { if (ref.current && operating) ref.current.rotation.x = operationTime.current * 3.4 * speedScale; });
-  return <group ref={ref} position={position} rotation={[Math.PI / 2, 0, 0]}><mesh castShadow><cylinderGeometry args={[radius, radius, length, 24]} /><StandardMaterial color="#a8b4b9" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh><mesh><cylinderGeometry args={[radius * .32, radius * .32, length * 1.08, 16]} /><StandardMaterial color="#243139" xray={xray} selected={selected} /></mesh></group>;
+  useFrame((_, delta) => {
+    if (!ref.current || !operating) return;
+    ref.current.rotation.y -= Math.min(delta, .05) * 5.2 * speedScale * accumulationZoneActivity(operationTime.current, zoneIndex);
+  });
+  return <group position={position} rotation={[Math.PI / 2, 0, 0]}><group ref={ref}><mesh><cylinderGeometry args={[radius, radius, length, 24]} /><StandardMaterial color="#a8b4b9" xray={xray} selected={selected} metalness={.88} roughness={.2} /></mesh><mesh><cylinderGeometry args={[radius * .32, radius * .32, length * 1.08, 16]} /><StandardMaterial color="#243139" xray={xray} selected={selected} /></mesh></group></group>;
 }
 
 function AccumulationBed({ component, color, xray, selected, operating, speedScale = 1 }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean; speedScale?: number }) {
   const [x, y, z] = component.dimensions;
   const count = 12;
+  const zoneIndex = Math.max(0, Number(component.parameters.buffer_zone ?? 1) - 1);
   return <group>
     <group position={[0, -y * .16, 0]}><BoxBody size={[x, y * .58, z]} color="#344149" xray={xray} selected={selected} radius={.045} metalness={.72} roughness={.28} /></group>
-    {Array.from({ length: count }, (_, index) => <AnimatedZoneRoller key={index} position={[-x * .44 + index / (count - 1) * x * .88, y * .32, 0]} radius={Math.max(.055, y * .28)} length={z * .82} operating={operating} speedScale={speedScale} xray={xray} selected={selected} />)}
+    {Array.from({ length: count }, (_, index) => <AnimatedZoneRoller key={index} position={[-x * .44 + index / (count - 1) * x * .88, y * .32, 0]} radius={Math.max(.055, y * .28)} length={z * .82} operating={operating} zoneIndex={zoneIndex} speedScale={speedScale} xray={xray} selected={selected} />)}
     {[-1, 1].map((side) => <group key={side} position={[0, y * .31, side * z * .48]}><BoxBody size={[x, y * .35, .07]} color={color} xray={xray} selected={selected} radius={.02} /></group>)}
     {!xray && <group position={[0, -y * .5, z * .53]}><BoxBody size={[x * .76, y * .34, .025]} color={routeColor(component.parameters.zone_color, '#3b82a4')} xray={false} selected={selected} radius={.01} metalness={.08} roughness={.68} /></group>}
   </group>;
@@ -1021,6 +1041,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.parameters.recycling_hopper) return <RecyclingHopper component={component} xray={xray} selected={selected} />;
   if (component.parameters.recycling_drum) return <RecyclingDrum component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.recycling_magnet) return <RecyclingMagnet component={component} xray={xray} selected={selected} />;
+  if (component.parameters.tracker_foundation) return <TrackerFoundation component={component} xray={xray} selected={selected} />;
   if (component.parameters.accumulation_zone) return <AccumulationBed component={component} color={color} xray={xray} selected={selected} operating={operating} speedScale={operationSpeed} />;
   if (component.parameters.gearbox_housing) return <GearboxHousing component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.gearbox_bearing) return <GearboxBearing component={component} color={color} xray={xray} selected={selected} />;
