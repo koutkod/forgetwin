@@ -13,6 +13,7 @@ import {
   type AgentEditAction, type AgentPlan, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
+import { conveyorSpeedEdits, pendingClarification, resolvedEditPrompt, type ChatMessage } from '../lib/forge-chat';
 import { compileAgentPlan, localAnchorAt, semanticParametersForEdit } from '../lib/forge-model-plan';
 import { translateInForgeCoordinates } from '../lib/forge-motion';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
@@ -28,7 +29,7 @@ import type {
 const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const formatTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const constraintSymbol = (operator: 'min' | 'max' | 'exact') => operator === 'min' ? '≥' : operator === 'max' ? '≤' : '=';
-type EditMessage = { id: string; role: 'user' | 'agent'; text: string };
+type EditMessage = ChatMessage & { id: string };
 type EditCommand = { tool: ForgeToolName; input: Record<string, unknown>; label: string };
 type GenerationPhase = 'interpreting' | 'planning' | 'assembling' | 'linking' | 'simulating' | 'optimizing' | 'complete';
 type GenerationVisualState = {
@@ -65,6 +66,7 @@ export function ForgeTwinApp() {
   const [agentTrace, setAgentTrace] = useState<AgentTraceItem[]>([]);
   const [editPrompt, setEditPrompt] = useState('');
   const [editMessages, setEditMessages] = useState<EditMessage[]>([]);
+  const [chatThinking, setChatThinking] = useState(false);
   const [agentCancelable, setAgentCancelable] = useState(false);
   const [generationVisual, setGenerationVisual] = useState<GenerationVisualState | null>(null);
   const [animationState, setAnimationState] = useState({ designHash: state.designHash, playing: false });
@@ -559,7 +561,10 @@ export function ForgeTwinApp() {
     if (!state.components.length) { setError('Engineer a machine before editing it with chat.'); return; }
     const userMessage: EditMessage = { id: `edit-user-${Date.now()}`, role: 'user', text: prompt };
     setEditMessages((current) => [...current, userMessage].slice(-18)); setEditPrompt('');
-    const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true); setAnimationPlaying(false); setBusy(true); setError(null);
+    const priorClarification = pendingClarification(editMessages);
+    const effectivePrompt = priorClarification ? `${priorClarification.request} ${prompt}` : prompt;
+    const modelPrompt = resolvedEditPrompt(editMessages, prompt);
+    const controller = new AbortController(); abortRef.current = controller; setAgentCancelable(true); setAnimationPlaying(false); setBusy(true); setChatThinking(true); setError(null);
     let actor = runtimeActor();
     try {
       await call('inspect_workspace', { since_revision: Math.max(0, state.revision - 1) }, 35, actor, controller.signal);
@@ -568,13 +573,23 @@ export function ForgeTwinApp() {
       let expectedRevision = getSnapshot().revision;
       let expectedDesignHash = getSnapshot().designHash;
       let preserveComponentIds: string[] = [];
-      if (actor === 'ModelAgent') {
-        addTrace('action', 'Model is editing the current world', prompt);
+      const current = getSnapshot();
+      const directSpeedEdits = conveyorSpeedEdits(current, effectivePrompt);
+      if (directSpeedEdits.length) {
+        commands = directSpeedEdits.map((edit) => ({
+          tool: 'set_motor_speed',
+          input: { motor_id: edit.motorId, max_rpm: edit.maxRpm, direction: edit.direction },
+          label: `Retune ${edit.motorId} from ${edit.previousRpm} to ${edit.maxRpm} rpm`,
+        }));
+        const increasing = directSpeedEdits[0].maxRpm > directSpeedEdits[0].previousRpm;
+        summary = `${increasing ? 'Increased' : 'Reduced'} ${directSpeedEdits.length === 1 ? 'the conveyor drive' : `all ${directSpeedEdits.length} conveyor drives`} to ${directSpeedEdits.map((edit) => `${edit.maxRpm} rpm`).join(', ')} without changing the machine geometry.`;
+        addTrace('reasoning', 'Resolved conveyor speed edit directly', summary);
+      } else if (actor === 'ModelAgent') {
+        addTrace('action', 'Model is editing the current world', modelPrompt);
         try {
-          const current = getSnapshot();
           expectedRevision = current.revision; expectedDesignHash = current.designHash;
           const latest = current.runs.at(-1) ?? null;
-          const response = await requestAgentEdit(prompt, {
+          const response = await requestAgentEdit(modelPrompt, {
             revision: current.revision, design_hash: current.designHash,
             machine_name: current.goal?.machineName ?? 'Mechanical system', goal: current.goal?.brief ?? goalPrompt,
             max_components: current.goal?.maxComponents ?? 80, selected_component_id: current.selectedComponentId ?? '',
@@ -599,21 +614,28 @@ export function ForgeTwinApp() {
           setAgentModel(response.model); setAgentConnectionError(null);
           if (response.result.needs_clarification) {
             const question = response.result.clarification_question;
-            setEditMessages((messages) => [...messages, { id: `edit-agent-${Date.now()}`, role: 'agent' as const, text: question }].slice(-18));
-            addTrace('reasoning', 'Chat edit needs one detail', `${response.result.understanding} ${question}`);
-            setToast('The agent asked a clarification before changing the world');
-            return;
+            if (priorClarification) {
+              commands = localEditCommands(effectivePrompt);
+              summary = `The model repeated a clarification after your answer, so ForgeTwin resolved the bounded edit locally: ${commands.map((item) => item.label).join(' · ')}.`;
+              addTrace('fallback', 'Clarification loop prevented', 'The user answer was merged with the original request and executed through the guarded local editor.');
+            } else {
+              setEditMessages((messages) => [...messages, { id: `edit-agent-${Date.now()}`, role: 'agent' as const, kind: 'clarification' as const, text: question }].slice(-18));
+              addTrace('reasoning', 'Chat edit needs one detail', `${response.result.understanding} ${question}`);
+              setToast('The agent asked one clarification before changing the world');
+              return;
+            }
+          } else {
+            summary = response.result.understanding; commands = modelEditCommands(response.result.actions);
+            preserveComponentIds = response.result.preserve_ids;
+            addTrace('reasoning', 'Model proposed an in-place revision', summary);
           }
-          summary = response.result.understanding; commands = modelEditCommands(response.result.actions);
-          preserveComponentIds = response.result.preserve_ids;
-          addTrace('reasoning', 'Model proposed an in-place revision', summary);
         } catch (caught) {
-          actor = 'Deterministic'; const failure = recordModelFailure(caught); commands = localEditCommands(prompt);
+          actor = 'Deterministic'; const failure = recordModelFailure(caught); commands = localEditCommands(effectivePrompt);
           summary = `The model was unavailable, so the local chat interpreter applied: ${commands.map((item) => item.label).join(' · ')}.`;
           addTrace('fallback', 'Local chat editor took over for this edit', `${failure.message}${failure.disconnected ? ' Reconnect with an active key.' : ' The validated key remains connected for the next retry.'}`);
         }
       } else {
-        commands = localEditCommands(prompt); summary = `Local chat edit: ${commands.map((item) => item.label).join(' · ')}.`;
+        commands = localEditCommands(effectivePrompt); summary = `Local chat edit: ${commands.map((item) => item.label).join(' · ')}.`;
       }
       ensureActive(controller.signal);
       must(commandBatch(commands.map((edit) => ({ name: edit.tool, input: edit.input })), actor, { expectedRevision, expectedDesignHash, preserveComponentIds }));
@@ -630,7 +652,7 @@ export function ForgeTwinApp() {
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'The chat edit could not be applied.';
       setEditMessages((current) => [...current, { id: `edit-agent-${Date.now()}`, role: 'agent' as const, text: message }].slice(-18)); setError(message);
-    } finally { abortRef.current = null; setAgentCancelable(false); setBusy(false); }
+    } finally { abortRef.current = null; setAgentCancelable(false); setChatThinking(false); setBusy(false); }
   };
   const enterScratchWorld = () => {
     if (busy) return;
@@ -683,7 +705,7 @@ export function ForgeTwinApp() {
         {humanEdited && <div className="challenge-banner human"><span className="challenge-icon"><Radio size={18} /></span><div><span className="eyebrow">Human edit detected</span><strong>{state.humanConstraints.length} {state.humanConstraints.length === 1 ? 'body has' : 'bodies have'} locked fields.</strong><p>{state.humanConstraints.map((item) => `${state.components.find((component) => component.id === item.componentId)?.role ?? item.componentId}: ${item.fields.join(', ')}`).join(' · ')}. The agent will preserve every field and redesign the surrounding world.</p></div><button onClick={retuneHumanEdit} disabled={busy}>{busy ? 'Redesigning…' : 'Redesign around my change'}</button></div>}
         {finalHumanPass && latestRun && <div className="pass-banner"><span><BadgeCheck size={20} /></span><div><strong>All constraints pass with the human edit preserved.</strong><p>{latestRun.metrics.measures.slice(0, 3).map((item) => `${item.label} ${item.value}${item.unit}`).join(' · ')}</p></div><button onClick={() => setDrawer('compare')}>Compare designs</button></div>}
       </section>
-      <aside className="agent-panel" aria-label="Agent activity"><div className="side-tabs"><button className={sideTab === 'chat' ? 'active' : ''} onClick={() => setSideTab('chat')}><MessageSquareText size={13} />Chat edit</button><button className={sideTab === 'activity' ? 'active' : ''} onClick={() => setSideTab('activity')}><Activity size={13} />Activity</button><button className={sideTab === 'history' ? 'active' : ''} onClick={() => setSideTab('history')}><History size={13} />History</button></div>{sideTab === 'chat' ? <AgentChat state={state} messages={editMessages} prompt={editPrompt} busy={busy} model={agentModel} modelConnected={agentRuntime === 'session-model'} selected={selected} onPromptChange={setEditPrompt} onSubmit={editWithChat} /> : sideTab === 'activity' ? <AgentFeed state={state} toolCount={registeredTools} trace={agentTrace} runtime={agentRuntime} model={agentModel} busy={busy} canCancel={agentCancelable} onCancel={cancelAgentRun} onConfigure={() => setAgentSettingsOpen(true)} /> : <RevisionHistory state={state} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} />}<MetricStack metrics={latestRun?.designHash === state.designHash ? latestRun.metrics : null} phase={latestRun?.designHash === state.designHash ? state.phase : state.components.length ? 'ready' : state.phase} />{state.goal && <p className="model-note"><AlertTriangle size={12} />{state.goal.disclaimer}</p>}</aside>
+      <aside className="agent-panel" aria-label="Agent activity"><div className="side-tabs"><button className={sideTab === 'chat' ? 'active' : ''} onClick={() => setSideTab('chat')}><MessageSquareText size={13} />Chat edit</button><button className={sideTab === 'activity' ? 'active' : ''} onClick={() => setSideTab('activity')}><Activity size={13} />Activity</button><button className={sideTab === 'history' ? 'active' : ''} onClick={() => setSideTab('history')}><History size={13} />History</button></div>{sideTab === 'chat' ? <AgentChat state={state} messages={editMessages} prompt={editPrompt} busy={busy} thinking={chatThinking} model={agentModel} modelConnected={agentRuntime === 'session-model'} selected={selected} onPromptChange={setEditPrompt} onSubmit={editWithChat} /> : sideTab === 'activity' ? <AgentFeed state={state} toolCount={registeredTools} trace={agentTrace} runtime={agentRuntime} model={agentModel} busy={busy} canCancel={agentCancelable} onCancel={cancelAgentRun} onConfigure={() => setAgentSettingsOpen(true)} /> : <RevisionHistory state={state} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} />}<MetricStack metrics={latestRun?.designHash === state.designHash ? latestRun.metrics : null} phase={latestRun?.designHash === state.designHash ? state.phase : state.components.length ? 'ready' : state.phase} />{state.goal && <p className="model-note"><AlertTriangle size={12} />{state.goal.disclaimer}</p>}</aside>
     </main>
     {error && <div className="error-toast" role="alert"><AlertTriangle size={15} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><X size={14} /></button></div>}
     {toast && <div className="success-toast" role="status"><Check size={14} />{toast}</div>}
@@ -823,13 +845,15 @@ function wholeMachineChatExamples(state: ForgeState) {
   return ['Make the primary support 15% wider', 'Move the feedback sensor up 0.3 m', 'Add another structural support'];
 }
 
-function AgentChat({ state, messages, prompt, busy, model, modelConnected, selected, onPromptChange, onSubmit }: { state: ForgeState; messages: EditMessage[]; prompt: string; busy: boolean; model: string; modelConnected: boolean; selected: MachineComponent | null; onPromptChange: (value: string) => void; onSubmit: (value: string) => void }) {
+function AgentChat({ state, messages, prompt, busy, thinking, model, modelConnected, selected, onPromptChange, onSubmit }: { state: ForgeState; messages: EditMessage[]; prompt: string; busy: boolean; thinking: boolean; model: string; modelConnected: boolean; selected: MachineComponent | null; onPromptChange: (value: string) => void; onSubmit: (value: string) => void }) {
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ block: 'nearest' }); }, [messages.length, thinking]);
   const examples = selected
     ? [`Make ${selected.role} 20% larger`, `Move ${selected.role} up 0.5 m`, `Use aluminum for ${selected.role}`]
     : wholeMachineChatExamples(state);
   return <div className="agent-chat"><div className="panel-heading"><div><span className="eyebrow">Natural-language world revision</span><h2>Edit with chat</h2></div><span className={`agent-live ${modelConnected ? 'model' : 'local'}`}><i />{modelConnected ? model : 'LOCAL'}</span></div>
     <div className="chat-context"><MessageSquareText size={16} /><div><strong>{selected ? `Editing around ${selected.role}` : 'Editing the complete machine'}</strong><p>The agent modifies this world in place, preserves human locks, reruns physics, and keeps every change in version history.</p></div></div>
-    <div className="chat-messages" aria-live="polite">{messages.length ? messages.map((message) => <article key={message.id} className={message.role}><span>{message.role === 'agent' ? <Bot size={13} /> : 'YOU'}</span><p>{message.text}</p></article>) : <div className="chat-empty"><Sparkles size={20} /><strong>Describe a revision</strong><p>Try “{examples[0].toLowerCase()}” or select a body for targeted edits.</p></div>}</div>
+    <div className="chat-messages" aria-live="polite">{messages.length ? messages.map((message) => <article key={message.id} className={message.role}><span>{message.role === 'agent' ? <Bot size={13} /> : 'YOU'}</span><p>{message.text}</p></article>) : !thinking && <div className="chat-empty"><Sparkles size={20} /><strong>Describe a revision</strong><p>Try “{examples[0].toLowerCase()}” or select a body for targeted edits.</p></div>}{thinking && <article className="agent chat-thinking" role="status" aria-label="ForgeTwin agent is thinking"><span><Bot size={13} /></span><p><i /><i /><i /><b className="sr-only">ForgeTwin agent is thinking</b></p></article>}<div ref={chatEndRef} /></div>
     <div className="chat-suggestions" aria-label="Suggested edits">{examples.map((example) => <button key={example} type="button" disabled={busy} onClick={() => onPromptChange(example)}>{example}</button>)}</div>
     <form className="chat-composer" onSubmit={(event) => { event.preventDefault(); onSubmit(prompt); }}><label className="sr-only" htmlFor="machine-edit-prompt">Describe a change to the current machine</label><textarea id="machine-edit-prompt" value={prompt} onChange={(event) => onPromptChange(event.target.value)} placeholder={`e.g. ${examples[0]}`} maxLength={300} rows={3} disabled={busy} /><button type="submit" disabled={busy || prompt.trim().length < 3} aria-label="Apply chat edit">{busy ? <Cpu size={14} /> : <Send size={14} />}{busy ? 'Engineering…' : 'Apply & simulate'}</button></form>
     <p className="chat-proof"><BadgeCheck size={12} />Every edit becomes guarded tool calls, a new revision, and a measured physics run.</p>
