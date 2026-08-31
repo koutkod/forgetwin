@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, translateInForgeCoordinates } from './forge-motion';
+import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPoseAtProgress, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, sampleClearancePath, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -8,6 +8,75 @@ function body(id: string, position: [number, number, number], bodyType: 'fixed' 
 }
 
 const motor = (jointId: string): Motor => ({ id: `motor-${jointId}`, componentId: 'base', jointId, maxTorque: 20, maxRpm: 30, direction: 1 });
+
+function product(form: string, dimensions: [number, number, number], parameters: Record<string, string | number> = {}): MachineComponent {
+  return { ...body(form, [0, 0, 0]), primitive: 'container', dimensions, parameters: { product_form: form, ...parameters } };
+}
+
+function intersectsExpandedBox(position: [number, number, number], center: [number, number, number], dimensions: [number, number, number], clearance: [number, number, number]) {
+  return position.every((value, axis) => Math.abs(value - center[axis]) < dimensions[axis] / 2 + clearance[axis]);
+}
+
+describe('collision-safe material-flow animation', () => {
+  it('follows explicit segments instead of cutting across waypoint corners', () => {
+    const position = sampleClearancePath(.5, [[0, 0, 0], [0, 0, 1], [1, 0, 1]], [.5, .5]);
+    expect(position).toEqual([0, 0, 1]);
+  });
+
+  it('routes every tomato around the selector before entering the correct open bin', () => {
+    for (const grade of ['ripe', 'unripe', 'damaged']) {
+      const tomato = product('tomato', [.43, .43, .43], { grade });
+      const lane = grade === 'ripe' ? -1 : 1;
+      for (let step = 0; step <= 200; step += 1) {
+        const pose = productOperationPoseAtProgress(tomato, step / 200)!;
+        expect(intersectsExpandedBox(pose.position, [1.35, 1.05, 0], [1.3, .3, .28], [.215, .215, .215])).toBe(false);
+      }
+      const aboveRim = productOperationPoseAtProgress(tomato, .83)!.position;
+      expect(aboveRim[1]).toBeGreaterThan(1.08);
+      const collected = productOperationPoseAtProgress(tomato, .999)!.position;
+      expect(collected[0]).toBeCloseTo(3.18, 2);
+      expect(collected[2]).toBeCloseTo(lane * 1.45, 2);
+      expect(collected[1]).toBeGreaterThan(.3);
+      expect(collected[1]).toBeLessThan(.87);
+    }
+  });
+
+  it('keeps sorter cartons outside the diverter and drops them inside—not through—the bin walls', () => {
+    for (const form of ['package-red', 'package-blue']) {
+      const carton = product(form, [.68, .56, .62]);
+      const lane = form === 'package-red' ? -1 : 1;
+      for (let step = 0; step <= 200; step += 1) {
+        const pose = productOperationPoseAtProgress(carton, step / 200)!;
+        expect(intersectsExpandedBox(pose.position, [1.15, 1.1, 0], [1.35, .34, .28], [.34, .28, .31])).toBe(false);
+      }
+      const collected = productOperationPoseAtProgress(carton, .999)!.position;
+      expect(collected[0]).toBeCloseTo(3.65, 2);
+      expect(collected[2]).toBeCloseTo(lane * 1.85, 2);
+      expect(collected[1]).toBeGreaterThan(.31);
+      expect(collected[1]).toBeLessThan(.97);
+    }
+  });
+
+  it('gives every free showcase product a finite, bounded route', () => {
+    const products = [
+      product('tomato', [.4, .4, .4], { grade: 'ripe' }),
+      product('package-red', [.68, .56, .62]),
+      product('package-blue', [.68, .56, .62]),
+      product('shipping-carton', [.7, .52, .68]),
+      product('metal-can', [.46, .66, .46]),
+      product('plastic-bottle', [.4, .72, .4]),
+      product('reject-object', [.5, .52, .5]),
+    ];
+    for (const item of products) for (let step = 0; step <= 100; step += 1) {
+      const pose = productOperationPoseAtProgress(item, step / 100)!;
+      expect(pose.position.every(Number.isFinite)).toBe(true);
+      expect(Math.abs(pose.position[0])).toBeLessThan(5);
+      expect(pose.position[1]).toBeGreaterThanOrEqual(.3);
+      expect(pose.position[1]).toBeLessThan(2.5);
+      expect(Math.abs(pose.position[2])).toBeLessThan(2.5);
+    }
+  });
+});
 
 describe('road vehicle operation motion', () => {
   it('uses +X forward and negative Z left for natural-language moves', () => {

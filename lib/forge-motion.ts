@@ -7,12 +7,124 @@ const ACCUMULATION_ZONE_COUNT = 4;
 
 export type MechanismOperationPose = { position: Vec3; rotation: Vec3; animated: boolean };
 
+export type ProductOperationPose = { position: Vec3; rotation: Vec3 };
+
 type Driver = { angularSpeed: number; linearSpeed: number; direction: number };
 type Transform = { position: Vector3; rotation: Quaternion; animated: boolean };
 
 export type MechanismMotionGraph = {
   poseAt(componentId: string, elapsed: number): MechanismOperationPose | null;
 };
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+const smoothstep = (value: number) => {
+  const t = clamp01(value);
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Samples an authored material-flow route without rounding its corners.
+ *
+ * A previous two-point interpolation cut diagonally through diverters and bin
+ * walls. Explicit segments make the visible operation obey the same physical
+ * clearances a real line needs: move laterally before the selector, travel
+ * above the chute, clear the bin rim, and only then drop into the container.
+ */
+export function sampleClearancePath(progress: number, points: Vec3[], weights?: number[]): Vec3 {
+  if (!points.length) return [0, 0, 0];
+  if (points.length === 1) return [...points[0]] as Vec3;
+  const segments = points.length - 1;
+  const normalizedWeights = weights?.length === segments && weights.every((weight) => weight > 0)
+    ? weights
+    : Array.from({ length: segments }, () => 1);
+  const total = normalizedWeights.reduce((sum, weight) => sum + weight, 0);
+  let cursor = clamp01(progress) * total;
+  for (let index = 0; index < segments; index += 1) {
+    const weight = normalizedWeights[index];
+    if (cursor <= weight || index === segments - 1) {
+      const t = smoothstep(cursor / weight);
+      return points[index].map((value, axis) => value + (points[index + 1][axis] - value) * t) as Vec3;
+    }
+    cursor -= weight;
+  }
+  return [...points[points.length - 1]] as Vec3;
+}
+
+export function productOperationPoseAtProgress(component: MachineComponent, progress: number): ProductOperationPose | null {
+  const form = String(component.parameters.product_form ?? '');
+  if (!form) return null;
+  const rotation = [...component.rotation] as Vec3;
+  const p = ((progress % 1) + 1) % 1;
+
+  if (form.startsWith('package-')) {
+    const lane = form.endsWith('red') ? -1 : 1;
+    return {
+      position: sampleClearancePath(p, [
+        [-3.15, 1.3, 0],
+        [.08, 1.3, 0],
+        [.08, 1.34, lane * .55],
+        [1.28, 1.34, lane * .58],
+        [2.45, 1.28, lane * 1.02],
+        [3.65, 1.33, lane * 1.85],
+        [3.65, .78, lane * 1.85],
+        [3.65, .78, lane * 1.85],
+      ], [.34, .07, .12, .17, .14, .1, .06]),
+      rotation,
+    };
+  }
+
+  if (form === 'shipping-carton') {
+    const staged = p < .2 ? p * 1.25 : p < .48 ? .25 : p < .68 ? .25 + (p - .48) * 1.25 : .5 + (p - .68) * 1.56;
+    return { position: [-3.45 + Math.min(1, staged) * 7, 1.28, 0], rotation };
+  }
+
+  if (form === 'tomato') {
+    const lane = component.parameters.grade === 'ripe' ? -1 : 1;
+    return {
+      position: sampleClearancePath(p, [
+        [-3.25, 1.23, 0],
+        [.12, 1.23, 0],
+        [.12, 1.28, lane * .42],
+        [1.35, 1.31, lane * .46],
+        [2.18, 1.18, lane * .88],
+        [3.18, 1.12, lane * 1.45],
+        [3.18, .66, lane * 1.45],
+        [3.18, .66, lane * 1.45],
+      ], [.34, .07, .13, .16, .13, .1, .07]),
+      rotation,
+    };
+  }
+
+  if (['metal-can', 'plastic-bottle', 'reject-object'].includes(form)) {
+    const routeZ = form === 'metal-can' ? -1.65 : form === 'plastic-bottle' ? 0 : 1.65;
+    const routeX = form === 'reject-object' ? 2.05 : 3.45;
+    const outletZ = form === 'metal-can' ? -.62 : form === 'plastic-bottle' ? .45 : .82;
+    const chuteZ = routeZ * .72;
+    rotation[0] += p * Math.PI * (form === 'metal-can' ? 4 : 2.4);
+    return {
+      position: sampleClearancePath(p, [
+        [-3.05, 2.08, 0],
+        [-2.2, 1.76, 0],
+        [-1.02, 1.62, 0],
+        [.72, 1.56, 0],
+        [1.28, 1.52, outletZ],
+        [routeX - .65, 1.25, chuteZ],
+        [routeX, 1.34, routeZ],
+        [routeX, .68, routeZ],
+        [routeX, .68, routeZ],
+      ], [.12, .15, .19, .1, .13, .12, .11, .08]),
+      rotation,
+    };
+  }
+
+  return null;
+}
+
+export function productOperationPose(component: MachineComponent, elapsed: number): ProductOperationPose | null {
+  const phaseSeed = Number(component.parameters.queue_index ?? component.parameters.operation_index ?? (component.id.length % 5));
+  return productOperationPoseAtProgress(component, elapsed * .14 + phaseSeed * .19);
+}
 
 export function animatedCableEndpoints(component: MachineComponent, elapsed: number, operating: boolean): { start: Vec3; end: Vec3 } | null {
   const start = [Number(component.parameters.start_x), Number(component.parameters.start_y), Number(component.parameters.start_z)] as Vec3;

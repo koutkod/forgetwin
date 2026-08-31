@@ -5,7 +5,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type Group, MathUtils, Plane, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
-import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
+import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPose, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
@@ -20,58 +20,18 @@ type OperatingContext = {
 
 const OperationTimeContext = createContext<{ current: number }>({ current: 0 });
 
-const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
-const smoothstep = (value: number) => {
-  const t = clamp01(value);
-  return t * t * (3 - 2 * t);
-};
 const suspensionTravel = (elapsed: number, index: number) => (.5 + .5 * Math.sin(elapsed * 1.25 + index * 1.17)) * .14;
 const operatingValue = (elapsed: number) => .5 + Math.sin(elapsed * 1.45) * .36;
-
-function routeProgress(progress: number, start: Vec3, split: Vec3, end: Vec3) {
-  if (progress < .64) {
-    const t = smoothstep(progress / .64);
-    return start.map((value, axis) => value + (split[axis] - value) * t) as Vec3;
-  }
-  const t = smoothstep((progress - .64) / .36);
-  return split.map((value, axis) => value + (end[axis] - value) * t) as Vec3;
-}
 
 function operationPose(component: MachineComponent, elapsed: number, context: OperatingContext) {
   let position = [...component.position] as Vec3;
   let rotation = [...component.rotation] as Vec3;
   if (!context.enabled) return { position, rotation };
   const role = component.role.toLowerCase();
-  const form = String(component.parameters.product_form ?? '');
   const wave = .5 - Math.cos(elapsed * 1.45) * .5;
   const signed = Math.sin(elapsed * 1.45);
-  const phaseSeed = Number(component.parameters.queue_index ?? component.parameters.operation_index ?? (component.id.length % 5));
-  const progress = (elapsed * .14 + phaseSeed * .19) % 1;
-
-  if (form) {
-    if (form.startsWith('package-')) {
-      const red = form.endsWith('red');
-      return { position: routeProgress(progress, [-3.15, 1.3, 0], [1.25, 1.3, 0], [3.62, .98, red ? -1.85 : 1.85]), rotation };
-    }
-    if (form === 'shipping-carton') {
-      const staged = progress < .2 ? progress * 1.25 : progress < .48 ? .25 : progress < .68 ? .25 + (progress - .48) * 1.25 : .5 + (progress - .68) * 1.56;
-      position[0] = -3.45 + Math.min(1, staged) * 7;
-      position[1] = 1.28;
-      position[2] = 0;
-      return { position, rotation };
-    }
-    if (form === 'tomato') {
-      const accepted = component.parameters.grade === 'ripe';
-      return { position: routeProgress(progress, [-3.25, 1.23, 0], [1.35, 1.15, 0], [3.12, .82, accepted ? -.98 : .98]), rotation };
-    }
-    if (['metal-can', 'plastic-bottle', 'reject-object'].includes(form)) {
-      const routeZ = form === 'metal-can' ? -1.65 : form === 'plastic-bottle' ? 0 : 1.65;
-      const routeX = form === 'reject-object' ? 2.05 : 3.45;
-      const routed = routeProgress(progress, [-3.15, 1.75, 0], [.35, 1.45, 0], [routeX, .75, routeZ]);
-      rotation[0] += elapsed * (form === 'metal-can' ? 1.9 : 1.1);
-      return { position: routed, rotation };
-    }
-  }
+  const productPose = productOperationPose(component, elapsed);
+  if (productPose) return productPose;
 
   // Model-authored bodies are driven from their actual joint graph;
   // deterministic showcase machines retain the bespoke choreography below.
