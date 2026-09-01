@@ -6,7 +6,7 @@ import {
 } from '../../../lib/forge-agent';
 
 const DEFAULT_MODEL = 'gpt-5.6-sol';
-const DEFAULT_HOSTED_MODEL = 'gpt-5.6-terra';
+const DEFAULT_HOSTED_MODEL = 'gpt-5.6-luna';
 const HOSTED_REQUEST_LIMIT = 60;
 const HOSTED_REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const hostedRequestWindows = new Map<string, { startedAt: number; count: number }>();
@@ -188,6 +188,8 @@ Planning contract:
 - Return one complete design graph, not a prose suggestion or loose parts pile. Prefer 5–28 meaningful components; use up to 40 only when the mechanism truly needs them. Give parts recognizable roles, plausible proportions, non-overlapping placement, and mechanical connections or joints.
 - Reason from function to form: establish the grounded frame, identify each degree of freedom, place the load path, add drives at the joints they actuate, then add sensing and control. Use realistic concept-scale dimensions and masses; do not leave massive solid blocks where a frame, thin plate, or hollow member is intended.
 - Ground the support structure with fixed bodies. Use dynamic bodies only for freely moving payloads or parts, and kinematic bodies for prescribed actuators. Any active transport, lifting, mobile, manipulation, transmission, tracking, or rotation function needs a plausible motor or actuator and control path.
+- Every sensor requires its own visible sensor or camera component: sensor.component_id references that sensor/camera body, while sensor.target_id references the separate physical component being measured. Both IDs come from components. Neither field may reference a joint, motor, actuator, controller, channel, or assembly ID; an angle sensor for a steering joint targets the visible steering or linkage body moved by that joint.
+- Every registered motor uses a motor primitive as motor.component_id. Every actuator uses a motor, servo, or piston primitive as actuator.component_id and a non-fixed joint ID as actuator.joint_id. A human-operated hinge such as bicycle steering or a hand lever needs no actuator record unless a physical powered actuator body is included.
 - Joint limits encode physical travel, not a schema placeholder. Author every joint as component_a = support/parent and component_b = the child body that physically moves; a drive always acts on component_b. Use limits: null for continuous revolute wheels, shafts, gears, rollers, and rotors. Use a finite [min,max] pair for bounded hinges and for every prismatic, spring, or rope joint. Couple each drive to the exact joint it moves. Never place two joints between the same body pair.
 - Compose unavailable specialized parts from primitives. Useful semantic tags include road-wheel, bicycle-wheel, motorcycle-wheel, front-steering, steering-wheel, handlebar, steering-rack, vehicle-seat, control-pedal, headlight, aircraft-wing, fuselage, propeller, main-rotor, tail-rotor, landing-gear, robot-link, robot-joint, robot-head, continuous-track, solar-panel, solar-moving, solar-source, sorting-diverter, conveyor, package-red, package-blue, shipping-carton, tomato-ripe, tomato-reject, metal-can, plastic-bottle, reject-object, recycling-drum, suspension-wheel, suspension-arm, suspension-spring, payload, rotor, and operation-spin. Tags describe the body they are attached to; do not apply them from a loose word elsewhere in the goal.
 - Make the silhouette readable to a non-engineer: separate functional bodies instead of overlapping them, keep related parts at visibly plausible interfaces, support every elevated assembly from the ground, and use proportions that communicate the requested object at first glance. Do not hide a requested function only in a role string or semantic tag.
@@ -254,7 +256,7 @@ Editing contract:
         validationFeedback = (error instanceof z.ZodError
           ? error.issues.map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`).join('; ')
           : error.message).replace(/[\r\n]+/g, ' ').slice(0, 600);
-        if (attempt === 1) return Response.json({ ok: false, code: 'MODEL_OUTPUT_INVALID', error: 'The model could not produce a mechanically valid design graph after one guarded repair.' }, { status: 502 });
+        if (attempt === 1) return Response.json({ ok: false, code: 'MODEL_OUTPUT_INVALID', error: 'The model could not produce a mechanically valid design graph after one guarded repair.', validation_feedback: validationFeedback }, { status: 502 });
       }
     }
     return Response.json({ ok: false, code: 'MODEL_OUTPUT_INVALID', error: 'The model could not produce a mechanically valid design graph.' }, { status: 502 });

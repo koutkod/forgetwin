@@ -325,7 +325,10 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
     const rollingWheelIds = new Set(motionJoints.filter((joint) => joint.joint_type === 'revolute' && jointTouches(joint, (component) => component.primitive === 'wheel'))
       .flatMap((joint) => [joint.component_a, joint.component_b]).filter((id) => componentById.get(id)?.primitive === 'wheel'));
     requireSignature(rollingWheelIds.size >= 2, 'two independently mounted rolling wheels');
-    requireSignature(relevantDrivenJoints((component, text) => component.primitive === 'wheel' || /crank|chain|sprocket/.test(text)).length >= 1, 'a crank, chain, or wheel drive coupled to the bicycle drivetrain');
+    const manualCrank = motionJoints.some((joint) => jointTouches(joint, (_component, text) => /pedal|crank/.test(text)));
+    const manualTransmission = plan.connections.some((edge) => ['mechanical', 'power'].includes(edge.connection_type)
+      && [edge.source_id, edge.target_id].some((id) => /chain|sprocket|crank|pedal/.test(componentText(id))));
+    requireSignature(relevantDrivenJoints((component, text) => component.primitive === 'wheel' || /crank|chain|sprocket/.test(text)).length >= 1 || (manualCrank && manualTransmission), 'a crank, chain, or wheel drive coupled to the bicycle drivetrain');
   }
   if (/\b(?:gearbox|gear train|transmission)\b/.test(requested) && !transmissionHousing) {
     const gearMesh = plan.joints.some((joint) => joint.joint_type === 'gear'
@@ -604,6 +607,7 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
   if (plan.components.length > 2 && !plan.connections.length && !plan.joints.length) throw new Error('The design is an unconnected parts pile.');
   const adjacency = new Map(plan.components.map((item) => [item.id, new Set<string>()]));
   for (const joint of plan.joints) { adjacency.get(joint.component_a)!.add(joint.component_b); adjacency.get(joint.component_b)!.add(joint.component_a); }
+  for (const connection of plan.connections.filter((item) => item.connection_type === 'mechanical')) { adjacency.get(connection.source_id)!.add(connection.target_id); adjacency.get(connection.target_id)!.add(connection.source_id); }
   const reachable = new Set(plan.components.filter((item) => item.body_type === 'fixed').map((item) => item.id));
   const queue = [...reachable];
   while (queue.length) for (const neighbor of adjacency.get(queue.shift()!) ?? []) if (!reachable.has(neighbor)) { reachable.add(neighbor); queue.push(neighbor); }
@@ -615,7 +619,8 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
     && bodyById.get(joint.component_b)?.body_type !== 'fixed').map((joint) => joint.id));
   const hasDrivenPath = plan.actuators.some((actuator) => motionJointIds.has(actuator.joint_id))
     || plan.motors.some((motor) => motionJointIds.has(motor.joint_id));
-  if (active && !hasDrivenPath) throw new Error('An active machine needs a motor or actuator connected to the mechanism it drives.');
+  const hasManualDrive = plan.joints.some((joint) => joint.joint_type !== 'fixed' && [joint.component_a, joint.component_b].some((id) => /\b(?:pedal|crank|handwheel|hand wheel|manual handle|treadle)\b/.test(`${bodyById.get(id)?.role ?? ''} ${bodyById.get(id)?.semantic_tags.join(' ') ?? ''}`.toLowerCase())));
+  if (active && !hasDrivenPath && !hasManualDrive) throw new Error('An active machine needs a motor, actuator, or explicit manual drive connected to the mechanism it drives.');
   if (originalPrompt) validatePromptFidelity(plan, originalPrompt);
   return plan;
 }
