@@ -38,8 +38,7 @@ function download(blob: Blob, name: string) {
 
 function sceneCanvas() {
   const canvas = document.querySelector<HTMLCanvasElement>('[data-forgetwin-scene] canvas');
-  if (!canvas || canvas.width < 2 || canvas.height < 2) throw new Error('The 3D viewport is not ready to export yet.');
-  return canvas;
+  return canvas && canvas.width >= 2 && canvas.height >= 2 ? canvas : null;
 }
 
 function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
@@ -59,12 +58,33 @@ export function renderSceneImage(state: ForgeState) {
 
   context.fillStyle = '#070b0f';
   context.fillRect(0, 0, output.width, output.height);
-  const sourceRatio = source.width / source.height;
-  const targetRatio = output.width / output.height;
-  let sx = 0, sy = 0, sw = source.width, sh = source.height;
-  if (sourceRatio > targetRatio) { sw = source.height * targetRatio; sx = (source.width - sw) / 2; }
-  else { sh = source.width / targetRatio; sy = (source.height - sh) / 2; }
-  context.drawImage(source, sx, sy, sw, sh, 0, 0, output.width, output.height);
+  const drawLiveScene = () => {
+    if (!source) return false;
+    try {
+      const probe = document.createElement('canvas'); probe.width = 48; probe.height = 32;
+      const probeContext = probe.getContext('2d', { willReadFrequently: true });
+      if (!probeContext) return false;
+      probeContext.drawImage(source, 0, 0, probe.width, probe.height);
+      const pixels = probeContext.getImageData(0, 0, probe.width, probe.height).data;
+      let visible = 0; let variation = 0; let previous = -1;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const luminance = pixels[index] + pixels[index + 1] + pixels[index + 2];
+        if (pixels[index + 3] > 8 && luminance > 18) visible += 1;
+        if (previous >= 0 && Math.abs(luminance - previous) > 18) variation += 1;
+        previous = luminance;
+      }
+      if (visible < 18 || variation < 8) return false;
+      const sourceRatio = source.width / source.height;
+      const targetRatio = output.width / output.height;
+      let sx = 0, sy = 0, sw = source.width, sh = source.height;
+      if (sourceRatio > targetRatio) { sw = source.height * targetRatio; sx = (source.width - sw) / 2; }
+      else { sh = source.width / targetRatio; sy = (source.height - sh) / 2; }
+      context.drawImage(source, sx, sy, sw, sh, 0, 0, output.width, output.height);
+      return true;
+    } catch { return false; }
+  };
+
+  if (!drawLiveScene()) drawFallbackProjection(context, state, output.width, output.height);
 
   const top = context.createLinearGradient(0, 0, 0, 280);
   top.addColorStop(0, 'rgba(3,7,10,.93)'); top.addColorStop(1, 'rgba(3,7,10,0)');
@@ -97,6 +117,51 @@ export function renderSceneImage(state: ForgeState) {
     context.fillStyle = '#e7eef0'; context.font = '600 23px Arial, sans-serif'; context.fillText(value, x + 22, 1112, 342);
   });
   return output;
+}
+
+/** CPU-only fallback used when WebGL has not painted yet, the drawing buffer
+ * was lost, or the browser blocks canvas readback. It projects the current
+ * physical world itself, so image/PDF export is never a blank file. */
+export function drawFallbackProjection(context: CanvasRenderingContext2D, state: ForgeState, width = 1800, height = 1200) {
+  const components = state.components;
+  context.fillStyle = '#071016'; context.fillRect(0, 0, width, height);
+  const grid = context.createLinearGradient(0, height * .32, 0, height);
+  grid.addColorStop(0, '#0b171e'); grid.addColorStop(1, '#071016'); context.fillStyle = grid; context.fillRect(0, height * .3, width, height * .7);
+  context.strokeStyle = 'rgba(79,218,247,.11)'; context.lineWidth = 1;
+  for (let index = -12; index <= 12; index += 1) {
+    const y = height * .72 + index * 28; context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
+    const x = width / 2 + index * 72; context.beginPath(); context.moveTo(x, height * .28); context.lineTo(width / 2 + index * 125, height); context.stroke();
+  }
+  if (!components.length) {
+    context.fillStyle = '#9bb0ba'; context.font = '600 34px Arial, sans-serif'; context.textAlign = 'center'; context.fillText('No physical bodies in this world yet', width / 2, height / 2); context.textAlign = 'left';
+    return;
+  }
+  const lows = [0, 1, 2].map((axis) => Math.min(...components.map((item) => item.position[axis] - item.dimensions[axis] / 2)));
+  const highs = [0, 1, 2].map((axis) => Math.max(...components.map((item) => item.position[axis] + item.dimensions[axis] / 2)));
+  const span = Math.max(1, highs[0] - lows[0], highs[1] - lows[1], highs[2] - lows[2]);
+  const scale = Math.min(width * .62, height * .58) / span;
+  const center = highs.map((value, index) => (value + lows[index]) / 2);
+  const project = (position: [number, number, number]) => ({
+    x: width / 2 + ((position[0] - center[0]) * .86 + (position[2] - center[2]) * .48) * scale,
+    y: height * .61 - ((position[1] - center[1]) * .9 - (position[2] - center[2]) * .2) * scale,
+  });
+  const ordered = [...components].sort((a, b) => (a.position[2] + a.position[1] * .08) - (b.position[2] + b.position[1] * .08));
+  for (const component of ordered) {
+    const point = project(component.position);
+    const dx = Math.max(5, component.dimensions[0] * scale * .78);
+    const dy = Math.max(4, component.dimensions[1] * scale * .72);
+    const color = /^#[0-9a-f]{6}$/i.test(component.color) ? component.color : '#58cde9';
+    context.save(); context.translate(point.x, point.y); context.rotate(-component.rotation[2]);
+    context.fillStyle = color; context.strokeStyle = component.humanLockedFields.length ? '#f5bc59' : 'rgba(225,244,248,.65)'; context.lineWidth = Math.max(1.5, scale * .008);
+    if (['wheel', 'gear', 'pulley', 'roller', 'shaft'].includes(component.primitive)) {
+      context.beginPath(); context.ellipse(0, 0, Math.max(5, component.dimensions[0] * scale / 2), Math.max(4, component.dimensions[2] * scale / 2), 0, 0, Math.PI * 2); context.fill(); context.stroke();
+    } else {
+      context.beginPath(); context.roundRect(-dx / 2, -dy / 2, dx, dy, Math.min(12, dy * .24)); context.fill(); context.stroke();
+    }
+    context.restore();
+  }
+  context.fillStyle = 'rgba(9,19,25,.88)'; context.beginPath(); context.roundRect(width / 2 - 245, height * .83, 490, 52, 16); context.fill();
+  context.fillStyle = '#b9c8ce'; context.font = '600 20px Arial, sans-serif'; context.textAlign = 'center'; context.fillText('CPU engineering projection · WebGL fallback', width / 2, height * .83 + 34); context.textAlign = 'left';
 }
 
 function canvasBlob(canvas: HTMLCanvasElement, mime: string, quality?: number) {

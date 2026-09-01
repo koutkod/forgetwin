@@ -284,7 +284,7 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .metric-grid.generic .metric-pass strong { color:#79dfaf; }
 .model-note { display:flex; align-items:flex-start; gap:7px; margin:14px 0 0; padding:10px; border:1px solid rgba(255,173,69,.12); border-radius:8px; color:#6f675d; font-size:8px; line-height:1.5; }
 .model-note svg { flex:none; color:#d49a4a; margin-top:1px; }
-.event-row>span.pass,.event-row>span.fail { width:auto; border-radius:999px; padding:3px 6px; text-transform:uppercase; font:700 6px var(--font-geist-mono),monospace; }
+.event-row>span.pass,.event-row>span.fail { width:auto; min-width:32px; height:18px; align-self:start; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:0 6px; line-height:1; text-align:center; text-transform:uppercase; font:700 6px var(--font-geist-mono),monospace; }
 .event-row>span.pass { color:#65e1aa; background:rgba(95,229,169,.07); }
 .event-row>span.fail { color:#ff7c88; background:rgba(255,95,111,.08); }
 @media(max-width:1180px){.landing-hero{min-height:680px}}

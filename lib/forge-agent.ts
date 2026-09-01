@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { SUPPORTED_METRIC_KEYS } from './forge-metrics';
+import { normalizeEngineeringIntent } from './forge-intent';
 
 const conciseText = z.string().trim().min(1).max(500);
 const identifier = z.string().trim().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -457,6 +458,14 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
     requireSignature(count('conveyor') >= 1, 'a recognizable conveyor bed and transport surface');
     requireSignature(relevantDrivenJoints((component, text) => ['conveyor', 'roller', 'belt'].includes(component.primitive) || /conveyor|drive roller|belt/.test(text)).length >= 1, 'a motor coupled to a conveyor belt or drive roller');
   }
+  if (/\b(?:brake|rear|tail) lights?\b/.test(requested)) {
+    const brakeLights = plan.components.filter((component) => component.primitive === 'light' && /brake|rear|tail|brake-light/.test(`${component.role} ${component.semantic_tags.join(' ')}`.toLowerCase()));
+    const safelyMounted = brakeLights.some((light) => plan.connections.some((edge) => edge.connection_type === 'mechanical' && [edge.source_id, edge.target_id].includes(light.id)
+      && [edge.source_id, edge.target_id].filter((id) => id !== light.id).some((id) => {
+        const support = componentById.get(id); return support && support.primitive !== 'wheel' && support.body_type !== 'dynamic';
+      })));
+    requireSignature(brakeLights.length >= 1 && safelyMounted, 'a rear-facing brake light mounted to a stationary frame or body support');
+  }
 }
 
 function validateExplicitRequirements(plan: AgentPlan, requested: string) {
@@ -584,9 +593,9 @@ function validatePromptFidelity(plan: AgentPlan, originalPrompt: string) {
     const headNoun = tokens.at(-1);
     if (headNoun && !designed.includes(headNoun) && !(headNoun.endsWith('s') && designed.includes(headNoun.slice(0, -1)))) throw new Error('The design graph does not preserve the main object named in the user goal.');
   }
-  const primitiveNames: Record<string, string> = { wheel: 'wheel', wheels: 'wheel', gear: 'gear', gears: 'gear', sensor: 'sensor', sensors: 'sensor', motor: 'motor', motors: 'motor', servo: 'servo', servos: 'servo', piston: 'piston', pistons: 'piston', spring: 'spring', springs: 'spring', bin: 'container', bins: 'container', container: 'container', containers: 'container', ramp: 'ramp', ramps: 'ramp', pulley: 'pulley', pulleys: 'pulley', headlight: 'light', headlights: 'light' };
+  const primitiveNames: Record<string, string> = { wheel: 'wheel', wheels: 'wheel', wing: 'aerofoil', wings: 'aerofoil', gear: 'gear', gears: 'gear', sensor: 'sensor', sensors: 'sensor', motor: 'motor', motors: 'motor', servo: 'servo', servos: 'servo', piston: 'piston', pistons: 'piston', spring: 'spring', springs: 'spring', bin: 'container', bins: 'container', container: 'container', containers: 'container', ramp: 'ramp', ramps: 'ramp', pulley: 'pulley', pulleys: 'pulley', headlight: 'light', headlights: 'light', 'brake light': 'light', 'brake lights': 'light' };
   const countWords: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
-  const quantityPattern = /\b(one|two|three|four|five|six|seven|eight|nine|ten|twelve|\d+)\s+(wheels?|gears?|sensors?|motors?|servos?|pistons?|springs?|bins?|containers?|ramps?|pulleys?|headlights?)\b/g;
+  const quantityPattern = /\b(one|two|three|four|five|six|seven|eight|nine|ten|twelve|\d+)\s+(wheels?|wings?|gears?|sensors?|motors?|servos?|pistons?|springs?|bins?|containers?|ramps?|pulleys?|headlights?|brake lights?)\b/g;
   for (const match of requested.matchAll(quantityPattern)) {
     const expected = countWords[match[1]] ?? Number(match[1]); const primitive = primitiveNames[match[2]];
     if (Number.isFinite(expected) && plan.components.filter((item) => item.primitive === primitive).length < expected) throw new Error(`The design graph drops the explicit request for ${expected} ${match[2]}.`);
@@ -638,7 +647,7 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
     || plan.motors.some((motor) => motionJointIds.has(motor.joint_id));
   const hasManualDrive = plan.joints.some((joint) => joint.joint_type !== 'fixed' && [joint.component_a, joint.component_b].some((id) => /\b(?:pedal|crank|handwheel|hand wheel|manual handle|treadle)\b/.test(`${bodyById.get(id)?.role ?? ''} ${bodyById.get(id)?.semantic_tags.join(' ') ?? ''}`.toLowerCase())));
   if (active && !hasDrivenPath && !hasManualDrive) throw new Error('An active machine needs a motor, actuator, or explicit manual drive connected to the mechanism it drives.');
-  if (originalPrompt) validatePromptFidelity(plan, originalPrompt);
+  if (originalPrompt) validatePromptFidelity(plan, normalizeEngineeringIntent(originalPrompt).normalizedRequest);
   return plan;
 }
 

@@ -5,6 +5,7 @@ import type {
   AssemblyBlueprint, CompiledWorldPlan, ComponentBlueprint, ConnectionBlueprint,
   JointBlueprint, PrimitiveKind, Vec3,
 } from './forge-types';
+import { finalizeCompiledWorldPlan } from './forge-design-validator';
 
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
 
@@ -48,6 +49,11 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   if (tags.has('steering-wheel') || /steering wheel/.test(role)) parameters.road_vehicle_steering_wheel = true;
   if (tags.has('steering-rack') || /steering rack/.test(role)) parameters.road_vehicle_steering_rack = true;
   if (tags.has('headlight') || /headlight|head lamp|work light/.test(role)) { parameters.headlight = true; parameters.beam_range = 5; }
+  if (tags.has('brake-light') || /brake light|tail light|taillight|rear lamp/.test(role)) {
+    parameters.brake_light = true; parameters.vehicle_light = true; parameters.light_direction = 'rear'; parameters.facing_x = -1; parameters.beam_range = 2.2;
+  } else if (parameters.headlight === true) {
+    parameters.vehicle_light = true; parameters.light_direction = 'front'; parameters.facing_x = 1;
+  }
   if (tags.has('solar-panel') || /solar (?:array|panel)|tracked panel/.test(role)) parameters.panel = true;
   if (tags.has('solar-moving')) parameters.solar_moving = true;
   if (tags.has('solar-source') || /moving sun|light source/.test(role)) parameters.solar_source = true;
@@ -141,7 +147,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
   const sensorById = new Map(plan.sensors.map((item) => [item.id, item]));
   const editable = components.find((item) => item.id === plan.editable_component_id)!;
   const assumptions = [...plan.assumptions, 'AI-composed concept model; all bodies and references passed ForgeTwin semantic validation.'];
-  return {
+  const compiled: CompiledWorldPlan = {
     brief: requestedPrompt,
     goal: {
       machineName: plan.machine_name,
@@ -172,6 +178,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
     }),
     assumptions,
   };
+  return finalizeCompiledWorldPlan(compiled, requestedPrompt).plan;
 }
 
 function tagsFromParameters(component: ComponentBlueprint) {
@@ -193,6 +200,7 @@ function tagsFromParameters(component: ComponentBlueprint) {
   if (parameters.road_vehicle_wheel === true) tags.add('road-wheel');
   if (parameters.bicycle_wheel === true) tags.add('bicycle-wheel');
   if (parameters.headlight === true) tags.add('headlight');
+  if (parameters.brake_light === true) tags.add('brake-light');
   if (parameters.panel === true) tags.add('solar-panel');
   if (parameters.solar_moving === true) tags.add('solar-moving');
   if (parameters.solar_source === true) tags.add('solar-source');

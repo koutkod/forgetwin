@@ -521,9 +521,9 @@ describe('ForgeTwin model-agent boundary', () => {
       expect(url).toBe('https://api.openai.com/v1/responses');
       expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${hostedKey}`);
       expect(String(init.body)).not.toContain(hostedKey);
-      expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, max_output_tokens: 1600, store: false, text: { format: { name: 'forgetwin_engineering_intent' } } });
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-sol', reasoning: { effort: 'low' }, max_output_tokens: 1600, store: false, text: { format: { name: 'forgetwin_engineering_intent' } } });
       const payload = await response.json() as { model: string };
-      expect(payload.model).toBe('gpt-5.6-luna');
+      expect(payload.model).toBe('gpt-5.6-sol');
       expect(JSON.stringify(payload)).not.toContain(hostedKey);
     } finally {
       if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;

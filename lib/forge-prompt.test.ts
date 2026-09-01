@@ -123,7 +123,7 @@ describe('ForgeTwin world-first brief compiler', () => {
       rover: (plan) => plan.components.some((item) => item.parameters?.rover_chassis) && plan.components.filter((item) => item.parameters?.rover_wheel).length === 4,
       'go-kart': (plan) => plan.components.filter((item) => item.parameters?.road_vehicle_wheel).length === 4 && plan.components.filter((item) => item.primitive === 'body-shell').length === 3 && plan.components.some((item) => item.primitive === 'steering'),
       motorcycle: (plan) => plan.components.filter((item) => item.parameters?.motorcycle_wheel).length === 2 && plan.components.some((item) => item.primitive === 'seat') && plan.components.some((item) => item.parameters?.motorcycle_motor),
-      airplane: (plan) => plan.components.some((item) => item.primitive === 'fuselage') && plan.components.filter((item) => item.primitive === 'aerofoil').length === 3 && plan.components.filter((item) => item.primitive === 'landing-gear').length === 3,
+      airplane: (plan) => plan.components.some((item) => item.primitive === 'fuselage') && plan.components.some((item) => item.role === 'left main wing') && plan.components.some((item) => item.role === 'right main wing') && plan.components.filter((item) => item.primitive === 'aerofoil').length >= 5 && plan.components.filter((item) => item.primitive === 'landing-gear').length === 3,
       helicopter: (plan) => plan.components.some((item) => item.primitive === 'rotor') && plan.components.some((item) => item.primitive === 'propeller') && plan.components.filter((item) => item.parameters?.helicopter_skid).length === 2,
       'service-robot': (plan) => plan.components.filter((item) => item.primitive === 'linkage').length >= 8 && plan.components.filter((item) => item.primitive === 'gripper').length === 2 && plan.components.filter((item) => item.primitive === 'servo').length === 4,
       arm: (plan) => plan.components.some((item) => item.primitive === 'gripper') && plan.components.filter((item) => item.role.startsWith('link servo')).length === 3,
@@ -368,6 +368,13 @@ describe('ForgeTwin world-first brief compiler', () => {
     const light = illuminated.components.find((item) => item.primitive === 'light');
     expect(light).toMatchObject({ role: 'front LED bicycle headlight', mass: .24 });
     expect(illuminated.connections.some((item) => item.targetId === light?.id && item.channel === 'lighting_bus')).toBe(true);
+
+    const complete = compileDesignBrief('Build an electric bicycle with two wheels, welded frame, fork, handlebar, saddle, pedals, chain drive, battery, motor, headlight, and wheel-speed sensor.');
+    expect(complete.assemblies.map((item) => item.name)).toEqual(['engineered world', 'bicycle assembly']);
+    expect(complete.components.some((item) => item.role.startsWith('requested '))).toBe(false);
+    const bodyBudget = complete.goal.constraints.find((item) => item.metric === 'component_count');
+    expect(bodyBudget?.target).toBe(40);
+    expect(complete.components.length).toBeLessThanOrEqual(bodyBudget!.target);
   });
 
   it('builds a recognizable electric go-kart instead of a rover or arbitrary payload cart', () => {

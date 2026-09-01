@@ -13,7 +13,7 @@ import {
   type AgentEditAction, type AgentPlan, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
-import { conveyorSpeedEdits, pendingClarification, resolvedEditPrompt, type ChatMessage } from '../lib/forge-chat';
+import { contextualMechanicalEdits, conveyorSpeedEdits, pendingClarification, resolvedEditPrompt, type ChatMessage } from '../lib/forge-chat';
 import { compileAgentPlan, localAnchorAt, semanticParametersForEdit } from '../lib/forge-model-plan';
 import { translateInForgeCoordinates } from '../lib/forge-motion';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
@@ -223,6 +223,8 @@ export function ForgeTwinApp() {
         editable_component_id: plan.goal.editableComponentId, editable_label: plan.goal.editableLabel,
         world: { gravity: plan.world.gravity, duration: plan.world.duration, bounds: plan.world.bounds, environment: plan.world.environment },
       }, 35, actor, controller.signal);
+      await call('inspect_workspace', { since_revision: 0 }, 20, actor, controller.signal);
+      addTrace('observation', 'Goal revision confirmed', `Workspace revision ${getSnapshot().revision} accepted the normalized specification and coordinate contract.`);
       addTrace('action', 'Building the shared world', 'Creating the planned bodies, connections, joints, sensors, actuators, and control channels through guarded tools.');
       for (const item of plan.assemblies) await call('create_assembly', { assembly_id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId }, 20, actor, controller.signal);
       setGenerationVisual((current) => current ? { ...current, phase: 'assembling', progress: 28, headline: 'Materializing the machine', detail: 'Placing dimensioned physical bodies into the shared 3D world.' } : current);
@@ -238,6 +240,8 @@ export function ForgeTwinApp() {
           detail: `${item.role} placed · ${index + 1} of ${plan.components.length} physical bodies`,
         } : current);
       }
+      await call('inspect_workspace', { since_revision: Math.max(0, getSnapshot().revision - plan.components.length) }, 20, actor, controller.signal);
+      addTrace('observation', 'Body placement verified', `${getSnapshot().components.length} current bodies are visible in the shared world at revision ${getSnapshot().revision}.`);
       const connected = new Set<string>();
       let builtLinks = 0;
       const totalLinks = plan.connections.length + plan.joints.length + plan.motors.length + plan.sensors.length + plan.actuators.length + plan.controls.length;
@@ -263,6 +267,8 @@ export function ForgeTwinApp() {
       for (const item of plan.sensors) { await call('add_sensor', { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range }, 20, actor, controller.signal); advanceLinkVisual(`${item.type} sensing channel online · ${builtLinks + 1} of ${totalLinks} graph links`); }
       for (const item of plan.actuators) { await call('add_actuator', { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel }, 20, actor, controller.signal); advanceLinkVisual(`${item.type} actuator online · ${builtLinks + 1} of ${totalLinks} graph links`); }
       for (const item of plan.controls) { await call('set_control_logic', { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX }, 20, actor, controller.signal); advanceLinkVisual(`${item.mode} control loop compiled · ${builtLinks + 1} of ${totalLinks} graph links`); }
+      await call('inspect_workspace', { since_revision: Math.max(0, getSnapshot().revision - totalLinks) }, 20, actor, controller.signal);
+      addTrace('observation', 'Executable graph verified', `${getSnapshot().joints.length} joints and ${getSnapshot().motors.length + getSnapshot().actuators.length} drives reference the current workspace revision.`);
 
       setGenerationVisual((current) => current ? { ...current, phase: 'simulating', progress: 82, headline: 'Physics is taking over', detail: 'Rapier is advancing the assembled world at 60 Hz and measuring every registered constraint.' } : current);
       addTrace('action', 'Running the first physics trial', 'Instantiating the current world in Rapier at 60 Hz and measuring every registered constraint.');
@@ -279,6 +285,7 @@ export function ForgeTwinApp() {
       }
       const finalRun = getSnapshot().runs.at(-1);
       if (finalRun?.status !== 'passed') throw new Error('The bounded optimizer still misses a target. Open telemetry to inspect the remaining physical constraint.');
+      await call('inspect_workspace', { since_revision: Math.max(0, getSnapshot().revision - 1) }, 20, actor, controller.signal);
       addTrace('complete', 'Engineering mission complete', `${plan.goal.machineName} passes ${finalRun.metrics.measures.filter((item) => item.status === 'pass').length}/${finalRun.metrics.measures.length} measured constraints with ${plan.components.length} generated bodies.`);
       setGenerationVisual((current) => current ? { ...current, phase: 'complete', progress: 100, headline: 'Engineered. Simulated. Verified.', detail: `${plan.goal.machineName} passes ${finalRun.metrics.measures.filter((item) => item.status === 'pass').length}/${finalRun.metrics.measures.length} constraints with a ${finalRun.metrics.score}% score.` } : current);
       setToast(`${plan.goal.machineName} engineered from ${plan.components.length} primitives · ${finalRun.metrics.score}% constraints pass`);
@@ -585,8 +592,13 @@ export function ForgeTwinApp() {
       let expectedDesignHash = getSnapshot().designHash;
       let preserveComponentIds: string[] = [];
       const current = getSnapshot();
+      const directMechanical = contextualMechanicalEdits(current, effectivePrompt);
       const directSpeedEdits = conveyorSpeedEdits(current, effectivePrompt);
-      if (directSpeedEdits.length) {
+      if (directMechanical.length) {
+        commands = directMechanical;
+        summary = `Resolved the mechanical edit from the current shared world: ${directMechanical.map((edit) => edit.label).join(' · ')}.`;
+        addTrace('reasoning', 'Resolved contextual mechanical edit directly', summary);
+      } else if (directSpeedEdits.length) {
         commands = directSpeedEdits.map((edit) => ({
           tool: 'set_motor_speed',
           input: { motor_id: edit.motorId, max_rpm: edit.maxRpm, direction: edit.direction },

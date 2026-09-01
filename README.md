@@ -4,7 +4,7 @@ ForgeTwin is a browser-based, agent-native engineering sandbox. A person describ
 
 The runtime is explicit about what is doing the work:
 
-- **Hosted model agent** — when `OPENAI_API_KEY` is configured on the server, latency-optimized GPT-5.6 Luna is available automatically with no judge credentials. It authors a compact engineering intent—object identity, architecture, primitive vocabulary, motion, controls, and measurable requirements—then ForgeTwin deterministically expands and validates the executable body/joint graph. The same model edits the live world from chat and selects the failure-analysis/redesign loop. This hybrid removes slow full-graph serialization and prevents disconnected model parts. The secret stays in the deployment environment and never enters client code or responses. `OPENAI_HOSTED_MODEL` can override this production default.
+- **Hosted model agent** — when `OPENAI_API_KEY` is configured on the server, GPT-5.6 Sol is available automatically with no judge credentials. It authors a compact engineering intent—object identity, architecture, primitive vocabulary, motion, controls, and measurable requirements—then ForgeTwin deterministically expands and validates the executable body/joint graph. The same model edits the live world from chat and selects the failure-analysis/redesign loop. This hybrid removes slow full-graph serialization and prevents disconnected model parts. The secret stays in the deployment environment and never enters client code or responses. `OPENAI_HOSTED_MODEL` can override this production default.
 - **Visitor-key override** — a user can optionally connect their own OpenAI API key for the current browser tab. That key takes precedence over the hosted key and uses GPT-5.6 Sol by default (`OPENAI_MODEL` can override it). The key is held only in React memory, sent only to the same-origin agent route, and never stored in browser storage or the project.
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
@@ -41,6 +41,10 @@ Try prompts such as:
 - “Build an automatic rotating hatch with an obstruction sensor.”
 
 The examples in the UI are editable briefs, not hidden design templates. Prompt dimensions and targets change the generated graph. When a semantic part is unavailable, the planner builds it from beams, plates, shafts, joints, motors, sensors, and other lower-level primitives.
+
+Before any tool executes, ForgeTwin uses a staged engineering pipeline: intent normalization → specification → machine architecture → component decisions → spatial/attachment plan → dependency-ordered tool calls → design validation → bounded repair → simulation readiness. The internal plan records the original and normalized request, corrections, machine scope, functions, constraints, assemblies, component rationale, materials/masses, transforms, connections, parent/child joint axes, drives, sensors, control logic, and support map. The coordinate contract is consistent everywhere: +Y up, vehicles forward along +X, rear along -X, left at -Z, and right at +Z.
+
+The normalizer handles common domain spellings (`bycicle`, `byclicle`, `airplnae`, `go kart`) without changing the user-visible request. Context resolves ambiguous phrases: on a bicycle or road vehicle, “break light” is interpreted as a rear-facing brake light mounted to a stationary frame, rack, seat-post, or body support—never to a tire and never as a generic unrelated part.
 
 Compound briefs are composed, not classified into one machine bucket. For example, a gearbox-driven crane contains separate transmission and suspension assemblies with a power edge from the output shaft to the hoist drive; a rover-mounted arm combines rolling support and serial-linkage assemblies. Explicit requests such as gears, pistons, cameras, pulleys, or counterweights are preserved and integrated into the generated graph.
 
@@ -80,7 +84,7 @@ ForgeTwin exposes small, state-aware engineering operations instead of one opaqu
 | `remove_component`, `remove_joint` | Change topology safely with referential cleanup. |
 | `compare_designs`, `restore_revision` | Compare and restore versioned worlds. |
 
-Every mutating call is Zod-validated and guarded by the current workspace nonce and revision. A stale agent cannot overwrite newer human work. Resetting the sandbox rotates the nonce, so an old agent context cannot mutate the new world. WebMCP registration waits for local state hydration so persisted state cannot overwrite an early external-agent action.
+Every mutating call is Zod-validated and guarded by the current workspace nonce and revision. ForgeTwin safely repairs representation-only mistakes such as empty optional fields, then logs the repair; broken references, unsafe topology, invalid geometry, or stale state still fail. Generation inspects the workspace after the goal, body-placement, topology/device, and simulation stages so every call uses current IDs and revisions. A stale agent cannot overwrite newer human work. Resetting the sandbox rotates the nonce, so an old agent context cannot mutate the new world. WebMCP registration waits for local state hydration, keeps watching for a refreshed host, and re-registers against a newly attached context.
 
 ## Physics and measurement
 
@@ -106,7 +110,7 @@ The renderer uses the same primitive graph to produce industrial frames, rounded
 
 The workspace **Export** center turns the current revision into useful downstream artifacts:
 
-- **PNG and JPG** — a polished 1800 × 1200 (3:2) capture of the live 3D camera with the machine name, revision, physics state, body/joint count, mass, and constraint score.
+- **PNG and JPG** — a polished 1800 × 1200 (3:2) capture of the live 3D camera with the machine name, revision, physics state, body/joint count, mass, and constraint score. If WebGL readback is unavailable or blank, a CPU projection of the current physical graph guarantees a useful nonblank export.
 - **PDF engineering report** — a branded multi-page summary containing the live render, design evidence, goal, status, and a paginated bill of materials with dimensions, material, mass, and rigid-body mode.
 - **STL CAD exchange geometry** — one compact binary triangulated assembly mesh with component transforms applied and SI meters converted to CAD-standard millimeters. It imports into ShareCAD, SolidWorks, Creo, Fusion 360, FreeCAD, and other mainstream CAD tools.
 - **ForgeTwin JSON** — the complete machine goal, world, assemblies, bodies, transforms, materials, joints, connections, sensors, actuators, controls, and latest physics evidence.
@@ -137,6 +141,8 @@ Key modules:
 - `lib/forge-types.ts` — generic world, physics, telemetry, tool, and revision types.
 - `lib/forge-data.ts` — material library, primitive catalog, world defaults, and editable prompt examples.
 - `lib/forge-prompt.ts` — free-form goal parsing and compositional world synthesis.
+- `lib/forge-intent.ts` — typo-aware engineering normalization, scope classification, coordinate convention, and internal structured design plan.
+- `lib/forge-design-validator.ts` — completeness, references, supports, orientation, proportions, overlap, bounds, and simulation-readiness validation plus bounded repairs.
 - `lib/forge-engine.ts` — guarded state transitions, ownership, hashing, optimization, compare, and restore.
 - `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
 - `lib/forge-agent.ts` — compact intent and strict graph/redesign/chat-edit schemas, deterministic topology repair, semantic validation, client boundary, status, and temporary-key transport.
@@ -181,6 +187,6 @@ npm test
 npm run build
 ```
 
-The test suite covers strict model-agent boundaries and schema compatibility, compact-intent expansion, local topology repair without a second model call, authoritative user requirements, timeout fallback, prompt-identity and count preservation, false-positive prompt families, atomic edit rollback, device/control retuning, explicit no-key fallback, distinct generated worlds, guarded shared state, exact human Undo, human locks, Rapier execution, failure-to-redesign loops, and automated accessibility checks.
+The test suite covers strict model-agent boundaries and schema compatibility, compact-intent expansion, local topology repair without a second model call, authoritative user requirements, timeout fallback, prompt-identity and count preservation, typo normalization, rear-light mounting/orientation, complete aircraft and go-kart graphs, multi-action chat edits, schema-safe retries, false-positive prompt families, atomic edit rollback, device/control retuning, explicit no-key fallback, distinct generated worlds, guarded shared state, exact human Undo, human locks, Rapier execution, failure-to-redesign loops, and automated accessibility checks.
 
 > The AI didn’t generate a picture of a machine. It engineered one, watched it fail, learned from the physics, and fixed it.

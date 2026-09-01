@@ -145,6 +145,28 @@ export interface DesignGoal {
   editableLabel: string;
 }
 
+export interface EngineeringPlan {
+  userRequest: string;
+  normalizedRequest: string;
+  corrections: Array<{ from: string; to: string; reason: string }>;
+  machineType: string;
+  scope: string;
+  functions: string[];
+  constraints: string[];
+  coordinateConvention: { up: '+Y'; forward: '+X'; rear: '-X'; left: '-Z'; right: '+Z'; description: string };
+  assemblies: Array<{ id: string; purpose: string }>;
+  components: Array<{ id: string; primitive: PrimitiveKind; role: string; dimensions: Vec3; material: string; mass: number | null; rationale: string }>;
+  connections: ConnectionBlueprint[];
+  joints: Array<{ id: string; type: JointType; parent: string; child: string; axis: Vec3 }>;
+  actuators: ActuatorBlueprint[];
+  motors: MotorBlueprint[];
+  sensors: SensorBlueprint[];
+  controlLogic: Array<{ id: string; mode: ControlMode; expression: string }>;
+  supportMap: Array<{ componentId: string; supportedBy: string[] }>;
+  validation: { status: 'pending' | 'ready'; issueCount: number; repairs: string[] };
+  simulationReadiness: { grounded: boolean; connected: boolean; driven: boolean };
+}
+
 export interface CompiledWorldPlan {
   brief: string;
   goal: DesignGoal;
@@ -158,6 +180,7 @@ export interface CompiledWorldPlan {
   actuators: ActuatorBlueprint[];
   controls: ControlBlueprint[];
   assumptions: string[];
+  engineeringPlan?: EngineeringPlan;
 }
 
 export interface Assembly extends AssemblyBlueprint { componentIds: string[] }

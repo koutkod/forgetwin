@@ -55,6 +55,40 @@ export const WEBMCP_CHECKING = -1;
 const readTools = new Set<ForgeToolName>(['inspect_workspace', 'inspect_primitive_catalog', 'inspect_telemetry', 'inspect_failure', 'measure_constraint', 'compare_designs']);
 const guardedTools = new Set<ForgeToolName>([...Object.keys(schemas).filter((name) => !readTools.has(name as ForgeToolName)) as ForgeToolName[]]);
 
+function compactToolValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(compactToolValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .map(([key, child]) => [key, compactToolValue(child)]));
+}
+
+/** Repair only representation-level mistakes that preserve engineering intent.
+ * Missing references, wrong topology, stale revisions, and invalid dimensions
+ * still fail and force the agent to inspect the world before retrying. */
+export function prepareForgeToolArguments(name: ForgeToolName, rawInput: Record<string, unknown>) {
+  const direct = schemas[name].safeParse(rawInput);
+  if (direct.success) return { input: direct.data as Record<string, unknown>, repaired: false, detail: '' };
+  const repaired = compactToolValue(rawInput) as Record<string, unknown>;
+  for (const key of ['parent_id', 'joint_id', 'target_id']) if (repaired[key] === '' || repaired[key] === null) delete repaired[key];
+  if (name === 'create_joint') {
+    if (repaired.limits === null) delete repaired.limits;
+    if (repaired.ratio === 0 || repaired.ratio === null) delete repaired.ratio;
+    if (repaired.stiffness === 0 || repaired.stiffness === null) delete repaired.stiffness;
+    if (repaired.damping === null) delete repaired.damping;
+  }
+  if (name === 'create_component' && (repaired.mass === 0 || repaired.mass === null)) delete repaired.mass;
+  if (name === 'add_motor' && repaired.direction === undefined) repaired.direction = 1;
+  const parsed = schemas[name].safeParse(repaired);
+  if (!parsed.success) throw direct.error;
+  return { input: parsed.data as Record<string, unknown>, repaired: true, detail: 'Removed empty optional fields and normalized schema-safe defaults before execution.' };
+}
+
+function recordSchemaRepair(state: ForgeState, name: ForgeToolName, actor: Actor, detail: string) {
+  const seq = state.activitySeq + 1;
+  return { ...state, activitySeq: seq, activity: [{ id: `activity-${seq}`, seq, tool: name, detail: `Schema repair · ${detail}`, actor, outcome: 'success' as const, at: new Date().toISOString() }, ...state.activity].slice(0, 140) };
+}
+
 const descriptions: Record<ForgeToolName, string> = {
   inspect_workspace: 'Read the complete shared physical world: assemblies, bodies, dimensions, materials, masses, joints, devices, controls, revisions, and human locks.',
   inspect_primitive_catalog: 'Inspect reusable low-level primitives and material properties. Complete machines are not catalog entries.',
@@ -139,8 +173,9 @@ export function useForge() {
     const current = stateRef.current;
     try {
       const enriched = guardedTools.has(name) && actor !== 'WebMCP' ? { ...rawInput, expected_revision: current.revision, expected_workspace_nonce: current.workspaceNonce } : rawInput;
-      const input = schemas[name].parse(enriched) as Record<string, unknown>;
-      const applied = applyForgeTool(current, name, input, actor); commit(applied.state); return applied.result;
+      const prepared = prepareForgeToolArguments(name, enriched);
+      const applied = applyForgeTool(current, name, prepared.input, actor);
+      commit(prepared.repaired ? recordSchemaRepair(applied.state, name, actor, prepared.detail) : applied.state); return applied.result;
     } catch (error) { return failure(current, error); }
   }, [commit]);
 
@@ -165,9 +200,9 @@ export function useForge() {
         const enriched = guardedTools.has(step.name)
           ? { ...rawInput, expected_revision: next.revision, expected_workspace_nonce: next.workspaceNonce }
           : rawInput;
-        const input = schemas[step.name].parse(enriched) as Record<string, unknown>;
-        const applied = applyForgeTool(next, step.name, input, actor);
-        next = applied.state;
+        const prepared = prepareForgeToolArguments(step.name, enriched);
+        const applied = applyForgeTool(next, step.name, prepared.input, actor);
+        next = prepared.repaired ? recordSchemaRepair(applied.state, step.name, actor, prepared.detail) : applied.state;
         finalResult = applied.result;
       }
       for (const [componentId, original] of preserved) if (preservationFingerprint(next, componentId) !== original) throw new Error(`HUMAN_LOCKED: The edit changed preserved component ${componentId} or its functional graph.`);
@@ -264,6 +299,7 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
     let discoveryTimer: number | undefined;
     let registering = false;
     let attempts = 0;
+    let activeContext: typeof document.modelContext | undefined;
 
     // ChatGPT can attach the WebMCP host after the page has already hydrated.
     // Keep discovery alive instead of permanently deciding that the host is
@@ -275,6 +311,10 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
         discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 250);
         return;
       }
+      if (context === activeContext) {
+        discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 2_000);
+        return;
+      }
       registering = true;
       attempts += 1;
       window.clearTimeout(unavailableTimer);
@@ -282,10 +322,11 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
       const registrations = names.map((name) => context.registerTool({ name, title: name.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), description: descriptions[name], inputSchema: jsonSchemaFor(name), annotations: { readOnlyHint: readTools.has(name) }, execute: async (raw, { signal }) => {
         signal?.throwIfAborted();
         try {
-          const input = schemas[name].parse(raw) as Record<string, unknown>;
+          const prepared = prepareForgeToolArguments(name, raw);
+          const input = prepared.input;
           const before = snapshotRef.current();
           if (guardedTools.has(name) && (input.expected_revision !== before.revision || input.expected_workspace_nonce !== before.workspaceNonce)) throw new Error(`STALE_REVISION: inspect revision ${before.revision} before retrying.`);
-          return name === 'run_simulation' ? await runRef.current('WebMCP', input) : commandRef.current(name, input, 'WebMCP');
+          return name === 'run_simulation' ? await runRef.current('WebMCP', input) : commandRef.current(name, raw, 'WebMCP');
         } catch (error) { return failure(snapshotRef.current(), error); }
       } }, { signal: lifecycle.signal }));
       const results = await Promise.allSettled(registrations);
@@ -296,7 +337,10 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
       // Some hosts expose modelContext just before they are ready to accept
       // registrations. A complete rejection is safe to retry because no tool
       // from that attempt was installed.
-      if (registered === 0 && attempts < 5) discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 500);
+      if (registered > 0) {
+        activeContext = context;
+        discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 2_000);
+      } else if (attempts < 5) discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 500);
     };
 
     const unavailableTimer = window.setTimeout(() => {

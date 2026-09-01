@@ -4,16 +4,13 @@ import type {
   ComponentBlueprint, ConnectionBlueprint, ControlBlueprint, GoalConstraint,
   JointBlueprint, JointType, MotorBlueprint, PrimitiveKind, SensorBlueprint, Vec3,
 } from './forge-types';
+import { finalizeCompiledWorldPlan } from './forge-design-validator';
+import { normalizeEngineeringIntent } from './forge-intent';
 
 export const DEFAULT_DESIGN_PROMPT = engineeringExamples[1].prompt;
 export const CHALLENGE_EXAMPLES = engineeringExamples;
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
-const canonicalizeMechanicalTerms = (value: string) => value
-  .replace(/\b(?:dirt bike|motor cycle|motor-bike|motocycle)\b/gi, 'motorcycle')
-  .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle')
-  .replace(/\b(?:go\s*cart|go-cart|gokart)\b/gi, 'go-kart')
-  .replace(/\b(?:aeroplane|air plane)\b/gi, 'airplane');
 const isBicycleBrakeGoal = (text: string) => /\b(?:bicycle|bike)\s+(?:disc\s+)?(?:brake|caliper)\b|\b(?:disc\s+)?(?:brake|caliper)\s+(?:assembly\s+)?(?:for|of)\s+(?:a\s+)?(?:bicycle|bike)\b/.test(text);
 const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text) && !isBicycleBrakeGoal(text);
 const isRoadVehicleGoal = (text: string) => !/\bcar\s+(?:jack|lift|hoist)\b/.test(text) && /\b(?:go-kart|kart|buggy|automobile|car|atv|all-terrain vehicle)\b/.test(text);
@@ -303,7 +300,7 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     add('traction_margin', 'Traction margin', 'min', 1.1, 'x');
     if (bicycle) {
       add('assembly_integrity', 'Connected bicycle assembly', 'min', 95, '%');
-      add('component_count', 'Physical bodies', 'max', 32, '');
+      add('component_count', 'Physical bodies', 'max', values.maxComponents ?? 40, '');
     } else if (roadVehicle) {
       add('assembly_integrity', 'Connected road-vehicle assembly', 'min', 95, '%');
       add('component_count', 'Physical bodies', 'max', 40, '');
@@ -834,11 +831,20 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   builder.connect(speedPickup, floor, 'mechanical', 'sensor_bracket');
   builder.control('electric road-vehicle drive', 'pid', [speed], [], 'blend accelerator demand across both rear motors while limiting wheel slip and overspeed', offRoad ? 25 : 35);
 
-  if (/headlights?|lamp|light\b|night/.test(text)) {
+  if (/headlights?|head lamps?|front lights?|night/.test(text)) {
     for (const side of [-1, 1]) {
-      const light = builder.component('light', `${side < 0 ? 'left' : 'right'} LED headlight`, assembly, [length / 2 + .05, .72, side * railZ * .62], [.27, .18, .18], 'aluminum', 'fixed', { headlight: true, beam_range: 4.2 }, .25);
+      const light = builder.component('light', `${side < 0 ? 'left' : 'right'} LED headlight`, assembly, [length / 2 + .05, .72, side * railZ * .62], [.27, .18, .18], 'aluminum', 'fixed', { headlight: true, vehicle_light: true, light_direction: 'front', facing_x: 1, beam_range: 4.2 }, .25);
       builder.connect(battery, light, 'power', 'lighting_bus');
       builder.connect(light, frameBodies.at(-1)!, 'mechanical', 'headlight_bracket');
+    }
+  }
+
+  if (/\b(?:brake|rear|tail) lights?\b/.test(text)) {
+    for (const side of [-1, 1]) {
+      const light = builder.component('light', `${side < 0 ? 'left' : 'right'} rear brake light`, assembly, [-length / 2 - .02, .7, side * railZ * .62], [.22, .16, .16], 'polymer', 'fixed', { brake_light: true, vehicle_light: true, light_direction: 'rear', facing_x: -1, beam_range: 2.1 }, .18);
+      builder.components.find((item) => item.id === light)!.color = '#ff313d';
+      builder.connect(battery, light, 'power', 'brake_light_bus');
+      builder.connect(light, frameBodies[0], 'mechanical', 'rear_light_bracket');
     }
   }
 
@@ -901,15 +907,29 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
 }
 
 function addFixedWingAircraft(context: ModuleContext): ModuleResult {
-  const { builder, values, rootAssemblyId } = context;
+  const { builder, text, values, rootAssemblyId } = context;
   const assembly = builder.assembly('fixed-wing aircraft assembly', 'Recognizable light aircraft assembled from fuselage, wings, tail surfaces, propeller, landing gear, power, flight controls, and sensors', rootAssemblyId);
   const fuselage = builder.component('fuselage', 'streamlined aircraft fuselage', assembly, [0, 1.3, 0], [4.2, .86, .82], 'aluminum', 'fixed', { aircraft_fuselage: true }, 86);
   const canopy = builder.component('body-shell', 'transparent cockpit canopy', assembly, [.42, 1.72, 0], [1.05, .5, .68], 'composite', 'fixed', { cockpit_canopy: true, aircraft_cockpit: true }, 8);
-  const wing = builder.component('aerofoil', 'main lifting wing', assembly, [-.05, 1.32, 0], [1.35, .13, 5.1], 'composite', 'fixed', { aircraft_wing: true, aerofoil_role: 'main' }, 28);
+  const leftWing = builder.component('aerofoil', 'left main wing', assembly, [-.05, 1.32, -1.28], [1.35, .13, 2.55], 'composite', 'fixed', { aircraft_wing: true, aerofoil_role: 'main', aircraft_side: 'left' }, 14);
+  const rightWing = builder.component('aerofoil', 'right main wing', assembly, [-.05, 1.32, 1.28], [1.35, .13, 2.55], 'composite', 'fixed', { aircraft_wing: true, aerofoil_role: 'main', aircraft_side: 'right' }, 14);
   const tailplane = builder.component('aerofoil', 'horizontal tail stabilizer', assembly, [-1.72, 1.48, 0], [.82, .09, 1.85], 'composite', 'fixed', { aircraft_wing: true, aerofoil_role: 'tail' }, 5.5);
   const fin = builder.component('aerofoil', 'vertical tail fin and rudder', assembly, [-1.75, 1.88, 0], [.78, .08, .88], 'composite', 'fixed', { aircraft_fin: true }, 4.2);
   builder.rotate(fin, [Math.PI / 2, 0, 0]);
-  for (const id of [canopy, wing, tailplane, fin]) builder.connect(id, fuselage, 'mechanical', 'airframe_structure');
+  for (const id of [canopy, leftWing, rightWing, tailplane, fin]) builder.connect(id, fuselage, 'mechanical', 'airframe_structure');
+  for (const [side, wing] of [['left', leftWing], ['right', rightWing]] as const) {
+    const z = side === 'left' ? -1.58 : 1.58;
+    const aileron = builder.component('aerofoil', `${side} aileron control surface`, assembly, [-.56, 1.31, z], [.34, .075, 1.55], 'composite', 'dynamic', { aircraft_control_surface: true, control_axis: 'roll', aircraft_side: side }, 2.1);
+    const hingeJoint = builder.joint('revolute', wing, aileron, [0, 0, 1], { limits: [-.35, .35] });
+    const servo = builder.component('servo', `${side} aileron servo`, assembly, [-.25, 1.24, z], [.2, .12, .18], 'aluminum', 'fixed', { aircraft_servo: true, control_axis: 'roll' }, .55);
+    builder.connect(servo, wing, 'mechanical', 'aileron_servo_mount');
+    builder.actuator(servo, hingeJoint, 'servo', 180, 1.4, .7);
+  }
+  const elevator = builder.component('aerofoil', 'elevator pitch control surface', assembly, [-1.93, 1.48, 0], [.3, .07, 1.55], 'composite', 'dynamic', { aircraft_control_surface: true, control_axis: 'pitch' }, 1.8);
+  const elevatorJoint = builder.joint('revolute', tailplane, elevator, [0, 0, 1], { limits: [-.3, .3] });
+  const elevatorServo = builder.component('servo', 'elevator servo', assembly, [-1.63, 1.4, 0], [.2, .12, .18], 'aluminum', 'fixed', { aircraft_servo: true, control_axis: 'pitch' }, .5);
+  builder.connect(elevatorServo, tailplane, 'mechanical', 'elevator_servo_mount');
+  builder.actuator(elevatorServo, elevatorJoint, 'servo', 180, 1.2, .6);
   const motor = builder.component('motor', 'nose-mounted propulsion motor', assembly, [1.95, 1.3, 0], [.42, .52, .52], 'aluminum', 'fixed', { aircraft_motor: true }, 18);
   const propeller = builder.component('propeller', 'three-blade aircraft propeller', assembly, [2.28, 1.3, 0], [1.52, .16, 1.52], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'forward', operation_spin: true }, 3.6);
   builder.rotate(propeller, [0, Math.PI / 2, 0]);
@@ -933,8 +953,21 @@ function addFixedWingAircraft(context: ModuleContext): ModuleResult {
   const camera = builder.component('camera', 'forward navigation camera', assembly, [1.35, 1.48, 0], [.18, .14, .16], 'polymer', 'fixed', { aircraft_camera: true }, .18);
   const imu = builder.sensor(camera, 'imu', 'aircraft_attitude', fuselage, 12);
   builder.connect(battery, controller, 'power', 'flight_power_bus'); builder.connect(controller, motor, 'signal', 'propulsion_command');
+  if (/\b(?:navigation|nav|position) lights?\b/.test(text)) {
+    const lights = [
+      { role: 'left red wingtip navigation light', support: leftWing, position: [-.05, 1.36, -2.53] as Vec3, color: '#ff3344', side: 'left' },
+      { role: 'right green wingtip navigation light', support: rightWing, position: [-.05, 1.36, 2.53] as Vec3, color: '#32e875', side: 'right' },
+      { role: 'white tail navigation light', support: tailplane, position: [-2.12, 1.52, 0] as Vec3, color: '#f3f8ff', side: 'tail' },
+    ];
+    for (const item of lights) {
+      const light = builder.component('light', item.role, assembly, item.position, [.14, .12, .12], 'polymer', 'fixed', { aircraft_navigation_light: true, marker_light: true, navigation_side: item.side, beam_range: 1.8 }, .08);
+      builder.components.find((component) => component.id === light)!.color = item.color;
+      builder.connect(light, item.support, 'mechanical', 'navigation_light_mount');
+      builder.connect(battery, light, 'power', 'navigation_light_bus');
+    }
+  }
   builder.control('aircraft attitude and propulsion', 'pid', [imu], [], 'stabilize pitch and roll, animate the propeller, and preserve pilot control-surface commands', 0);
-  return { id: 'fixed-wing-aircraft', mountId: fuselage, editableId: wing, handles: ['mobile', 'rotate', 'stabilize', 'measure'], outputId: propeller, driveId: drive };
+  return { id: 'fixed-wing-aircraft', mountId: fuselage, editableId: leftWing, handles: ['mobile', 'rotate', 'stabilize', 'measure'], outputId: propeller, driveId: drive };
 }
 
 function addHelicopter(context: ModuleContext): ModuleResult {
@@ -1112,10 +1145,17 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
     builder.connect(panel, battery, 'power', 'solar_charge_bus');
   }
 
-  if (/\b(headlights?|lamps?|bike lights?)\b/.test(text)) {
-    const headlight = builder.component('light', 'front LED bicycle headlight', assembly, [.98, 1.51, 0], [.3, .22, .22], 'aluminum', 'fixed', { headlight: true, beam_range: 5 }, .24);
+  if (/\b(headlights?|head lamps?|front lights?|bike lights?)\b/.test(text)) {
+    const headlight = builder.component('light', 'front LED bicycle headlight', assembly, [.98, 1.51, 0], [.3, .22, .22], 'aluminum', 'fixed', { headlight: true, vehicle_light: true, light_direction: 'front', facing_x: 1, beam_range: 5 }, .24);
     builder.connect(headlight, stem, 'mechanical', 'headlight_bracket');
     builder.connect(battery, headlight, 'power', 'lighting_bus');
+  }
+
+  if (/\b(?:brake|rear|tail) lights?\b/.test(text)) {
+    const brakeLight = builder.component('light', 'rear LED bicycle brake light', assembly, [-.74, 1.7, 0], [.22, .15, .16], 'polymer', 'fixed', { brake_light: true, vehicle_light: true, light_direction: 'rear', facing_x: -1, beam_range: 2.1 }, .16);
+    builder.components.find((item) => item.id === brakeLight)!.color = '#ff313d';
+    builder.connect(brakeLight, seatPost, 'mechanical', 'seat_post_light_bracket');
+    builder.connect(battery, brakeLight, 'power', 'brake_light_bus');
   }
 
   return { id: 'single-track-vehicle', mountId: frameBodies[0], editableId: speedSensorBody, handles: ['structure', 'mobile', 'measure', 'rotate'], driveId: driveMotor, outputId: rearWheel };
@@ -2585,7 +2625,8 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   // The original brief remains visible and auditable. A small synonym layer is
   // used only for topology selection so spelling mistakes cannot silently turn
   // the requested object into a different machine family.
-  const text = canonicalizeMechanicalTerms(brief).toLowerCase();
+  const intent = normalizeEngineeringIntent(brief);
+  const text = intent.normalizedRequest.toLowerCase();
   const capabilities = inferCapabilities(text);
   const values = parseValues(text);
   const constraints = constraintsFor(text, capabilities, values);
@@ -2615,7 +2656,17 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   if (capabilities.includes('rotate') && !handled.has('rotate')) {
     modules.push(builder.at([modules.length ? Math.max(4.8, spacing) * modules.length / 2 : 0, 0, 0], () => addGenericMotion({ builder, text, capabilities, values, rootAssemblyId })));
   }
-  const missing = [...requested.entries()].map(([kind, count]) => [kind, Math.max(0, count - builder.components.filter((item) => item.primitive === kind).length)] as [PrimitiveKind, number]).filter(([, count]) => count > 0);
+  // Bicycle prompts naturally name semantic assemblies such as the welded
+  // frame, saddle, steering, pedals, and battery. The bicycle module already
+  // constructs each of those from lower-level bodies, sometimes with a more
+  // appropriate primitive (for example, beams for the frame and a plate for
+  // the saddle). Do not append a second set of generic standalone objects.
+  const semanticallySatisfied = isBicycleGoal(text)
+    ? new Set<PrimitiveKind>(['frame', 'seat', 'steering', 'pedal', 'battery'])
+    : new Set<PrimitiveKind>();
+  const missing = [...requested.entries()]
+    .map(([kind, count]) => [kind, Math.max(0, count - builder.components.filter((item) => item.primitive === kind).length)] as [PrimitiveKind, number])
+    .filter(([kind, count]) => count > 0 && !semanticallySatisfied.has(kind));
   if (missing.length) modules.push(addRequestedPrimitiveBodies({ builder, text, capabilities, values, rootAssemblyId }, missing, modules[0].mountId));
   for (let index = 1; index < modules.length; index += 1) builder.connect(modules[0].mountId, modules[index].mountId, 'mechanical', 'module_interface');
   const transmission = modules.find((module) => module.id === 'rotary-transmission');
@@ -2647,7 +2698,7 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
     ? Math.min(30, Math.max(6, values.liftM / Math.max(.01, values.linearSpeedMps), values.supplied.has('durationS') ? values.durationS : 0))
     : Math.min(12, Math.max(6, Math.min(values.durationS, 12)));
 
-  return {
+  const compiled: CompiledWorldPlan = {
     brief,
     goal,
     world: { ...worldDefaults, duration: simulationDuration, bounds: modules.length > 1 ? [22, 10, 14] : [...worldDefaults.bounds] },
@@ -2661,4 +2712,5 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
     controls: builder.controls,
     assumptions,
   };
+  return finalizeCompiledWorldPlan(compiled, brief).plan;
 }
