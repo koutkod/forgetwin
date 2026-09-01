@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GET, POST, PUT } from '../app/api/agent/route';
 import {
-  AGENT_EDIT_JSON_SCHEMA, AGENT_PLAN_JSON_SCHEMA, AGENT_REDESIGN_JSON_SCHEMA,
-  agentEditSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, normalizeRedesignSequence, requestAgentPlan, validateAgentKey,
+  AGENT_EDIT_JSON_SCHEMA, AGENT_INTENT_JSON_SCHEMA, AGENT_PLAN_JSON_SCHEMA, AGENT_REDESIGN_JSON_SCHEMA,
+  agentEditSchema, agentIntentSchema, agentPlanSchema, agentRedesignSchema, getAgentStatus, normalizeRedesignSequence, repairAgentPlanGraph, requestAgentPlan, validateAgentKey,
   validateAgentEditSemantics, validateAgentPlanSemantics, type AgentPlan, type EditContext,
 } from './forge-agent';
 
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 function validPlan(overrides: Partial<AgentPlan> = {}): AgentPlan {
   return {
@@ -164,6 +164,29 @@ function editContextFor(plan: AgentPlan): EditContext {
 }
 
 describe('ForgeTwin model-agent boundary', () => {
+  it('uses a compact bounded intent contract for fast model planning', () => {
+    const intent = agentIntentSchema.parse({
+      normalized_prompt: 'Build a compact bicycle with a steel frame and pedal drive.',
+      design_brief: 'Build a bicycle with a grounded test track, diamond frame, two wheels, steering fork, seat, pedals, chain drive, and brakes.',
+      machine_name: 'Compact bicycle', domain: 'Mobility',
+      reasoning_summary: 'Use a recognizable two-wheel frame with manual steering and pedal-driven rear wheel.',
+      architecture: ['diamond frame', 'two-wheel running gear', 'pedal transmission'], assumptions: [],
+      capabilities: ['structure', 'mobile', 'transmit'],
+      requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 24, unit: '', source: 'inferred' }],
+    });
+    expect(intent.design_brief).toContain('two wheels');
+    expect(AGENT_INTENT_JSON_SCHEMA).toMatchObject({ type: 'object' });
+  });
+
+  it('deterministically grounds a disconnected model body without regenerating the machine', () => {
+    const plan = validPlan();
+    plan.joints = plan.joints.filter((joint) => joint.id !== 'rear-right-joint');
+    expect(() => validateAgentPlanSemantics(plan, plan.normalized_prompt)).toThrow(/rear-right-wheel.*grounded body/i);
+    const repaired = repairAgentPlanGraph(plan);
+    expect(() => validateAgentPlanSemantics(repaired, plan.normalized_prompt)).not.toThrow();
+    expect(repaired.joints).toContainEqual(expect.objectContaining({ component_b: 'rear-right-wheel', joint_type: 'revolute' }));
+  });
+
   it('accepts only supported verification metrics and bounded redesign tools', () => {
     expect(agentPlanSchema.parse(validPlan()).requirements[0].metric).toBe('component_count');
     expect(() => agentPlanSchema.parse(validPlan({ requirements: [{ metric: 'invented_metric' as 'component_count', label: 'Invented', operator: 'max', target: 1, unit: '', source: 'user' }] }))).toThrow();
@@ -498,13 +521,65 @@ describe('ForgeTwin model-agent boundary', () => {
       expect(url).toBe('https://api.openai.com/v1/responses');
       expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${hostedKey}`);
       expect(String(init.body)).not.toContain(hostedKey);
-      expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, store: false });
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-luna', reasoning: { effort: 'low' }, max_output_tokens: 1600, store: false, text: { format: { name: 'forgetwin_engineering_intent' } } });
       const payload = await response.json() as { model: string };
       expect(payload.model).toBe('gpt-5.6-luna');
       expect(JSON.stringify(payload)).not.toContain(hostedKey);
     } finally {
       if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
     }
+  });
+
+  it('expands a compact model intent into the guarded browser graph contract', async () => {
+    const prompt = 'Build a compact two-wheel bicycle with a frame, steering, pedals, chain drive, seat, and brakes.';
+    const intent = {
+      normalized_prompt: prompt,
+      design_brief: 'Build a bicycle with a diamond frame, two wheels, steering fork, handlebar, seat, pedals, chain drive, and brakes.',
+      machine_name: 'Compact two-wheel bicycle', domain: 'Personal mobility',
+      reasoning_summary: 'Use a recognizable bicycle silhouette with manual steering and a pedal-driven rear wheel.',
+      architecture: ['diamond frame', 'two-wheel running gear', 'steering fork', 'pedal transmission'], assumptions: [],
+      capabilities: ['structure', 'mobile', 'transmit'],
+      requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 30, unit: '', source: 'inferred' }],
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output_text: JSON.stringify(intent) }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const response = await POST(new Request('http://localhost/api/agent', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', 'x-forgetwin-openai-key': 'sk-test-intent-expansion-key-123456789' },
+      body: JSON.stringify({ task: 'plan', prompt }),
+    }));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { result: AgentPlan };
+    expect(payload.result.machine_name).toBe('Compact two-wheel bicycle');
+    expect(payload.result.components.filter((item) => item.primitive === 'wheel')).toHaveLength(2);
+    expect(() => validateAgentPlanSemantics(payload.result, prompt)).not.toThrow();
+  });
+
+  it('accepts a disconnected legacy graph after one local topology repair and only one model call', async () => {
+    const output = validPlan();
+    output.joints = output.joints.filter((joint) => joint.id !== 'rear-right-joint');
+    const providerFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output_text: JSON.stringify(output) }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const response = await POST(new Request('http://localhost/api/agent', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', 'x-forgetwin-openai-key': 'sk-test-local-repair-key-123456789' },
+      body: JSON.stringify({ task: 'plan', prompt: output.normalized_prompt }),
+    }));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { result: AgentPlan };
+    expect(payload.result.joints).toContainEqual(expect.objectContaining({ component_b: 'rear-right-wheel' }));
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('cuts off a stalled planner so the browser can use its deterministic engineer', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_, init) => new Promise((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }));
+    const pending = POST(new Request('http://localhost/api/agent', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', 'x-forgetwin-openai-key': 'sk-test-timeout-key-123456789012345' },
+      body: JSON.stringify({ task: 'plan', prompt: 'Build a compact bicycle with two wheels and pedal drive.' }),
+    }));
+    await vi.advanceTimersByTimeAsync(32_001);
+    const response = await pending;
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_TIMEOUT' });
   });
 
   it('forwards a visitor key only as upstream authorization and blocks foreign origins', async () => {

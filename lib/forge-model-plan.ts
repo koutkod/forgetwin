@@ -1,5 +1,5 @@
 import { catalogFor, worldDefaults } from './forge-data';
-import { validateAgentPlanSemantics, type AgentPlan } from './forge-agent';
+import { agentPlanSchema, repairAgentPlanGraph, validateAgentPlanSemantics, type AgentIntent, type AgentPlan } from './forge-agent';
 import { Euler, Quaternion, Vector3 } from 'three';
 import type {
   AssemblyBlueprint, CompiledWorldPlan, ComponentBlueprint, ConnectionBlueprint,
@@ -172,6 +172,81 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
     }),
     assumptions,
   };
+}
+
+function tagsFromParameters(component: ComponentBlueprint) {
+  const tags = new Set<string>();
+  const parameters = component.parameters ?? {};
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value === true && key.startsWith('semantic_')) tags.add(key.slice('semantic_'.length).replaceAll('_', '-'));
+  }
+  const product = parameters.product_form;
+  if (typeof product === 'string') {
+    const productTag: Record<string, string> = {
+      'package-red': 'package-red', 'package-blue': 'package-blue', 'shipping-carton': 'shipping-carton',
+      tomato: parameters.grade === 'reject' ? 'tomato-reject' : 'tomato-ripe',
+      'metal-can': 'metal-can', 'plastic-bottle': 'plastic-bottle', 'reject-object': 'reject-object',
+    };
+    if (productTag[product]) tags.add(productTag[product]);
+  }
+  if (parameters.payload_kg !== undefined) tags.add('payload');
+  if (parameters.road_vehicle_wheel === true) tags.add('road-wheel');
+  if (parameters.bicycle_wheel === true) tags.add('bicycle-wheel');
+  if (parameters.headlight === true) tags.add('headlight');
+  if (parameters.panel === true) tags.add('solar-panel');
+  if (parameters.solar_moving === true) tags.add('solar-moving');
+  if (parameters.solar_source === true) tags.add('solar-source');
+  if (parameters.industrial_conveyor === true) tags.add('conveyor');
+  return [...tags].slice(0, 8);
+}
+
+/** Expand a compact model-authored intent through the deterministic physical
+ * compiler, then convert it back into the same guarded graph contract consumed
+ * by the browser. The model chooses what to build; ForgeTwin guarantees that
+ * all references and grounded kinematic paths are executable. */
+export function agentPlanFromCompiled(originalPrompt: string, intent: AgentIntent, compiled: CompiledWorldPlan, explicitRequirements: CompiledWorldPlan['goal']['constraints'] = []): AgentPlan {
+  const inferredRequirements = compiled.goal.constraints.map((item) => ({ ...item, source: item.source ?? 'inferred' as const }));
+  const requirements: AgentPlan['requirements'] = [];
+  // Numeric requirements that ForgeTwin can parse directly from the original
+  // user text are authoritative. This prevents a model from accidentally
+  // downgrading a stated throughput/load/limit to an inferred requirement.
+  for (const candidate of [...explicitRequirements.filter((item) => item.source === 'user'), ...intent.requirements, ...inferredRequirements]) {
+    const parsed = agentPlanSchema.shape.requirements.element.safeParse(candidate);
+    if (!parsed.success) continue;
+    const requirement = parsed.data;
+    if (!requirements.some((item) => item.metric === requirement.metric)) requirements.push(requirement);
+    if (requirements.length === 8) break;
+  }
+  const raw = {
+    normalized_prompt: intent.normalized_prompt,
+    machine_name: intent.machine_name,
+    domain: intent.domain,
+    reasoning_summary: intent.reasoning_summary,
+    architecture: intent.architecture,
+    assumptions: [...intent.assumptions, 'ForgeTwin deterministically expanded and validated the model-authored engineering intent.'].slice(0, 8),
+    capabilities: intent.capabilities,
+    requirements,
+    assemblies: compiled.assemblies.map((item) => ({ id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId ?? '' })),
+    components: compiled.components.map((item) => ({
+      id: item.id, primitive: item.primitive, assembly_id: item.assemblyId, role: item.role,
+      position: [...item.position], rotation: [...item.rotation], dimensions: [...item.dimensions],
+      material_id: item.materialId, body_type: item.bodyType, mass: item.mass ?? 1,
+      color: item.color ?? '', semantic_tags: tagsFromParameters(item),
+    })),
+    connections: compiled.connections.map((item) => ({ id: item.id, source_id: item.sourceId, target_id: item.targetId, connection_type: item.type, channel: item.channel || 'mechanical' })),
+    joints: compiled.joints.map((item) => ({
+      id: item.id, joint_type: item.type, component_a: item.componentA, component_b: item.componentB,
+      axis: [...item.axis], limits: item.limits ? [...item.limits] : null,
+      ratio: item.ratio ?? 0, stiffness: item.stiffness ?? 0, damping: item.damping ?? 0,
+    })),
+    motors: compiled.motors.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId ?? '', max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction ?? 1 })),
+    sensors: compiled.sensors.map((item) => ({ id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId ?? '', range: item.range })),
+    actuators: compiled.actuators.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel })),
+    controls: compiled.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: [...item.sensorIds], actuator_ids: [...item.actuatorIds], expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
+    editable_component_id: compiled.goal.editableComponentId,
+  };
+  const parsed = agentPlanSchema.parse(raw);
+  return validateAgentPlanSemantics(repairAgentPlanGraph(parsed), originalPrompt);
 }
 
 export function semanticParametersForEdit(action: Extract<import('./forge-agent').AgentEditAction, { tool: 'create_component' }>, machineName: string) {

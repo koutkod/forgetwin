@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentPlan } from './forge-agent';
-import { compileAgentPlan, localAnchorAt } from './forge-model-plan';
+import type { AgentIntent, AgentPlan } from './forge-agent';
+import { agentPlanFromCompiled, compileAgentPlan, localAnchorAt } from './forge-model-plan';
+import { compileDesignBrief } from './forge-prompt';
 
 function twoBodyPlan(machineName: string, subject: Partial<AgentPlan['components'][number]>): AgentPlan {
   return {
@@ -20,6 +21,40 @@ function twoBodyPlan(machineName: string, subject: Partial<AgentPlan['components
 }
 
 describe('model-authored world compilation', () => {
+  it('expands a compact model intent into a validated recognizable graph', () => {
+    const prompt = 'Build a compact two-wheel bicycle with a frame, steering, pedals, chain drive, seat, and brakes.';
+    const intent: AgentIntent = {
+      normalized_prompt: prompt,
+      design_brief: 'Build a bicycle with a diamond frame, two wheels, steering fork, handlebar, seat, pedals, chain drive, battery-free manual motion, and brakes.',
+      machine_name: 'Compact two-wheel bicycle', domain: 'Personal mobility',
+      reasoning_summary: 'Use a recognizable bicycle silhouette with a manual steering chain and pedal-driven rear wheel.',
+      architecture: ['diamond frame', 'two-wheel running gear', 'steering fork', 'pedal and chain transmission'],
+      assumptions: ['Concept-scale inspection stand'], capabilities: ['structure', 'mobile', 'transmit'],
+      requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 30, unit: '', source: 'inferred' }],
+    };
+    const result = agentPlanFromCompiled(prompt, intent, compileDesignBrief(intent.design_brief));
+    expect(result.machine_name).toBe('Compact two-wheel bicycle');
+    expect(result.components.filter((item) => item.primitive === 'wheel')).toHaveLength(2);
+    expect(result.joints.some((item) => item.joint_type === 'revolute')).toBe(true);
+  });
+
+  it('keeps explicit user targets authoritative when the model marks one as inferred', () => {
+    const prompt = 'Build a conveyor that sorts red and blue boxes into separate bins at 20 boxes per minute.';
+    const intent: AgentIntent = {
+      normalized_prompt: prompt,
+      design_brief: 'Build a conveyor sorting system at 20 boxes per minute with a frame, powered belt, red and blue boxes, color sensor, servo diverter, and two bins.',
+      machine_name: 'Red and blue box sorter', domain: 'Logistics automation',
+      reasoning_summary: 'Use color sensing and a servo diverter to route boxes from one powered conveyor into two destinations.',
+      architecture: ['powered conveyor', 'color sensing', 'servo diverter', 'two output bins'], assumptions: [],
+      capabilities: ['structure', 'transport', 'classify', 'measure'],
+      requirements: [{ metric: 'throughput', label: 'Throughput', operator: 'min', target: 20, unit: '/min', source: 'inferred' }],
+    };
+    const compiled = compileDesignBrief(intent.design_brief);
+    const explicit = compileDesignBrief(prompt).goal.constraints.filter((item) => item.source === 'user');
+    const result = agentPlanFromCompiled(prompt, intent, compiled, explicit);
+    expect(result.requirements).toContainEqual(expect.objectContaining({ metric: 'throughput', target: 20, unit: '/min', source: 'user' }));
+  });
+
   it('uses bounded semantic tags instead of accidental machine-name substrings', () => {
     const cargo = compileAgentPlan('Build a cargo carrier.', twoBodyPlan('Cargo carrier', { primitive: 'wheel', role: 'stationary idler wheel', body_type: 'dynamic' }));
     expect(cargo.components.find((item) => item.id === 'subject')?.parameters?.road_vehicle_wheel).toBeUndefined();

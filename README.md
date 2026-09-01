@@ -4,7 +4,7 @@ ForgeTwin is a browser-based, agent-native engineering sandbox. A person describ
 
 The runtime is explicit about what is doing the work:
 
-- **Hosted model agent** — when `OPENAI_API_KEY` is configured on the server, latency-optimized GPT-5.6 Luna is available automatically with no judge credentials. It authors the complete design graph—assemblies, bodies, transforms, joints, devices, controls, and measurable requirements—edits the live world from chat, and selects the failure-analysis/redesign loop. The secret stays in the deployment environment and never enters client code or responses. `OPENAI_HOSTED_MODEL` can override this production default.
+- **Hosted model agent** — when `OPENAI_API_KEY` is configured on the server, latency-optimized GPT-5.6 Luna is available automatically with no judge credentials. It authors a compact engineering intent—object identity, architecture, primitive vocabulary, motion, controls, and measurable requirements—then ForgeTwin deterministically expands and validates the executable body/joint graph. The same model edits the live world from chat and selects the failure-analysis/redesign loop. This hybrid removes slow full-graph serialization and prevents disconnected model parts. The secret stays in the deployment environment and never enters client code or responses. `OPENAI_HOSTED_MODEL` can override this production default.
 - **Visitor-key override** — a user can optionally connect their own OpenAI API key for the current browser tab. That key takes precedence over the hosted key and uses GPT-5.6 Sol by default (`OPENAI_MODEL` can override it). The key is held only in React memory, sent only to the same-origin agent route, and never stored in browser storage or the project.
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
@@ -139,8 +139,8 @@ Key modules:
 - `lib/forge-prompt.ts` — free-form goal parsing and compositional world synthesis.
 - `lib/forge-engine.ts` — guarded state transitions, ownership, hashing, optimization, compare, and restore.
 - `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
-- `lib/forge-agent.ts` — strict model-plan/redesign/chat-edit schemas, semantic validation, client boundary, status, and temporary-key transport.
-- `lib/forge-model-plan.ts` — conversion from a validated model-authored design graph into the executable world plan and renderer semantics.
+- `lib/forge-agent.ts` — compact intent and strict graph/redesign/chat-edit schemas, deterministic topology repair, semantic validation, client boundary, status, and temporary-key transport.
+- `lib/forge-model-plan.ts` — expansion of model-authored intent into a guarded graph plus conversion into the executable world plan and renderer semantics.
 - `lib/forge-export.ts` — 3:2 viewport capture, PDF engineering report, STL CAD assembly, and full-world data export.
 - `lib/use-forge.ts` — Zod tool schemas, atomic edit batches, WebMCP registration, persistence, and optimistic concurrency.
 - `components/forge/forge-scene.tsx` — generic 3D primitive renderer and X-Ray world view.
@@ -181,6 +181,6 @@ npm test
 npm run build
 ```
 
-The test suite covers strict model-agent boundaries and schema compatibility, semantic repair, prompt-identity and count preservation, false-positive prompt families, model-authored graph compilation, atomic edit rollback, device/control retuning, explicit no-key fallback, distinct generated worlds, guarded shared state, exact human Undo, human locks, Rapier execution, failure-to-redesign loops, and automated accessibility checks.
+The test suite covers strict model-agent boundaries and schema compatibility, compact-intent expansion, local topology repair without a second model call, authoritative user requirements, timeout fallback, prompt-identity and count preservation, false-positive prompt families, atomic edit rollback, device/control retuning, explicit no-key fallback, distinct generated worlds, guarded shared state, exact human Undo, human locks, Rapier execution, failure-to-redesign loops, and automated accessibility checks.
 
 > The AI didn’t generate a picture of a machine. It engineered one, watched it fail, learned from the physics, and fixed it.

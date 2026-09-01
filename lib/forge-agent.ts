@@ -57,6 +57,22 @@ const planActuatorSchema = z.object({ id: identifier, component_id: identifier, 
 const planControlSchema = z.object({ id: identifier, name: z.string().trim().min(1).max(80), mode: controlMode, sensor_ids: z.array(identifier).max(12), actuator_ids: z.array(identifier).max(12), expression: z.string().trim().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10) }).strict();
 const planRequirementSchema = z.object({ metric: supportedMetric, label: z.string().trim().min(1).max(80), operator: z.enum(['min', 'max', 'exact']), target: z.number().finite().nonnegative(), unit: z.string().trim().max(12), source: z.enum(['user', 'inferred']) }).strict();
 
+// The model plans a compact engineering intent instead of serializing the
+// entire rigid-body graph. ForgeTwin's deterministic graph compiler expands
+// this brief into guarded bodies, joints, drives, sensors, and controls. This
+// keeps model latency low while making graph validity deterministic.
+export const agentIntentSchema = z.object({
+  normalized_prompt: z.string().trim().min(12).max(500),
+  design_brief: z.string().trim().min(12).max(500),
+  machine_name: z.string().trim().min(3).max(80),
+  domain: z.string().trim().min(2).max(80),
+  reasoning_summary: z.string().trim().min(12).max(500),
+  architecture: z.array(z.string().trim().min(1).max(100)).min(1).max(8),
+  assumptions: z.array(z.string().trim().min(1).max(180)).max(6),
+  capabilities: z.array(capability).min(1).max(14),
+  requirements: z.array(planRequirementSchema).min(1).max(8),
+}).strict();
+
 export const agentPlanSchema = z.object({
   normalized_prompt: z.string().trim().min(12).max(500),
   machine_name: z.string().trim().min(3).max(80),
@@ -121,6 +137,7 @@ const agentRedesignResponseSchema = z.object({ ok: z.literal(true), mode: z.lite
 const agentEditResponseSchema = z.object({ ok: z.literal(true), mode: z.literal('model'), model: z.string().min(1).max(100), result: agentEditSchema }).strict();
 
 export type AgentPlan = z.infer<typeof agentPlanSchema>;
+export type AgentIntent = z.infer<typeof agentIntentSchema>;
 export type AgentRedesign = z.infer<typeof agentRedesignSchema>;
 export type AgentEdit = z.infer<typeof agentEditSchema>;
 export type AgentEditAction = z.infer<typeof agentEditActionSchema>;
@@ -625,6 +642,88 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
   return plan;
 }
 
+const FREE_BODY_TAGS = new Set(['payload', 'package-red', 'package-blue', 'shipping-carton', 'tomato-ripe', 'tomato-reject', 'metal-can', 'plastic-bottle', 'reject-object']);
+
+/**
+ * Repair the narrow topology mistakes that language models commonly make.
+ * This never invents a new body or changes user requirements; it only grounds
+ * an existing non-product body by attaching it to the nearest reachable body.
+ */
+export function repairAgentPlanGraph(input: AgentPlan): AgentPlan {
+  const plan = structuredClone(input);
+  if (!plan.components.length) return plan;
+  const supportScore = (item: AgentPlan['components'][number]) => {
+    const text = `${item.role} ${item.semantic_tags.join(' ')}`.toLowerCase();
+    return (/(?:ground|base|frame|chassis|support|foundation|mount)/.test(text) ? 8 : 0)
+      + (['support', 'frame', 'plate', 'beam', 'body-shell'].includes(item.primitive) ? 4 : 0)
+      - item.position[1];
+  };
+  if (!plan.components.some((item) => item.body_type === 'fixed')) {
+    [...plan.components].sort((a, b) => supportScore(b) - supportScore(a))[0].body_type = 'fixed';
+  }
+  const pairKey = (a: string, b: string) => [a, b].sort().join('|');
+  const jointPairs = new Set(plan.joints.map((item) => pairKey(item.component_a, item.component_b)));
+  const usedJointIds = new Set(plan.joints.map((item) => item.id));
+  const nextJointId = (componentId: string) => {
+    const stem = `auto-mount-${componentId}`.slice(0, 58);
+    let id = stem; let suffix = 2;
+    while (usedJointIds.has(id)) { id = `${stem}-${suffix}`.slice(0, 64); suffix += 1; }
+    usedJointIds.add(id); return id;
+  };
+  const adjacency = () => {
+    const graph = new Map(plan.components.map((item) => [item.id, new Set<string>()]));
+    for (const joint of plan.joints) { graph.get(joint.component_a)?.add(joint.component_b); graph.get(joint.component_b)?.add(joint.component_a); }
+    for (const edge of plan.connections.filter((item) => item.connection_type === 'mechanical')) { graph.get(edge.source_id)?.add(edge.target_id); graph.get(edge.target_id)?.add(edge.source_id); }
+    return graph;
+  };
+  const reachableBodies = () => {
+    const graph = adjacency();
+    const reachable = new Set(plan.components.filter((item) => item.body_type === 'fixed').map((item) => item.id));
+    const queue = [...reachable];
+    while (queue.length) for (const neighbor of graph.get(queue.shift()!) ?? []) if (!reachable.has(neighbor)) { reachable.add(neighbor); queue.push(neighbor); }
+    return reachable;
+  };
+  const distance = (a: AgentPlan['components'][number], b: AgentPlan['components'][number]) => Math.hypot(
+    a.position[0] - b.position[0], a.position[1] - b.position[1], a.position[2] - b.position[2],
+  );
+  const preferredJoint = (item: AgentPlan['components'][number]) => {
+    const text = `${item.role} ${item.semantic_tags.join(' ')}`.toLowerCase();
+    if (item.body_type === 'fixed' || ['motor', 'servo', 'sensor', 'camera', 'controller', 'light', 'battery', 'seat'].includes(item.primitive)) return { joint_type: 'fixed' as const, axis: [0, 1, 0] as [number, number, number], limits: null };
+    if (item.primitive === 'piston') return { joint_type: 'prismatic' as const, axis: [0, 1, 0] as [number, number, number], limits: [-.25, .25] as [number, number] };
+    if (item.primitive === 'spring') return { joint_type: 'spring' as const, axis: [0, 1, 0] as [number, number, number], limits: [-.15, .15] as [number, number] };
+    if (['wheel', 'gear', 'pulley', 'shaft', 'roller', 'rotor', 'propeller'].includes(item.primitive)) {
+      const axis: [number, number, number] = /(?:vertical|yaw|turntable|main rotor)/.test(text) ? [0, 1, 0] : [0, 0, 1];
+      return { joint_type: 'revolute' as const, axis, limits: null };
+    }
+    if (['steering', 'linkage'].includes(item.primitive) || /(?:hinge|lever|arm|door|gate)/.test(text)) return { joint_type: 'revolute' as const, axis: [0, 1, 0] as [number, number, number], limits: [-.7, .7] as [number, number] };
+    return { joint_type: 'fixed' as const, axis: [0, 1, 0] as [number, number, number], limits: null };
+  };
+
+  for (let pass = 0; pass < plan.components.length; pass += 1) {
+    const reachable = reachableBodies();
+    const orphan = plan.components.find((item) => !reachable.has(item.id) && !item.semantic_tags.some((tag) => FREE_BODY_TAGS.has(tag)));
+    if (!orphan) break;
+    const candidates = plan.components.filter((item) => reachable.has(item.id) && item.id !== orphan.id)
+      .sort((a, b) => (a.assembly_id === orphan.assembly_id ? -3 : 0) + distance(a, orphan) - ((b.assembly_id === orphan.assembly_id ? -3 : 0) + distance(b, orphan)));
+    const parent = candidates[0];
+    if (!parent) break;
+    const pair = pairKey(parent.id, orphan.id);
+    if (jointPairs.has(pair)) break;
+    const joint = preferredJoint(orphan);
+    // A fixed child cannot be placed on a motion joint. Keep the attachment
+    // rigid rather than mutating the model-authored body classification.
+    const jointType = parent.body_type === 'fixed' && orphan.body_type === 'fixed' ? 'fixed' : joint.joint_type;
+    plan.joints.push({
+      id: nextJointId(orphan.id), joint_type: jointType,
+      component_a: parent.id, component_b: orphan.id, axis: joint.axis,
+      limits: jointType === 'fixed' ? null : joint.limits,
+      ratio: 0, stiffness: jointType === 'spring' ? 800 : 0, damping: jointType === 'spring' ? 45 : 0,
+    });
+    jointPairs.add(pair);
+  }
+  return plan;
+}
+
 export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext) {
   if (edit.needs_clarification) {
     if (!edit.clarification_question || edit.actions.length) throw new Error('A clarification response needs one question and zero actions.');
@@ -684,6 +783,15 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
   const touchMotor = (motorId: string) => {
     const motor = motorById.get(motorId); if (!motor) return;
     assertReference(components, motor.component_id, `Motor ${motorId}`); touch(motor.component_id); if (motor.joint_id) { requireDrivenJoint(motor.joint_id, `Motor ${motorId}`); touchJoint(motor.joint_id); }
+    // A speed change also changes the observable behavior of a belt, roller,
+    // wheel, or other body reached by the motor's explicit power edge. Count a
+    // model-declared powered target as truthful even when it is not itself the
+    // motion-joint child (common for conveyor roller/belt abstractions).
+    for (const edge of connectionById.values()) {
+      if (edge.connection_type !== 'power') continue;
+      const powered = edge.source_id === motor.component_id ? edge.target_id : edge.target_id === motor.component_id ? edge.source_id : '';
+      if (powered && declaredTargets.has(powered)) touch(powered);
+    }
   };
   const touchSensor = (sensorId: string) => {
     const sensor = sensorById.get(sensorId); if (!sensor) return;
@@ -876,5 +984,6 @@ function normalizeOpenAiSchema(value: unknown): unknown {
 
 function openAiSchema(schema: z.ZodType) { return normalizeOpenAiSchema(z.toJSONSchema(schema)) as Record<string, unknown>; }
 export const AGENT_PLAN_JSON_SCHEMA = openAiSchema(agentPlanSchema);
+export const AGENT_INTENT_JSON_SCHEMA = openAiSchema(agentIntentSchema);
 export const AGENT_REDESIGN_JSON_SCHEMA = openAiSchema(agentRedesignSchema);
 export const AGENT_EDIT_JSON_SCHEMA = openAiSchema(agentEditSchema);

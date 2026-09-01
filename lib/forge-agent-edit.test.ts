@@ -91,6 +91,15 @@ describe('ForgeTwin chat-edit semantic guard', () => {
     ], ['drive-motor-body']), context)).toThrow(/ground-base.*target_ids/i);
   });
 
+  it('accepts an explicitly powered conveyor body as affected by a motor-speed edit', () => {
+    const context = editContext();
+    context.components.push({ id: 'conveyor-bed', role: 'powered rubber belt conveyor', primitive: 'conveyor', assembly_id: 'machine', position: [0, .5, 1.2], rotation: [0, 0, 0], dimensions: [3, .3, 1], material_id: 'steel', body_type: 'fixed', mass: 20, color: '#475569', parameters: {}, human_locked_fields: [] });
+    context.connections.push({ id: 'belt-power', source_id: 'drive-motor-body', target_id: 'conveyor-bed', connection_type: 'power', channel: 'belt-drive' });
+    expect(() => validateAgentEditSemantics(resolved([
+      { tool: 'set_motor_speed', motor_id: 'arm-drive', max_rpm: 36, direction: 1 },
+    ], ['drive-motor-body', 'ground-base', 'moving-arm', 'conveyor-bed']), context)).not.toThrow();
+  });
+
   it('rejects inert drives and controllers without a controlled actuator', () => {
     const context = editContext();
     expect(() => validateAgentEditSemantics(resolved([

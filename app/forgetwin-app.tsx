@@ -180,7 +180,7 @@ export function ForgeTwinApp() {
           const response = await requestAgentPlan(requestedPrompt, agentKey || undefined, controller.signal);
           modelPlan = response.result;
           setAgentModel(response.model); setAgentConnectionError(null);
-          addTrace('reasoning', response.result.reasoning_summary, `Interpreted as: ${response.result.normalized_prompt}. Architecture: ${response.result.architecture.join(' · ')}. The complete design graph passed ForgeTwin’s reference, grounding, connectivity, drive, and component-budget checks.`);
+          addTrace('reasoning', response.result.reasoning_summary, `Interpreted as: ${response.result.normalized_prompt}. Architecture: ${response.result.architecture.join(' · ')}. ForgeTwin expanded the compact AI intent into a grounded, connected, executable physical graph.`);
         } catch (caught) {
           actor = 'Deterministic';
           const failure = recordModelFailure(caught);
@@ -192,7 +192,7 @@ export function ForgeTwinApp() {
       if (modelPlan) {
         try {
           plan = compileAgentPlan(requestedPrompt, modelPlan);
-          addTrace('action', 'AI design graph accepted', `${modelPlan.machine_name} will be materialized directly from ${modelPlan.components.length} model-authored bodies and ${modelPlan.joints.length} model-authored joints.`);
+          addTrace('action', 'AI architecture compiled', `${modelPlan.machine_name} will be materialized from ${modelPlan.components.length} guarded bodies and ${modelPlan.joints.length} validated joints selected from the model-authored engineering intent.`);
         } catch (caught) {
           actor = 'Deterministic';
           addTrace('fallback', 'AI graph could not be materialized', caught instanceof Error ? `${caught.message} Trying a known high-fidelity local mechanism instead.` : 'Trying a known high-fidelity local mechanism instead.');
