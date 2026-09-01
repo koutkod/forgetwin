@@ -4,7 +4,8 @@ ForgeTwin is a browser-based, agent-native engineering sandbox. A person describ
 
 The runtime is explicit about what is doing the work:
 
-- **Model agent** — a user can connect their own OpenAI API key for the current tab. GPT-5.6 Sol then authors the complete design graph—assemblies, bodies, transforms, joints, devices, controls, and measurable requirements—edits the live world from chat, and selects the failure-analysis/redesign loop. Model graphs pass strict schema, identity, quantity, reference, grounding, connectivity, drive, bounds, and component-budget checks before any world mutation. The key is held only in React memory, sent only to the same-origin agent route, and never stored in browser storage or the project. `OPENAI_MODEL` can override the default model.
+- **Hosted model agent** — when `OPENAI_API_KEY` is configured on the server, GPT-5.6 Sol is available automatically with no judge credentials. It authors the complete design graph—assemblies, bodies, transforms, joints, devices, controls, and measurable requirements—edits the live world from chat, and selects the failure-analysis/redesign loop. The secret stays in the deployment environment and never enters client code or responses. `OPENAI_MODEL` can override the default model.
+- **Visitor-key override** — a user can optionally connect their own OpenAI API key for the current browser tab. That key takes precedence over the hosted key, is held only in React memory, is sent only to the same-origin agent route, and is never stored in browser storage or the project.
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
 
@@ -149,7 +150,7 @@ Key modules:
 ## Judge-ready walkthrough
 
 1. Enter a crane, rover, gearbox, robotic mechanism, bridge, or entirely new mechanical goal.
-2. Select **Connect AI** to use a temporary model key, or leave the disclosed local deterministic engineer active.
+2. Use the included hosted AI immediately, or select **Connect AI** to override it with a temporary visitor key.
 3. Select **Engineer with AI** or **Engineer locally** and watch the agent console explain its plan, observations, and guarded world-tool calls.
 4. Observe the baseline physics failure, then open **Replay 0.25×** or **Telemetry** for causal evidence.
 5. Let the agent inspect, measure, redesign, and rerun until all constraints pass.
@@ -171,7 +172,7 @@ npm run dev
 
 Open `http://localhost:3000/`.
 
-Select **Connect AI** in the app and enter your own OpenAI API key to enable model-backed planning and chat edits for that browser tab. ForgeTwin validates the key and GPT-5.6 Sol access before showing the model as connected, never stores the key, and surfaces authentication, access, quota, and temporary-provider errors without exposing key material. A transient model failure falls back locally only for that operation while keeping the validated session available for retry. ForgeTwin does not use a shared owner key. Without a visitor key, the complete local engineering flow still works and is labeled as deterministic.
+Set `OPENAI_API_KEY` only in the server or deployment environment to provide model-backed planning and chat edits without judge credentials. Never use a `NEXT_PUBLIC_` variable for this secret. Select **Connect AI** in the app to optionally override the hosted model with a visitor-owned key for that browser tab. ForgeTwin validates the visitor key and model access before connecting, never stores it, and surfaces authentication, access, quota, and temporary-provider errors without exposing key material. Without either key, the complete local engineering flow still works and is labeled as deterministic.
 
 ```bash
 npm run typecheck

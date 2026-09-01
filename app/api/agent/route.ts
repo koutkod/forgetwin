@@ -6,6 +6,9 @@ import {
 } from '../../../lib/forge-agent';
 
 const DEFAULT_MODEL = 'gpt-5.6-sol';
+const HOSTED_REQUEST_LIMIT = 60;
+const HOSTED_REQUEST_WINDOW_MS = 10 * 60 * 1000;
+const hostedRequestWindows = new Map<string, { startedAt: number; count: number }>();
 const promptSchema = z.string().trim().min(12).max(500);
 const editPromptSchema = z.string().trim().min(3).max(300);
 const redesignContextSchema = z.object({
@@ -78,6 +81,35 @@ function sameOrigin(request: Request) {
 function sessionKey(request: Request) {
   const key = request.headers.get('x-forgetwin-openai-key')?.trim();
   return key && key.length >= 20 && key.length <= 300 ? key : null;
+}
+
+function serverKey() {
+  const key = process.env.OPENAI_API_KEY?.trim();
+  return key && key.length >= 20 && key.length <= 300 ? key : null;
+}
+
+function requestKey(request: Request) {
+  const visitorKey = sessionKey(request);
+  if (visitorKey) return { key: visitorKey, source: 'visitor' as const };
+  const hostedKey = serverKey();
+  return hostedKey ? { key: hostedKey, source: 'hosted' as const } : null;
+}
+
+function hostedRequestAllowed(request: Request) {
+  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  const clientId = request.headers.get('x-nf-client-connection-ip')?.trim() || forwarded || 'unknown-client';
+  const now = Date.now();
+  const current = hostedRequestWindows.get(clientId);
+  if (!current || now - current.startedAt >= HOSTED_REQUEST_WINDOW_MS) {
+    hostedRequestWindows.set(clientId, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= HOSTED_REQUEST_LIMIT) return false;
+  current.count += 1;
+  if (hostedRequestWindows.size > 1000) {
+    for (const [id, window] of hostedRequestWindows) if (now - window.startedAt >= HOSTED_REQUEST_WINDOW_MS) hostedRequestWindows.delete(id);
+  }
+  return true;
 }
 
 function modelName() {
@@ -231,7 +263,7 @@ Editing contract:
 }
 
 export async function GET() {
-  return Response.json({ ok: true, configured: false, model: modelName() }, { headers: { 'cache-control': 'no-store' } });
+  return Response.json({ ok: true, configured: Boolean(serverKey()), model: modelName() }, { headers: { 'cache-control': 'no-store' } });
 }
 
 export async function PUT(request: Request) {
@@ -243,11 +275,12 @@ export async function PUT(request: Request) {
 
 export async function POST(request: Request) {
   if (!sameOrigin(request)) return Response.json({ ok: false, code: 'ORIGIN_REJECTED', error: 'Cross-origin agent requests are not allowed.' }, { status: 403 });
-  const apiKey = sessionKey(request);
-  if (!apiKey) return Response.json({ ok: false, code: 'MODEL_NOT_CONFIGURED', error: 'Add your OpenAI API key in Agent settings. ForgeTwin can continue with its local deterministic engineer.' }, { status: 503 });
+  const credential = requestKey(request);
+  if (!credential) return Response.json({ ok: false, code: 'MODEL_NOT_CONFIGURED', error: 'The hosted model is not configured. ForgeTwin can continue with its local deterministic engineer or use a visitor-provided key.' }, { status: 503 });
+  if (credential.source === 'hosted' && !hostedRequestAllowed(request)) return Response.json({ ok: false, code: 'HOSTED_MODEL_RATE_LIMIT', error: 'The hosted demo limit was reached for this network. Wait ten minutes or use your own API key in Agent settings.' }, { status: 429, headers: { 'retry-after': '600' } });
   try {
     const body = requestSchema.parse(await request.json());
-    return await createStructuredResponse(apiKey, body);
+    return await createStructuredResponse(credential.key, body);
   } catch (error) {
     if (error instanceof z.ZodError || error instanceof SyntaxError) return Response.json({ ok: false, code: 'INVALID_AGENT_REQUEST', error: 'The engineering request did not match the guarded agent schema.' }, { status: 400 });
     return Response.json({ ok: false, code: 'AGENT_REQUEST_FAILED', error: 'The agent request could not be processed.' }, { status: 500 });

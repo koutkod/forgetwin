@@ -53,9 +53,9 @@ describe('ForgeTwin accessible world editor shell', () => {
     expect(getByRole('img', { name: '3D general-purpose mechanical engineering world' })).toBeTruthy();
   });
 
-  it('uses a visitor-owned key only for the current browser tab', async () => {
+  it('uses a visitor-owned key only for the current browser tab and returns to hosted AI', async () => {
     const visitorKey = 'sk-test-browser-tab-key-123456789';
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true, configured: true, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true, configured: true, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } }));
     const first = render(<ForgeTwinApp />);
     fireEvent.click(first.getByRole('button', { name: 'Connect AI' }));
     const field = first.getByLabelText('Your OpenAI API key') as HTMLInputElement;
@@ -64,7 +64,8 @@ describe('ForgeTwin accessible world editor shell', () => {
     fireEvent.change(field, { target: { value: visitorKey } });
     fireEvent.click(first.getByRole('button', { name: 'Verify & connect for this tab' }));
     expect(first.getByText(/Checking gpt-5.6-sol access/i)).toBeTruthy();
-    await waitFor(() => expect(first.getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
+    await waitFor(() => expect(first.queryByRole('dialog')).toBeNull());
+    expect(first.getByRole('button', { name: 'Engineer with AI' })).toBeTruthy();
     expect(Object.values(window.localStorage).join('')).not.toContain(visitorKey);
 
     fireEvent.click(first.getByRole('button', { name: 'Agent settings' }));
@@ -72,12 +73,13 @@ describe('ForgeTwin accessible world editor shell', () => {
     first.unmount();
 
     const second = render(<ForgeTwinApp />);
-    expect(second.getByRole('button', { name: 'Engineer locally' })).toBeTruthy();
+    await waitFor(() => expect(second.getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
+    expect(second.getByText(/AI included/i)).toBeTruthy();
     expect(Object.values(window.localStorage).join('')).not.toContain(visitorKey);
   });
 
   it('keeps an invalid key editable and explains why the model did not connect', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: false, code: 'MODEL_KEY_REJECTED', error: 'OpenAI rejected this API key. Check that it is active and copied completely.' }), { status: 401, headers: { 'content-type': 'application/json' } }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: false, code: 'MODEL_KEY_REJECTED', error: 'OpenAI rejected this API key. Check that it is active and copied completely.' }), { status: 401, headers: { 'content-type': 'application/json' } }));
     const { getByRole, getByLabelText, findByRole, queryByRole } = render(<ForgeTwinApp />);
     fireEvent.click(getByRole('button', { name: 'Connect AI' }));
     fireEvent.change(getByLabelText('Your OpenAI API key'), { target: { value: 'sk-test-invalid-browser-key-123456789' } });
@@ -159,6 +161,6 @@ describe('ForgeTwin accessible world editor shell', () => {
     await waitFor(() => expect(getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer with AI' }));
     expect(await findByText('Engineering mission complete', {}, { timeout: 20_000 })).toBeTruthy();
-    expect((await findAllByText(/gpt-5.6-sol connected with your key/i)).length).toBeGreaterThan(0);
+    expect((await findAllByText(/gpt-5.6-sol · your key/i)).length).toBeGreaterThan(0);
   }, 25_000);
 });

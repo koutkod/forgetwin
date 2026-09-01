@@ -440,7 +440,7 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(init.redirect).toBe('error');
   });
 
-  it('reports BYOK-only model status without exposing a key', async () => {
+  it('reports model availability without exposing a key', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true, configured: false, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } }));
     await expect(getAgentStatus()).resolves.toEqual({ ok: true, configured: false, model: 'gpt-5.6-sol' });
   });
@@ -482,18 +482,23 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(JSON.stringify(payload)).not.toContain('sk-secret-never-echo');
   });
 
-  it('never falls back to a shared server key', async () => {
+  it('uses a shared server key when a visitor key is absent without exposing it', async () => {
     const previous = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = 'sk-test-owner-key-that-must-never-be-used';
+    const hostedKey = 'sk-test-hosted-key-that-must-never-be-exposed';
+    process.env.OPENAI_API_KEY = hostedKey;
     try {
-      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const output = validPlan({ normalized_prompt: 'Build a small rover that carries five kilograms over rough terrain.' });
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output_text: JSON.stringify(output) }), { status: 200, headers: { 'content-type': 'application/json' } }));
       const response = await POST(new Request('http://localhost/api/agent', {
         method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', host: 'localhost' },
-        body: JSON.stringify({ task: 'plan', prompt: 'Build a small rover that carries five kilograms.' }),
+        body: JSON.stringify({ task: 'plan', prompt: 'Build a small rover that carries five kilograms over rough terrain.' }),
       }));
-      expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_NOT_CONFIGURED' });
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      const [url, init] = fetchMock.mock.calls[0] as [RequestInfo | URL, RequestInit];
+      expect(url).toBe('https://api.openai.com/v1/responses');
+      expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${hostedKey}`);
+      expect(String(init.body)).not.toContain(hostedKey);
+      expect(JSON.stringify(await response.json())).not.toContain(hostedKey);
     } finally {
       if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
     }
@@ -545,6 +550,8 @@ describe('ForgeTwin model-agent boundary', () => {
 
   it('accepts the configured public origin behind a trusted deployment proxy', async () => {
     const previous = process.env.NEXT_PUBLIC_SITE_ORIGIN;
+    const previousKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
     process.env.NEXT_PUBLIC_SITE_ORIGIN = 'https://forgetwin.netlify.app';
     try {
       const response = await POST(new Request('http://internal-function-host/api/agent', {
@@ -556,18 +563,22 @@ describe('ForgeTwin model-agent boundary', () => {
       await expect(response.json()).resolves.toMatchObject({ code: 'MODEL_NOT_CONFIGURED' });
     } finally {
       if (previous === undefined) delete process.env.NEXT_PUBLIC_SITE_ORIGIN; else process.env.NEXT_PUBLIC_SITE_ORIGIN = previous;
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey;
     }
   });
 
 
   it('defaults to the flagship GPT-5.6 Sol model', async () => {
     const previousModel = process.env.OPENAI_MODEL;
+    const previousKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_MODEL;
+    delete process.env.OPENAI_API_KEY;
     try {
       const response = await GET();
       await expect(response.json()).resolves.toMatchObject({ configured: false, model: 'gpt-5.6-sol' });
     } finally {
       if (previousModel === undefined) delete process.env.OPENAI_MODEL; else process.env.OPENAI_MODEL = previousModel;
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previousKey;
     }
   });
 });

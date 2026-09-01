@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { ForgeScene } from '../components/forge/forge-scene';
 import {
-  AgentRequestError, normalizeRedesignSequence, requestAgentEdit, requestAgentPlan, requestAgentRedesign, validateAgentKey,
+  AgentRequestError, getAgentStatus, normalizeRedesignSequence, requestAgentEdit, requestAgentPlan, requestAgentRedesign, validateAgentKey,
   type AgentEditAction, type AgentPlan, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
@@ -61,6 +61,7 @@ export function ForgeTwinApp() {
   const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeMode>('deterministic');
   const [agentModel, setAgentModel] = useState('gpt-5.6-sol');
   const [agentKey, setAgentKey] = useState('');
+  const [sharedAgentAvailable, setSharedAgentAvailable] = useState(false);
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [agentConnecting, setAgentConnecting] = useState(false);
@@ -79,6 +80,14 @@ export function ForgeTwinApp() {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), 3600); return () => window.clearTimeout(timer); }, [toast]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getAgentStatus(controller.signal).then((status) => {
+      setAgentModel(status.model); setSharedAgentAvailable(status.configured);
+      setAgentRuntime((current) => current === 'session-model' ? current : status.configured ? 'server-model' : 'deterministic');
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, []);
   const must = (result: ToolResult) => { if (!result.ok) throw new Error(result.error.message); return result; };
   const ensureActive = (signal?: AbortSignal) => { if (signal?.aborted) throw new DOMException('Agent run cancelled.', 'AbortError'); };
   const call = async (name: ForgeToolName, input: Record<string, unknown> = {}, delay = 20, actor: Actor = 'Deterministic', signal?: AbortSignal) => { ensureActive(signal); const result = must(command(name, input, actor)); await pause(delay); ensureActive(signal); return result; };
@@ -91,10 +100,10 @@ export function ForgeTwinApp() {
     const message = caught instanceof Error ? caught.message : 'The model request failed.';
     const disconnected = caught instanceof AgentRequestError && ['MODEL_KEY_REJECTED', 'MODEL_ACCESS_DENIED'].includes(caught.code);
     setAgentConnectionError(message);
-    if (disconnected) { setAgentKey(''); setAgentRuntime('deterministic'); }
+    if (disconnected) { setAgentKey(''); setAgentRuntime(sharedAgentAvailable ? 'server-model' : 'deterministic'); }
     return { message, disconnected };
   };
-  const runtimeActor = (): Actor => agentRuntime === 'session-model' ? 'ModelAgent' : 'Deterministic';
+  const runtimeActor = (): Actor => agentRuntime !== 'deterministic' ? 'ModelAgent' : 'Deterministic';
   const updateGoalPrompt = (prompt: string) => { setGoalPrompt(prompt); setPromptError(null); };
 
   const redesignRun = async (failed: SimulationRun, prompt: string, requestedActor: Actor, signal?: AbortSignal) => {
@@ -123,7 +132,7 @@ export function ForgeTwinApp() {
       } catch (caught) {
         actor = 'Deterministic';
         const failure = recordModelFailure(caught);
-        addTrace('fallback', 'Model redesign unavailable', `${failure.message} Continuing with the bounded local evidence loop.${failure.disconnected ? ' Reconnect with an active key.' : ' The validated key remains connected for the next retry.'}`);
+        addTrace('fallback', 'Model redesign unavailable', `${failure.message} Continuing with the bounded local evidence loop.${failure.disconnected ? ' The hosted model or another visitor key can be used on the next retry.' : ' The model remains available for the next retry.'}`);
       }
     }
     const failedMetric = failed.metrics.measures.find((item) => item.status === 'fail');
@@ -175,7 +184,7 @@ export function ForgeTwinApp() {
         } catch (caught) {
           actor = 'Deterministic';
           const failure = recordModelFailure(caught);
-          addTrace('fallback', 'Switched to the local engineer for this run', `${failure.message} The deterministic planner will still build, simulate, and repair the machine.${failure.disconnected ? ' Reconnect with an active key.' : ' Your validated key remains connected for the next retry.'}`);
+          addTrace('fallback', 'Switched to the local engineer for this run', `${failure.message} The deterministic planner will still build, simulate, and repair the machine.${failure.disconnected ? ' The hosted model or another visitor key can be used on the next retry.' : ' The model remains available for the next retry.'}`);
         }
       } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
 
@@ -382,13 +391,13 @@ export function ForgeTwinApp() {
       setToast(`${response.model} verified and connected for this tab`);
     } catch (caught) {
       if (requestId !== agentConnectSeq.current) return;
-      setAgentKey(''); setAgentRuntime('deterministic');
+      setAgentKey(''); setAgentRuntime(sharedAgentAvailable ? 'server-model' : 'deterministic');
       setAgentConnectionError(caught instanceof Error ? caught.message : 'OpenAI could not validate this key.');
     } finally { if (requestId === agentConnectSeq.current) setAgentConnecting(false); }
   };
   const disconnectTemporaryModel = () => {
     agentConnectSeq.current += 1; setAgentConnecting(false); setAgentConnectionError(null);
-    setAgentKey(''); setAgentRuntime('deterministic'); setAgentSettingsOpen(false);
+    setAgentKey(''); setAgentRuntime(sharedAgentAvailable ? 'server-model' : 'deterministic'); setAgentSettingsOpen(false);
     setToast('Your OpenAI key was removed from this tab');
   };
   const cancelAgentRun = () => { abortRef.current?.abort(); setAgentCancelable(false); };
@@ -634,7 +643,7 @@ export function ForgeTwinApp() {
         } catch (caught) {
           actor = 'Deterministic'; const failure = recordModelFailure(caught); commands = localEditCommands(effectivePrompt);
           summary = `The model was unavailable, so the local chat interpreter applied: ${commands.map((item) => item.label).join(' · ')}.`;
-          addTrace('fallback', 'Local chat editor took over for this edit', `${failure.message}${failure.disconnected ? ' Reconnect with an active key.' : ' The validated key remains connected for the next retry.'}`);
+          addTrace('fallback', 'Local chat editor took over for this edit', `${failure.message}${failure.disconnected ? ' The hosted model or another visitor key can be used on the next retry.' : ' The model remains available for the next retry.'}`);
         }
       } else {
         commands = localEditCommands(effectivePrompt); summary = `Local chat edit: ${commands.map((item) => item.label).join(' · ')}.`;
@@ -685,7 +694,7 @@ export function ForgeTwinApp() {
   return <div className="forge-shell"><a className="skip-link" href="#forge-main">Skip to engineering workspace</a>
     <header className="forge-header">
       <button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => patchUi({ screen: 'landing' })} disabled={busy}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button>
-      <div className="header-center"><span className={`live-dot ${agentRuntime === 'session-model' ? 'cyan' : ''}`} />{agentRuntime === 'session-model' ? `${agentModel} connected with your key` : 'Local engineer ready'} <span className="header-divider" /> REV {state.revision.toString().padStart(2, '0')} <span className="header-divider" /> {registeredTools === FORGE_TOOL_COUNT ? `${registeredTools} WebMCP tools live` : registeredTools === WEBMCP_CHECKING ? 'Connecting WebMCP…' : 'Open in a WebMCP-enabled browser'}</div>
+      <div className="header-center"><span className={`live-dot ${agentRuntime !== 'deterministic' ? 'cyan' : ''}`} />{agentRuntime === 'session-model' ? `${agentModel} · your key` : agentRuntime === 'server-model' ? `${agentModel} · hosted AI ready` : 'Local engineer ready'} <span className="header-divider" /> REV {state.revision.toString().padStart(2, '0')} <span className="header-divider" /> {registeredTools === FORGE_TOOL_COUNT ? `${registeredTools} WebMCP tools live` : registeredTools === WEBMCP_CHECKING ? 'Connecting WebMCP…' : 'Open in a WebMCP-enabled browser'}</div>
       <div className="header-actions"><button className="ghost-button chat-edit-button" disabled={busy} onClick={() => setSideTab('chat')}><MessageSquareText size={14} />Chat edit</button><button className="ghost-button" disabled={busy} onClick={() => setAgentSettingsOpen(true)}><KeyRound size={14} />Agent</button><button className="ghost-button export-button" disabled={busy || !state.components.length} onClick={() => setExportOpen(true)}><Download size={14} />Export</button><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Checkpoint</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare runs</button><button className="ghost-button" disabled={busy} onClick={() => { setAnimationPlaying(false); reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setAgentTrace([]); setEditMessages([]); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
     </header>
     <main id="forge-main" className="forge-main">
@@ -707,7 +716,7 @@ export function ForgeTwinApp() {
         {humanEdited && <div className="challenge-banner human"><span className="challenge-icon"><Radio size={18} /></span><div><span className="eyebrow">Human edit detected</span><strong>{state.humanConstraints.length} {state.humanConstraints.length === 1 ? 'body has' : 'bodies have'} locked fields.</strong><p>{state.humanConstraints.map((item) => `${state.components.find((component) => component.id === item.componentId)?.role ?? item.componentId}: ${item.fields.join(', ')}`).join(' · ')}. The agent will preserve every field and redesign the surrounding world.</p></div><button onClick={retuneHumanEdit} disabled={busy}>{busy ? 'Redesigning…' : 'Redesign around my change'}</button></div>}
         {finalHumanPass && latestRun && <div className="pass-banner"><span><BadgeCheck size={20} /></span><div><strong>All constraints pass with the human edit preserved.</strong><p>{latestRun.metrics.measures.slice(0, 3).map((item) => `${item.label} ${item.value}${item.unit}`).join(' · ')}</p></div><button onClick={() => setDrawer('compare')}>Compare designs</button></div>}
       </section>
-      <aside className="agent-panel" aria-label="Agent activity"><div className="side-tabs"><button className={sideTab === 'chat' ? 'active' : ''} onClick={() => setSideTab('chat')}><MessageSquareText size={13} />Chat edit</button><button className={sideTab === 'activity' ? 'active' : ''} onClick={() => setSideTab('activity')}><Activity size={13} />Activity</button><button className={sideTab === 'history' ? 'active' : ''} onClick={() => setSideTab('history')}><History size={13} />History</button></div>{sideTab === 'chat' ? <AgentChat state={state} messages={editMessages} prompt={editPrompt} busy={busy} thinking={chatThinking} model={agentModel} modelConnected={agentRuntime === 'session-model'} selected={selected} onPromptChange={setEditPrompt} onSubmit={editWithChat} /> : sideTab === 'activity' ? <AgentFeed state={state} toolCount={registeredTools} trace={agentTrace} runtime={agentRuntime} model={agentModel} busy={busy} canCancel={agentCancelable} onCancel={cancelAgentRun} onConfigure={() => setAgentSettingsOpen(true)} /> : <RevisionHistory state={state} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} />}<MetricStack metrics={latestRun?.designHash === state.designHash ? latestRun.metrics : null} phase={latestRun?.designHash === state.designHash ? state.phase : state.components.length ? 'ready' : state.phase} />{state.goal && <p className="model-note"><AlertTriangle size={12} />{state.goal.disclaimer}</p>}</aside>
+      <aside className="agent-panel" aria-label="Agent activity"><div className="side-tabs"><button className={sideTab === 'chat' ? 'active' : ''} onClick={() => setSideTab('chat')}><MessageSquareText size={13} />Chat edit</button><button className={sideTab === 'activity' ? 'active' : ''} onClick={() => setSideTab('activity')}><Activity size={13} />Activity</button><button className={sideTab === 'history' ? 'active' : ''} onClick={() => setSideTab('history')}><History size={13} />History</button></div>{sideTab === 'chat' ? <AgentChat state={state} messages={editMessages} prompt={editPrompt} busy={busy} thinking={chatThinking} model={agentModel} modelConnected={agentRuntime !== 'deterministic'} selected={selected} onPromptChange={setEditPrompt} onSubmit={editWithChat} /> : sideTab === 'activity' ? <AgentFeed state={state} toolCount={registeredTools} trace={agentTrace} runtime={agentRuntime} model={agentModel} busy={busy} canCancel={agentCancelable} onCancel={cancelAgentRun} onConfigure={() => setAgentSettingsOpen(true)} /> : <RevisionHistory state={state} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} />}<MetricStack metrics={latestRun?.designHash === state.designHash ? latestRun.metrics : null} phase={latestRun?.designHash === state.designHash ? state.phase : state.components.length ? 'ready' : state.phase} />{state.goal && <p className="model-note"><AlertTriangle size={12} />{state.goal.disclaimer}</p>}</aside>
     </main>
     {error && <div className="error-toast" role="alert"><AlertTriangle size={15} /><span>{error}</span><button onClick={() => setError(null)} aria-label="Dismiss error"><X size={14} /></button></div>}
     {toast && <div className="success-toast" role="status"><Check size={14} />{toast}</div>}
@@ -814,8 +823,9 @@ function AssemblyTree({ state, onSelect }: { state: ForgeState; onSelect: (id: s
 }
 
 function Landing({ state, toolCount, prompt, promptError, busy, agentRuntime, agentModel, onConfigureAgent, onPromptChange, onEnter, onGenerate, onExample }: { state: ForgeState; toolCount: number; prompt: string; promptError: string | null; busy: boolean; agentRuntime: AgentRuntimeMode; agentModel: string; onConfigureAgent: () => void; onPromptChange: (prompt: string) => void; onEnter: () => void; onGenerate: (prompt: string) => void; onExample: (example: EngineeringExample) => void }) {
-  const modelConnected = agentRuntime === 'session-model';
-  return <div className="landing-shell"><header className="landing-nav"><button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button><div><span className={`landing-status ${modelConnected ? 'model-connected' : ''}`}><i />{modelConnected ? `${agentModel} · your key` : 'Local engineer ready'}</span><button className="ghost-button" onClick={onConfigureAgent}><KeyRound size={13} />{modelConnected ? 'Agent settings' : 'Connect AI'}</button><button className="ghost-button" onClick={onEnter}>Open sandbox</button></div></header>
+  const modelConnected = agentRuntime !== 'deterministic';
+  const visitorModel = agentRuntime === 'session-model';
+  return <div className="landing-shell"><header className="landing-nav"><button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button><div><span className={`landing-status ${modelConnected ? 'model-connected' : ''}`}><i />{visitorModel ? `${agentModel} · your key` : modelConnected ? `${agentModel} · AI included` : 'Local engineer ready'}</span><button className="ghost-button" onClick={onConfigureAgent}><KeyRound size={13} />{visitorModel ? 'Agent settings' : 'Connect AI'}</button><button className="ghost-button" onClick={onEnter}>Open sandbox</button></div></header>
     <main className="landing-hero"><div className="hero-copy"><span className="hero-kicker"><Sparkles size={13} />Agent-native physical engineering</span><h1>Don’t generate it.<br /><em>Engineer it.</em></h1><p>Describe almost any mechanical system. ForgeTwin decomposes the goal into reusable primitives, creates a jointed physical world, simulates it, measures failures, and redesigns the causal parts until the constraints pass.</p><GoalComposer id="design-goal" prompt={prompt} error={promptError} busy={busy} agentRuntime={agentRuntime} onPromptChange={onPromptChange} onGenerate={onGenerate} /><div className={`agent-runtime-card ${modelConnected ? 'connected' : 'local'}`}><span><Bot size={16} /></span><div><strong>{modelConnected ? `Flagship engineering agent · ${agentModel}` : 'Local deterministic engineer'}</strong><p>{modelConnected ? 'GPT-5.6 Sol plans, edits the existing world through chat, and selects evidence-driven redesigns. Every action still passes through guarded tools.' : 'Fully functional offline build, physics, telemetry, and bounded chat edits. Connect the flagship model for model-selected reasoning.'}</p></div><button type="button" onClick={onConfigureAgent}>{modelConnected ? 'Manage' : 'Connect model'}</button></div><div className="quick-examples" aria-label="Example engineering systems">{CHALLENGE_EXAMPLES.slice(0, 7).map((example) => <button key={example.id} type="button" onClick={() => onExample(example)}>{example.title}</button>)}</div><div className="hero-actions"><button className="ghost-button hero-secondary" onClick={onEnter} type="button"><Code2 size={15} />Explore empty world</button></div><div className="hero-proof"><span><strong>{primitiveCatalog.length}</strong> reusable primitives</span><span><strong>8</strong> joint types</span><span><strong>60 Hz</strong> multi-body physics</span></div></div>
       <div className="hero-machine"><ForgeScene state={state} preview operating onComponentMove={() => undefined} onSelect={() => undefined} /><div className="hero-hud top"><span>LIVE PHYSICAL WORLD</span><strong>PROMPT → PRIMITIVES → PHYSICS</strong></div><div className="hero-hud bottom"><span>NO COMPLETE-MACHINE TEMPLATES</span><strong>ASSEMBLIES ARE SYNTHESIZED</strong></div><div className="hero-orbit-label one"><i />Explicit mass + material</div><div className="hero-orbit-label two"><i />Joints + control graph</div></div></main>
     <section className="landing-strip" aria-label="How ForgeTwin works"><article><Cpu size={17} /><div><strong>Agent decomposes</strong><span>Goals become capabilities, constraints, bodies, joints, and control channels.</span></div></article><article><AlertTriangle size={17} /><div><strong>Physics rejects</strong><span>Mass, geometry, support, torque, contacts, and control become evidence.</span></div></article><article><Redo2 size={17} /><div><strong>Optimizer redesigns</strong><span>The agent changes causal fields and reruns the same shared world.</span></div></article><small>{toolCount === FORGE_TOOL_COUNT ? `${toolCount}/${FORGE_TOOL_COUNT} WebMCP tools live in this browser host` : toolCount === WEBMCP_CHECKING ? 'Connecting to this browser’s WebMCP host…' : `Open in ChatGPT’s in-app browser or Chrome with WebMCP enabled · ${FORGE_TOOL_COUNT} local tools remain available`}</small></section>
@@ -825,7 +835,7 @@ function Landing({ state, toolCount, prompt, promptError, busy, agentRuntime, ag
 
 function GoalComposer({ id, prompt, error, busy, agentRuntime, compact = false, onPromptChange, onGenerate }: { id: string; prompt: string; error: string | null; busy: boolean; agentRuntime: AgentRuntimeMode; compact?: boolean; onPromptChange: (prompt: string) => void; onGenerate: (prompt: string) => void }) {
   const hintId = `${id}-hint`, errorId = `${id}-error`;
-  const modelConnected = agentRuntime === 'session-model';
+  const modelConnected = agentRuntime !== 'deterministic';
   return <form className={`goal-composer ${compact ? 'compact' : ''}`} aria-busy={busy} onSubmit={(event) => { event.preventDefault(); onGenerate(prompt); }}><label htmlFor={id}>What should ForgeTwin engineer?</label><textarea id={id} value={prompt} onChange={(event) => onPromptChange(event.target.value)} maxLength={500} rows={compact ? 4 : 3} aria-describedby={`${hintId}${error ? ` ${errorId}` : ''}`} aria-invalid={Boolean(error)} disabled={busy} /><div className="goal-composer-meta"><span id={hintId}>{prompt.length}/500 · free-form world synthesis · measurable constraints</span><button className="run-button hero" type="submit" disabled={busy || prompt.trim().length < 12}><Sparkles size={15} />{busy ? 'Engineering…' : modelConnected ? 'Engineer with AI' : 'Engineer locally'}</button></div>{error && <p className="goal-error" id={errorId} role="alert"><AlertTriangle size={13} />{error}</p>}</form>;
 }
 
@@ -850,8 +860,10 @@ function AgentSettingsDialog({ runtime, model, hasTemporaryKey, connecting, conn
     document.addEventListener('keydown', handle);
     return () => { document.removeEventListener('keydown', handle); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
   }, []);
-  const modelConnected = runtime === 'session-model' && hasTemporaryKey;
-  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !connecting) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>Bring your own model</small><h2 id="agent-settings-title">Use your OpenAI API key</h2></div><button onClick={onClose} aria-label="Close agent settings" disabled={connecting}><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${modelConnected ? 'connected' : 'local'}`}><i /><div><strong>{connecting ? `Checking ${model} access…` : modelConnected ? `${model} connected with your key` : 'Local deterministic engineer active'}</strong><p>{connecting ? 'Validating the key and model without storing the key or generating a design.' : modelConnected ? 'Your model handles planning, chat edits, and redesign decisions. Physics and guarded tools still run inside ForgeTwin.' : 'ForgeTwin remains fully usable without a key. Add your own below when you want model-selected reasoning.'}</p></div></div>{connectionError && <p className="agent-connection-error" role="alert"><AlertTriangle size={13} />{connectionError}</p>}{!hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); void onConnect(key); }}><label htmlFor="temporary-openai-key">Your OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} maxLength={300} placeholder="sk-…" disabled={connecting} /><p><KeyRound size={12} />Used only for this browser tab and sent only to ForgeTwin’s same-origin agent route. It is never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={connecting || key.trim().length < 20 || key.trim().length > 300}><Bot size={14} />{connecting ? 'Verifying key…' : 'Verify & connect for this tab'}</button></form>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect} disabled={connecting}>Remove my key from this tab</button>}</div><footer><span>Your OpenAI account is charged only when the model handles a planning, redesign, or chat request. Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose} disabled={connecting}>Done</button></footer></section></div>;
+  const visitorModel = runtime === 'session-model' && hasTemporaryKey;
+  const hostedModel = runtime === 'server-model';
+  const modelConnected = visitorModel || hostedModel;
+  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !connecting) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>AI model access</small><h2 id="agent-settings-title">Hosted AI or your own key</h2></div><button onClick={onClose} aria-label="Close agent settings" disabled={connecting}><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${modelConnected ? 'connected' : 'local'}`}><i /><div><strong>{connecting ? `Checking ${model} access…` : visitorModel ? `${model} connected with your key` : hostedModel ? `${model} hosted AI is ready` : 'Local deterministic engineer active'}</strong><p>{connecting ? 'Validating the key and model without storing the key or generating a design.' : visitorModel ? 'Your key overrides the built-in model for planning, chat edits, and redesign decisions.' : hostedModel ? 'Judges receive the complete AI planning and chat-editing experience without entering credentials.' : 'ForgeTwin remains functional locally. Add your own key below to enable model-selected reasoning.'}</p></div></div>{connectionError && <p className="agent-connection-error" role="alert"><AlertTriangle size={13} />{connectionError}</p>}{!hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); void onConnect(key); }}><label htmlFor="temporary-openai-key">Your OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} maxLength={300} placeholder="sk-…" disabled={connecting} /><p><KeyRound size={12} />Optional: your key overrides the hosted model only for this browser tab. It is sent to ForgeTwin’s same-origin route and never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={connecting || key.trim().length < 20 || key.trim().length > 300}><Bot size={14} />{connecting ? 'Verifying key…' : 'Verify & connect for this tab'}</button></form>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect} disabled={connecting}>Remove my key from this tab</button>}</div><footer><span>{visitorModel ? 'Your OpenAI account is charged only for model requests in this tab.' : 'Hosted AI is included for the hackathon demo.'} Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose} disabled={connecting}>Done</button></footer></section></div>;
 }
 
 function FailureBanner({ run, onReplay, onFix, busy }: { run: SimulationRun; onReplay: () => void; onFix: () => void; busy: boolean }) {
@@ -908,7 +920,7 @@ function AgentChat({ state, messages, prompt, busy, thinking, model, modelConnec
 }
 
 function AgentFeed({ state, toolCount, trace, runtime, model, busy, canCancel, onCancel, onConfigure }: { state: ForgeState; toolCount: number; trace: AgentTraceItem[]; runtime: AgentRuntimeMode; model: string; busy: boolean; canCancel: boolean; onCancel: () => void; onConfigure: () => void }) {
-  const modelConnected = runtime === 'session-model';
+  const modelConnected = runtime !== 'deterministic';
   const actorLabel = (actor: Actor) => actor === 'WebMCP' ? 'External WebMCP agent' : actor === 'ModelAgent' ? `Model agent · ${model}` : actor === 'Deterministic' ? 'Local deterministic engineer' : actor === 'Human' ? 'Human' : actor === 'System' ? 'Legacy local automation' : 'Guided UI';
   return <div className="feed-wrap"><div className="panel-heading"><div><span className="eyebrow">Shared-world execution</span><h2>Agent console</h2></div><span className={`agent-live ${modelConnected ? 'model' : 'local'}`}><i />{modelConnected ? 'MODEL' : 'LOCAL'}</span></div>
     <div className={`agent-identity ${modelConnected ? 'connected' : 'local'}`}><span><Bot size={16} /></span><div><strong>{modelConnected ? model : 'Deterministic engineer'}</strong><p>{modelConnected ? 'Model decisions → guarded tools → Rapier evidence' : 'Guarded local planning → Rapier evidence'}</p></div><button onClick={onConfigure}>{modelConnected ? 'Manage' : 'Connect AI'}</button>{busy && canCancel && <button className="cancel-agent" onClick={onCancel}><Square size={10} fill="currentColor" />Stop</button>}</div>

@@ -124,7 +124,7 @@ export type AgentPlan = z.infer<typeof agentPlanSchema>;
 export type AgentRedesign = z.infer<typeof agentRedesignSchema>;
 export type AgentEdit = z.infer<typeof agentEditSchema>;
 export type AgentEditAction = z.infer<typeof agentEditActionSchema>;
-export type AgentRuntimeMode = 'session-model' | 'deterministic';
+export type AgentRuntimeMode = 'server-model' | 'session-model' | 'deterministic';
 
 export function normalizeRedesignSequence(decision: AgentRedesign) {
   const evidence = decision.tool_sequence.filter((step) => step.tool !== 'optimize_design' && step.tool !== 'run_simulation').slice(0, 6);
