@@ -20,6 +20,20 @@ export const primitiveCatalog: PrimitiveCatalogItem[] = [
   primitive('frame', 'Frame member', 'Structure', 'Rigid base or housing assembled with other members.', 'box', [3, .22, 1.8], 'steel', 'fixed', ['base', 'housing', 'stability'], '#40545e'),
   primitive('support', 'Ground support', 'Structure', 'Foundation, outrigger, pier, or bearing support.', 'box', [.5, 1, .5], 'steel', 'fixed', ['foundation', 'outrigger', 'pier'], '#596971'),
   primitive('counterweight', 'Counterweight block', 'Structure', 'Explicit balancing mass with editable material and mass.', 'box', [1, .8, .8], 'concrete', 'dynamic', ['balance', 'stability'], '#877867'),
+  primitive('tube', 'Structural tube', 'Vehicle structure', 'Round tubular member for chassis rails, roll cages, forks, booms, and spaceframes.', 'cylinder', [1.6, .07, .07], 'steel', 'fixed', ['chassis', 'spaceframe', 'fork', 'roll-cage'], '#667780'),
+  primitive('body-shell', 'Body shell or fairing', 'Vehicle structure', 'Shaped exterior panel for vehicle noses, side pods, cabins, guards, and aerodynamic fairings.', 'capsule', [1.8, .45, .8], 'composite', 'fixed', ['fairing', 'cabin', 'guard', 'bodywork'], '#426f8b'),
+  primitive('seat', 'Ergonomic seat', 'Vehicle cockpit', 'Bucket seat, saddle, or operator chair with a back, base, and side support.', 'box', [.62, .72, .62], 'polymer', 'fixed', ['seat', 'saddle', 'operator'], '#2f444e'),
+  primitive('steering', 'Steering control', 'Vehicle cockpit', 'Steering wheel, handlebar, control yoke, or tiller connected to directional linkage.', 'cylinder', [.4, .08, .4], 'aluminum', 'fixed', ['steer', 'handlebar', 'yoke', 'tiller'], '#b33b38'),
+  primitive('pedal', 'Control pedal', 'Vehicle cockpit', 'Hinged accelerator, brake, clutch, or human-power pedal with an anti-slip pad.', 'box', [.06, .22, .12], 'aluminum', 'kinematic', ['accelerate', 'brake', 'clutch', 'human-input'], '#8e9da4'),
+  primitive('battery', 'Battery pack', 'Electrical power', 'Cell-based traction or avionics battery with enclosure, terminals, and state indicator.', 'box', [.7, .28, .45], 'polymer', 'fixed', ['energy', 'traction-power', 'avionics'], '#20343f'),
+  primitive('bearing', 'Bearing unit', 'Transmission', 'Rolling-element bearing with inner race, outer race, rolling elements, and mount.', 'cylinder', [.42, .14, .42], 'steel', 'fixed', ['support-shaft', 'reduce-friction', 'rotate'], '#b6c2c7'),
+  primitive('linkage', 'Mechanical linkage', 'Mechanism', 'Pinned rod, tie rod, control arm, pushrod, or robot link with joint eyes.', 'capsule', [1, .09, .09], 'steel', 'dynamic', ['steer', 'articulate', 'transfer-motion'], '#7d8d94'),
+  primitive('aerofoil', 'Aerofoil surface', 'Aviation', 'Wing, stabilizer, rotor blade, or control surface with span, chord, and thickness.', 'box', [3.2, .12, .8], 'composite', 'fixed', ['lift', 'stabilize', 'control-surface'], '#d6dde0'),
+  primitive('fuselage', 'Fuselage or nacelle', 'Aviation', 'Streamlined central body for aircraft, rotorcraft, drones, and engine nacelles.', 'capsule', [3.4, .85, .85], 'aluminum', 'fixed', ['airframe', 'cabin', 'payload'], '#8799a2'),
+  primitive('propeller', 'Propeller assembly', 'Aviation', 'Hub and pitched blades for thrust or cooling with editable diameter and blade count.', 'cylinder', [1.4, .12, 1.4], 'composite', 'dynamic', ['thrust', 'rotate', 'airflow'], '#d6e1e5'),
+  primitive('rotor', 'Rotor assembly', 'Aviation', 'Main or tail rotor hub with long aerodynamic blades and a driven shaft interface.', 'cylinder', [4.2, .12, 4.2], 'composite', 'dynamic', ['lift', 'rotate', 'cyclic'], '#9fb0b7'),
+  primitive('landing-gear', 'Landing gear unit', 'Aviation', 'Shock strut, fork, axle, skid, or wheel carrier for ground support.', 'box', [.3, .9, .35], 'steel', 'fixed', ['ground-support', 'shock', 'taxi'], '#56666d'),
+  primitive('track', 'Continuous track', 'Ground mobility', 'Treaded belt and wheel envelope for tracked robots and off-road vehicles.', 'box', [1.8, .45, .32], 'rubber', 'dynamic', ['traction', 'terrain', 'mobile'], '#20292e'),
   primitive('wheel', 'Wheel primitive', 'Motion', 'Wheel collider with editable diameter, width, and friction.', 'cylinder', [.7, .28, .7], 'rubber', 'dynamic', ['rolling', 'traction'], '#1c252b'),
   primitive('shaft', 'Shaft primitive', 'Transmission', 'Rotating cylindrical shaft for wheels, gears, and pulleys.', 'cylinder', [.16, 1.2, .16], 'steel', 'dynamic', ['rotation', 'torque'], '#98a8ae'),
   primitive('gear', 'Parametric gear', 'Transmission', 'Pitch-radius and tooth-count driven rotating element.', 'cylinder', [1, .18, 1], 'steel', 'dynamic', ['ratio', 'torque', 'rotation'], '#d19b4f'),
@@ -64,6 +78,11 @@ export const engineeringExamples: EngineeringExample[] = [
   { id: 'sorter', sector: 'Logistics', title: 'Two-color package sorter', prompt: 'Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.', description: 'Recognizes each colored box and sends it to the matching collection bin without stopping the belt.', builds: 'Conveyor · vision portal · servo gate · 2 chutes · 2 bins' },
   { id: 'crane', sector: 'Construction', title: 'Counterbalanced tower crane', prompt: 'Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.', description: 'Raises a suspended beam with a winch while outriggers and a rear counterweight keep the crane stable.', builds: 'Base · outriggers · lattice mast · boom · winch · cable · hook' },
   { id: 'rover', sector: 'Robotics', title: 'Four-wheel payload rover', prompt: 'Build a four-wheel rover that carries 50 kg across rough terrain in under 20 seconds without tipping.', description: 'Carries a protected payload over uneven ground with driven wheels and tilt feedback.', builds: 'Chassis · 4 wheels · 2 drive motors · payload bay · IMU' },
+  { id: 'go-kart', sector: 'Vehicle design', title: 'Electric racing go-kart', prompt: 'Build an electric go-kart with four wheels, steering, accelerator and brake pedals.', description: 'Builds a recognizable low tubular kart with protective bodywork, driver controls, rear traction motors, and front-wheel steering.', builds: 'Tubular frame · 4 wheels · side pods · bucket seat · steering · pedals · battery' },
+  { id: 'motorcycle', sector: 'Personal mobility', title: 'Electric motorcycle', prompt: 'Build an electric motorcycle with a headlight and rear wheel drive.', description: 'Creates a two-wheel vehicle with a welded frame, fork, saddle, handlebar, battery, motor, chain, and stability sensor.', builds: '2 wheels · tubular frame · fork · saddle · handlebar · motor · chain' },
+  { id: 'airplane', sector: 'Aviation', title: 'Electric light aircraft', prompt: 'Build an electric fixed-wing aircraft with a propeller and landing gear.', description: 'Assembles a light airplane from a fuselage, lifting wing, tail surfaces, cockpit, powered propeller, and tricycle gear.', builds: 'Fuselage · wing · tail · canopy · propeller · 3 landing gear units' },
+  { id: 'helicopter', sector: 'Aviation', title: 'Utility helicopter', prompt: 'Build a utility helicopter with a main rotor and tail rotor.', description: 'Builds a cabin, tapered tail boom, powered main and tail rotors, landing skids, battery, and stabilized flight control.', builds: 'Cabin · tail boom · main rotor · tail rotor · skids · flight controller' },
+  { id: 'service-robot', sector: 'Robotics', title: 'Humanoid service robot', prompt: 'Build a humanoid service robot with two grippers and stereo vision.', description: 'Composes a readable robot from feet, articulated legs and arms, servo joints, two hands, a vision head, and onboard power.', builds: 'Feet · limb links · servos · torso · 2 grippers · vision · battery' },
   { id: 'arm', sector: 'Automation', title: 'Three-axis robotic arm', prompt: 'Build a three-axis robotic arm with a gripper that reaches 2 meters and places a 12 kg part within 2 cm.', description: 'Uses three articulated links and a parallel gripper to pick up and accurately place a part.', builds: 'Pedestal · shoulder · elbow · wrist · gripper · camera' },
   { id: 'gearbox', sector: 'Powertrain', title: '4:1 reduction gearbox', prompt: 'Build a compact 4:1 gearbox that accepts 120 rpm and delivers at least 80 Nm of torque.', description: 'Trades input speed for output torque through two meshing gears inside a supported housing.', builds: 'Housing · input/output shafts · 2 gears · bearings · motor · encoder' },
   { id: 'suspension', sector: 'Automotive', title: 'Independent car suspension', prompt: 'Build an independent car suspension test rig that keeps the vehicle body within 8 degrees of level over uneven road bumps.', description: 'Shows a recognizable car body, four wheels, control arms, and coil-over springs absorbing different road heights.', builds: 'Car body · chassis · 4 wheels · control arms · 4 coil-overs · IMU' },
@@ -90,7 +109,9 @@ export function catalogFor(kind: PrimitiveKind) {
 export function componentMass(kind: PrimitiveKind, dimensions: Vec3, materialId: string) {
   const material = materialFor(materialId);
   const item = catalogFor(kind);
-  const volume = item.shape === 'cylinder'
+  const volume = kind === 'tube' || kind === 'linkage'
+    ? Math.PI * Math.pow(Math.max(.01, Math.max(dimensions[1], dimensions[2])) / 2, 2) * Math.max(.01, dimensions[0])
+    : item.shape === 'cylinder'
     ? Math.PI * Math.pow(Math.max(.01, dimensions[0]) / 2, 2) * Math.max(.01, dimensions[1])
     : item.shape === 'sphere'
       ? 4 / 3 * Math.PI * Math.pow(Math.max(.01, dimensions[0]) / 2, 3)
@@ -122,6 +143,20 @@ export function componentMass(kind: PrimitiveKind, dimensions: Vec3, materialId:
     gear: .42,
     wheel: .42,
     pulley: .42,
+    tube: .12,
+    bearing: .46,
+    linkage: .18,
+    seat: .08,
+    steering: .14,
+    pedal: .16,
+    battery: .32,
+    'body-shell': .09,
+    aerofoil: .06,
+    fuselage: .07,
+    propeller: .09,
+    rotor: .08,
+    'landing-gear': .18,
+    track: .34,
   };
   const fill = envelopeFill[kind] ?? .72;
   return Number(Math.max(.05, volume * material.density * fill).toFixed(2));

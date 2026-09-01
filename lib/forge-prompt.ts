@@ -10,11 +10,17 @@ export const CHALLENGE_EXAMPLES = engineeringExamples;
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();
 const canonicalizeMechanicalTerms = (value: string) => value
+  .replace(/\b(?:dirt bike|motor cycle|motor-bike|motocycle)\b/gi, 'motorcycle')
   .replace(/\b(?:bycicle|bicicle|bicycel|bicyclee|e[- ]?bike|electric bike|bike)\b/gi, 'bicycle')
-  .replace(/\b(?:go\s*cart|go-cart|gokart)\b/gi, 'go-kart');
+  .replace(/\b(?:go\s*cart|go-cart|gokart)\b/gi, 'go-kart')
+  .replace(/\b(?:aeroplane|air plane)\b/gi, 'airplane');
 const isBicycleBrakeGoal = (text: string) => /\b(?:bicycle|bike)\s+(?:disc\s+)?(?:brake|caliper)\b|\b(?:disc\s+)?(?:brake|caliper)\s+(?:assembly\s+)?(?:for|of)\s+(?:a\s+)?(?:bicycle|bike)\b/.test(text);
 const isBicycleGoal = (text: string) => /\bbicycle\b/.test(text) && !isBicycleBrakeGoal(text);
 const isRoadVehicleGoal = (text: string) => !/\bcar\s+(?:jack|lift|hoist)\b/.test(text) && /\b(?:go-kart|kart|buggy|automobile|car|atv|all-terrain vehicle)\b/.test(text);
+const isMotorcycleGoal = (text: string) => /\b(?:motorcycle|motorbike|dirt bike|scooter)\b/.test(text);
+const isHelicopterGoal = (text: string) => /\b(?:helicopter|rotorcraft|quad(?:copter|rotor)|drone)\b/.test(text);
+const isFixedWingAircraftGoal = (text: string) => !isHelicopterGoal(text) && /\b(?:airplane|fixed[- ]wing aircraft|light aircraft|electric aircraft)\b/.test(text);
+const isGeneralRobotGoal = (text: string) => /\b(?:humanoid|service|walking|quadruped|tracked)\s+robot\b|\brobot\b/.test(text) && !/\b(?:robotic arm|robot arm|mobile robot|rover)\b/.test(text);
 const isCentrifugalPumpGoal = (text: string) => /\bcentrifugal(?:\s+(?:water|process|fluid|coolant))?\s+pump\b/.test(text);
 const isHydraulicPressGoal = (text: string) => /\b(?:hydraulic|shop|workshop|h-frame|c-frame)\s+press\b|\bpress\s+(?:machine|frame)\b/.test(text);
 const isBenchViseGoal = (text: string) => /\b(?:bench|machine|engineer'?s?)\s+vi[cs]e\b|\bvi[cs]e\s+(?:with|using|driven|assembly)\b/.test(text);
@@ -147,13 +153,14 @@ function parseValues(text: string): ParsedValues {
 
 function inferCapabilities(text: string): Capability[] {
   const capabilities = new Set<Capability>(['structure']);
+  const transmissionText = text.replace(/\blanding gear\b/g, '');
   if (/\b(?:conveyors?|packages?|boxes?|sort(?:er|ing|ed|s)?|warehouse|factory line|buffers?|singulat(?:e|ion)|feed(?:er|ing)?|recycl(?:e|ing)|graders?|routing)\b/.test(text)) capabilities.add('transport');
   if (/\b(?:sort(?:er|ing|ed|s)?|separat(?:e|ion)|rout(?:e|ing)|classif(?:y|ication)|inspect(?:ion)?|reject|color|size|material|graders?|recycl(?:e|ing))\b/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
   if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient|\bwinch\b/.test(text)) capabilities.add('lift');
   if (/crane|hoist|suspend|cable|pulley|counterweight|drawbridge|\bwinch\b/.test(text)) capabilities.add('suspend');
-  if (/\b(?:rover|vehicle|mobile robot|bicycle|go-kart|kart|buggy|automobile|car|atv|forklift|agv|truck|tractor|motorcycle)\b/.test(text) && !isBicycleBrakeGoal(text) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(text)) capabilities.add('mobile');
-  if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text)) capabilities.add('manipulate');
-  if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(text)) capabilities.add('transmit');
+  if (/\b(?:rover|vehicle|mobile robot|bicycle|go-kart|kart|buggy|automobile|car|atv|forklift|agv|truck|tractor|motorcycle|motorbike|airplane|aircraft|helicopter|rotorcraft|drone)\b/.test(text) && !isBicycleBrakeGoal(text) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(text)) capabilities.add('mobile');
+  if (/robotic arm|robot arm|manipulat|gripper|pick\s*(?:and|&)\s*place|end effector/.test(text) || isGeneralRobotGoal(text)) capabilities.add('manipulate');
+  if (/gearbox|gear train|transmission|reduction|output torque|\bgears?\b/.test(transmissionText)) capabilities.add('transmit');
   if (isPlanetaryDifferentialGoal(text)) { capabilities.add('rotate'); capabilities.add('transmit'); }
   if (/suspension|spring|rough|uneven|tipping|stability|stabiliz|level/.test(text)) capabilities.add('stabilize');
   const activeTracking = /(?:solar|sun|light source)[^.!?]{0,32}(?:track|follow|aim|orient)|(?:track|follow|aim|orient)[^.!?]{0,32}(?:solar|sun|light source)|blade pitch|turbine yaw/.test(text);
@@ -165,6 +172,8 @@ function inferCapabilities(text: string): Capability[] {
   if (isGrainMillGoal(text)) capabilities.add('contain');
   if (isBottleJackGoal(text)) capabilities.add('stabilize');
   if (/bearing|flange|coupling|sprocket|cam\b|impeller|propeller|fan\b|turbine|rotor/.test(text)) capabilities.add('rotate');
+  if (isMotorcycleGoal(text) || isFixedWingAircraftGoal(text) || isHelicopterGoal(text)) capabilities.add('rotate');
+  if (isFixedWingAircraftGoal(text) || isHelicopterGoal(text) || isGeneralRobotGoal(text)) capabilities.add('stabilize');
   if (/sensor|camera|measure|automatic|control|encoder|imu|switch/.test(text) || isBenchViseGoal(text) || isWindYawGoal(text) || isDrillPressGoal(text) || isRackSteeringGoal(text) || isBicycleBrakeGoal(text) || isGrainMillGoal(text)) capabilities.add('measure');
   if (/hvac|heat exchanger|braz(?:e|ing)|fixture|jig/.test(text)) capabilities.add('measure');
   return [...capabilities];
@@ -182,6 +191,10 @@ function identity(text: string, capabilities: Capability[]) {
   if (isHydraulicPressGoal(text)) return { name: /\bshop\s+press\b/.test(text) ? 'Hydraulic shop press' : 'Hydraulic press', domain: 'Industrial forming equipment' };
   if (isStandaloneWinchGoal(text)) return { name: /\belectric\b/.test(text) ? 'Electric cable winch' : 'Cable drum winch', domain: 'Material handling' };
   if (isPlanetaryDifferentialGoal(text)) return { name: 'Compact planetary differential', domain: 'Power transmission' };
+  if (isMotorcycleGoal(text)) return { name: /electric/.test(text) ? 'Electric motorcycle' : 'Motorcycle', domain: 'Personal mobility' };
+  if (isHelicopterGoal(text)) return { name: /drone|quadcopter|quadrotor/.test(text) ? 'Multi-rotor aircraft' : 'Utility helicopter', domain: 'Rotorcraft engineering' };
+  if (isFixedWingAircraftGoal(text)) return { name: /electric/.test(text) ? 'Electric fixed-wing aircraft' : 'Fixed-wing aircraft', domain: 'Aircraft engineering' };
+  if (isGeneralRobotGoal(text)) return { name: /quadruped/.test(text) ? 'Articulated quadruped robot' : 'Articulated service robot', domain: 'Robotics' };
   const candidates: Array<[RegExp, string, string]> = [
     [/(?:fixture|jig).*(?:hvac|heat exchanger|braz)|(?:hvac|heat exchanger|braz).*(?:fixture|jig)/, 'Precision HVAC brazing fixture', 'HVAC manufacturing'],
     [/braz(?:ed|e)\s+plate|plate\s+heat exchanger|\bbphe\b/, 'Brazed plate heat exchanger', 'HVAC thermal systems'],
@@ -396,14 +409,14 @@ class WorldBuilder {
     return componentId;
   }
 
-  member(primitive: 'beam' | 'cable', role: string, assemblyId: string, start: Vec3, end: Vec3, section: number, materialId = 'steel', bodyType: BodyType = 'fixed', parameters: Record<string, number | string | boolean> = {}) {
+  member(primitive: 'beam' | 'tube' | 'linkage' | 'cable', role: string, assemblyId: string, start: Vec3, end: Vec3, section: number, materialId = 'steel', bodyType: BodyType = 'fixed', parameters: Record<string, number | string | boolean> = {}) {
     const delta = end.map((value, index) => value - start[index]) as Vec3;
     const length = Math.max(.05, Math.hypot(...delta));
     const center = start.map((value, index) => (value + end[index]) / 2) as Vec3;
     if (primitive === 'cable') return this.component('cable', role, assemblyId, center, [section, length, section], materialId, bodyType, { ...parameters, start_x: start[0] + this.origin[0], start_y: start[1] + this.origin[1], start_z: start[2] + this.origin[2], end_x: end[0] + this.origin[0], end_y: end[1] + this.origin[1], end_z: end[2] + this.origin[2] });
     const horizontal = Math.hypot(delta[0], delta[2]);
     const rotation: Vec3 = [0, -Math.atan2(delta[2], Math.max(.0001, horizontal)), Math.atan2(delta[1], Math.max(.0001, horizontal))];
-    const id = this.component('beam', role, assemblyId, center, [length, section, section], materialId, bodyType, { ...parameters, member_length: length });
+    const id = this.component(primitive, role, assemblyId, center, [length, section, section], materialId, bodyType, { ...parameters, member_length: length });
     return this.rotate(id, rotation);
   }
 
@@ -706,7 +719,8 @@ function addAutomotiveSuspension(context: ModuleContext): ModuleResult {
 
 function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   const { builder, text, values, rootAssemblyId } = context;
-  const assembly = builder.assembly('road vehicle assembly', 'Low-profile tubular chassis, four-wheel running gear, steering, cockpit, electric powertrain, braking, sensing, and lighting assembled from reusable primitives', rootAssemblyId);
+  const kart = /\b(?:go-kart|kart)\b/.test(text);
+  const assembly = builder.assembly(kart ? 'go-kart assembly' : 'road vehicle assembly', 'Tubular chassis, four-wheel running gear, steering, cockpit, powertrain, brakes, sensors, bodywork, and lights built from reusable parts', rootAssemblyId);
   const electric = /electric|battery|ev\b/.test(text);
   const offRoad = /buggy|atv|all-terrain|off[- ]road/.test(text);
   const length = offRoad ? 2.75 : 2.45;
@@ -721,7 +735,7 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   const railZ = track * .31;
   const frameBodies: string[] = [];
   const addTube = (role: string, start: Vec3, end: Vec3, section = .065) => {
-    const id = builder.member('beam', role, assembly, start, end, section, 'steel', 'fixed', { round_tube: true, road_vehicle_frame: true });
+    const id = builder.member('tube', role, assembly, start, end, section, 'steel', 'fixed', { round_tube: true, road_vehicle_frame: true });
     frameBodies.push(id);
     return id;
   };
@@ -738,6 +752,19 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   const floor = builder.component('plate', 'go-kart floor pan', assembly, [.02, .62, 0], [1.55, .055, railZ * 1.62], 'aluminum', 'fixed', { road_vehicle_floor: true }, 4.2);
   frameBodies.forEach((body, index) => builder.connect(index ? frameBodies[index - 1] : floor, body, 'mechanical', 'welded_tubular_frame'));
   builder.connect(floor, frameBodies[0], 'mechanical', 'floor_pan_fasteners');
+  if (kart) {
+    for (const side of [-1, 1]) {
+      const pod = builder.component('body-shell', `${side < 0 ? 'left' : 'right'} impact side pod`, assembly, [.02, .68, side * railZ], [1.42, .3, .18], 'composite', 'fixed', { kart_side_pod: true, protective_bodywork: true }, 2.1);
+      builder.components.find((item) => item.id === pod)!.color = '#5466d9';
+      builder.connect(pod, floor, 'mechanical', 'side_pod_bracket');
+    }
+    const nose = builder.component('body-shell', 'aerodynamic front nose fairing', assembly, [length * .43, .67, 0], [.72, .31, railZ * 1.38], 'composite', 'fixed', { kart_nose: true, protective_bodywork: true }, 2.8);
+    builder.components.find((item) => item.id === nose)!.color = '#596be2';
+    const bumper = builder.component('tube', 'wraparound front bumper', assembly, [length * .55, .51, 0], [track * .88, .1, .1], 'steel', 'fixed', { kart_front_bumper: true, round_tube: true }, 2.2);
+    builder.rotate(bumper, [0, Math.PI / 2, 0]);
+    builder.connect(nose, floor, 'mechanical', 'nose_mount');
+    builder.connect(bumper, frameBodies.at(-1)!, 'mechanical', 'bumper_mount');
+  }
 
   const centeredRevolute = (supportId: string, rotaryId: string) => {
     const support = builder.components.find((item) => item.id === supportId)!;
@@ -777,10 +804,12 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
     }
   }
 
-  const seat = builder.component('plate', 'single bucket seat', assembly, [-.3, 1.02, 0], [.62, .72, .62], 'polymer', 'fixed', { road_vehicle_seat: true }, 5.2);
+  const seat = builder.component('seat', 'single high-back bucket seat', assembly, [-.3, 1.02, 0], [.62, .72, .62], 'polymer', 'fixed', { road_vehicle_seat: true, seat_form: 'bucket' }, 5.2);
+  if (kart) builder.components.find((item) => item.id === seat)!.color = '#2ab164';
   builder.connect(seat, floor, 'mechanical', 'seat_rails');
   const column = addTube('steering column', [.45, .69, 0], [.64, 1.21, 0], .045);
-  const steeringWheel = builder.component('wheel', 'steering wheel', assembly, [.66, 1.25, 0], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true }, .68);
+  const steeringWheel = builder.component('steering', 'steering wheel', assembly, [.66, 1.25, 0], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true, control_form: 'wheel' }, .68);
+  if (kart) builder.components.find((item) => item.id === steeringWheel)!.color = '#c94740';
   builder.rotate(steeringWheel, [0, 0, -.36]);
   builder.connect(column, steeringWheel, 'mechanical', 'steering_hub');
   const rack = builder.component('shaft', 'front steering rack', assembly, [frontX - .08, .59, 0], [.07, track * .72, .07], 'steel', 'fixed', { road_vehicle_steering_rack: true }, 2.1);
@@ -788,13 +817,13 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   builder.connect(column, rack, 'mechanical', 'steering_pinion');
   for (const side of [-1, 1]) addTube(`${side < 0 ? 'left' : 'right'} steering tie rod`, [frontX - .08, .59, side * .12], [frontX, wheelY, side * track * .41], .028);
 
-  const battery = builder.component('controller', electric ? 'high-voltage traction battery' : 'starter battery', assembly, [rearX + .12, .82, 0], [.62, .3, .5], 'polymer', 'fixed', { road_vehicle_battery: true }, electric ? 18 : 7);
+  const battery = builder.component('battery', electric ? 'high-voltage traction battery' : 'starter battery', assembly, [rearX + .12, .82, 0], [.62, .3, .5], 'polymer', 'fixed', { road_vehicle_battery: true }, electric ? 18 : 7);
   const controller = builder.component('controller', electric ? 'dual-motor inverter controller' : 'powertrain controller', assembly, [-.03, .79, railZ * .75], [.38, .24, .26], 'polymer', 'fixed', { road_vehicle_controller: true }, 1.7);
   // The driver faces +X: negative Z is the left foot and positive Z the right.
   // Each pedal component is anchored at its floor pivot; the scene composes a
   // visible lever and upright foot pad from this low-level plate primitive.
-  const pedal = builder.component('plate', 'accelerator pedal', assembly, [.38, .65, .13], [.038, .18, .095], 'aluminum', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'accelerator' }, .22);
-  const brakePedal = builder.component('plate', 'brake pedal', assembly, [.38, .65, -.13], [.042, .19, .135], 'steel', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'brake' }, .28);
+  const pedal = builder.component('pedal', 'accelerator pedal', assembly, [.38, .65, .13], [.038, .18, .095], 'aluminum', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'accelerator' }, .22);
+  const brakePedal = builder.component('pedal', 'brake pedal', assembly, [.38, .65, -.13], [.042, .19, .135], 'steel', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'brake' }, .28);
   for (const item of [battery, controller, pedal, brakePedal]) builder.connect(item, floor, 'mechanical', 'cockpit_mount');
   builder.connect(battery, controller, 'power', 'dc_traction_bus');
   driveMotors.forEach((motor) => builder.connect(controller, motor, 'signal', 'motor_torque_command'));
@@ -814,6 +843,176 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   }
 
   return { id: 'low-profile-road-vehicle', mountId: floor, editableId: steeringWheel, handles: ['mobile', 'measure'] };
+}
+
+function addMotorcycle(context: ModuleContext): ModuleResult {
+  const { builder, text, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('motorcycle assembly', 'Two-wheel powered vehicle assembled from a tubular frame, steering fork, saddle, wheels, brakes, power unit, controls, suspension, and lighting', rootAssemblyId);
+  const electric = /electric|battery/.test(text);
+  const rear: Vec3 = [-1.12, .62, 0];
+  const front: Vec3 = [1.18, .62, 0];
+  const wheelDiameter = /dirt|off[- ]road/.test(text) ? 1.12 : 1.02;
+  const frameIds: string[] = [];
+  const tube = (role: string, start: Vec3, end: Vec3, section = .065) => {
+    const id = builder.member('tube', role, assembly, start, end, section, 'aluminum', 'fixed', { motorcycle_frame: true, round_tube: true });
+    frameIds.push(id);
+    return id;
+  };
+  const rearDropout = builder.component('bearing', 'rear wheel bearing and swingarm pivot', assembly, rear, [.2, .18, .2], 'steel', 'fixed', { motorcycle_bearing: true }, .7);
+  const frontDropout = builder.component('bearing', 'front steering axle bearing', assembly, front, [.2, .18, .2], 'steel', 'fixed', { motorcycle_bearing: true }, .7);
+  tube('lower cradle tube', [-.85, .78, 0], [.65, .8, 0], .08);
+  tube('upper backbone tube', [-.62, 1.32, 0], [.58, 1.46, 0], .09);
+  tube('rear frame stay', rear, [-.62, 1.32, 0], .065);
+  tube('front down tube', [.58, 1.46, 0], [.65, .8, 0], .075);
+  for (const side of [-1, 1]) {
+    tube(`${side < 0 ? 'left' : 'right'} rear swingarm`, rear.map((value, index) => index === 2 ? side * .11 : value) as Vec3, [-.42, .82, side * .11], .065);
+    tube(`${side < 0 ? 'left' : 'right'} telescopic fork`, [front[0], front[1], side * .11], [.72, 1.58, side * .11], .07);
+  }
+  frameIds.forEach((id, index) => builder.connect(index ? frameIds[index - 1] : rearDropout, id, 'mechanical', 'welded_motorcycle_frame'));
+  builder.connect(frameIds.at(-1)!, frontDropout, 'mechanical', 'front_fork_axle');
+
+  const centeredWheel = (support: string, role: string, position: Vec3, frontSteering: boolean) => {
+    const wheel = builder.component('wheel', role, assembly, position, [wheelDiameter, .16, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, road_vehicle_front_steering: frontSteering, steering_side: 'center', motorcycle_wheel: true, friction: 1.08 }, 4.6);
+    const joint = builder.joint('revolute', support, wheel, [0, 0, 1]);
+    const supportBody = builder.components.find((item) => item.id === support)!;
+    const hinge = builder.joints.find((item) => item.id === joint)!;
+    hinge.anchorA = position.map((value, index) => value - supportBody.position[index]) as Vec3;
+    hinge.anchorB = [0, 0, 0];
+    hinge.limits = undefined;
+    return { wheel, joint };
+  };
+  const rearWheel = centeredWheel(rearDropout, 'rear driven motorcycle wheel', rear, false);
+  centeredWheel(frontDropout, 'front steering motorcycle wheel', front, true);
+  const seat = builder.component('seat', 'contoured rider saddle', assembly, [-.36, 1.48, 0], [.72, .16, .38], 'polymer', 'fixed', { seat_form: 'saddle', motorcycle_seat: true }, 1.4);
+  const steering = builder.component('steering', 'motorcycle handlebar control', assembly, [.7, 1.72, 0], [.22, .12, .82], 'steel', 'fixed', { control_form: 'handlebar', motorcycle_handlebar: true }, 1.1);
+  const power = builder.component(electric ? 'battery' : 'body-shell', electric ? 'traction battery pack' : 'compact engine and fuel system', assembly, [-.05, 1.02, 0], [.64, .52, .42], electric ? 'polymer' : 'aluminum', 'fixed', { motorcycle_power_unit: true }, electric ? 12 : 18);
+  const motor = builder.component('motor', electric ? 'electric motorcycle drive motor' : 'motorcycle engine output drive', assembly, [-.45, .83, .12], [.38, .22, .38], 'aluminum', 'kinematic', { motorcycle_motor: true }, 6.5);
+  const chain = builder.component('belt', 'rear wheel chain drive', assembly, [-.77, .73, .12], [.95, .035, .25], 'steel', 'kinematic', { bicycle_chain: true, motorcycle_chain: true }, .9);
+  const drive = builder.motor(motor, rearWheel.joint, Math.max(95, values.torqueNm * 1.5), 520, -1);
+  builder.joint('belt', motor, rearWheel.wheel, [0, 0, 1], { ratio: 3.1 });
+  for (const id of [seat, steering, power, motor, chain]) builder.connect(id, frameIds[0], id === motor || id === chain ? 'mechanical' : 'mechanical', 'motorcycle_mount');
+  const headlight = builder.component('light', 'round LED motorcycle headlight', assembly, [.88, 1.45, 0], [.27, .2, .27], 'aluminum', 'fixed', { headlight: true, beam_range: 5 }, .42);
+  const imuBody = builder.component('sensor', 'lean and wheel-speed sensor', assembly, [-.05, 1.36, .18], [.14, .11, .1], 'polymer', 'fixed', { motorcycle_imu: true }, .08);
+  const imu = builder.sensor(imuBody, 'imu', 'motorcycle_lean', frameIds[0], 4);
+  builder.connect(headlight, power, 'power', 'lighting_bus');
+  builder.connect(imuBody, frameIds[0], 'mechanical', 'sensor_mount');
+  builder.control('motorcycle stability and drive', 'pid', [imu], [], 'coordinate throttle with measured lean and wheel speed while preserving rider steering input', 0);
+  return { id: 'motorcycle', mountId: frameIds[0], editableId: steering, handles: ['mobile', 'rotate', 'stabilize', 'measure'], driveId: drive };
+}
+
+function addFixedWingAircraft(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('fixed-wing aircraft assembly', 'Recognizable light aircraft assembled from fuselage, wings, tail surfaces, propeller, landing gear, power, flight controls, and sensors', rootAssemblyId);
+  const fuselage = builder.component('fuselage', 'streamlined aircraft fuselage', assembly, [0, 1.3, 0], [4.2, .86, .82], 'aluminum', 'fixed', { aircraft_fuselage: true }, 86);
+  const canopy = builder.component('body-shell', 'transparent cockpit canopy', assembly, [.42, 1.72, 0], [1.05, .5, .68], 'composite', 'fixed', { cockpit_canopy: true, aircraft_cockpit: true }, 8);
+  const wing = builder.component('aerofoil', 'main lifting wing', assembly, [-.05, 1.32, 0], [1.35, .13, 5.1], 'composite', 'fixed', { aircraft_wing: true, aerofoil_role: 'main' }, 28);
+  const tailplane = builder.component('aerofoil', 'horizontal tail stabilizer', assembly, [-1.72, 1.48, 0], [.82, .09, 1.85], 'composite', 'fixed', { aircraft_wing: true, aerofoil_role: 'tail' }, 5.5);
+  const fin = builder.component('aerofoil', 'vertical tail fin and rudder', assembly, [-1.75, 1.88, 0], [.78, .08, .88], 'composite', 'fixed', { aircraft_fin: true }, 4.2);
+  builder.rotate(fin, [Math.PI / 2, 0, 0]);
+  for (const id of [canopy, wing, tailplane, fin]) builder.connect(id, fuselage, 'mechanical', 'airframe_structure');
+  const motor = builder.component('motor', 'nose-mounted propulsion motor', assembly, [1.95, 1.3, 0], [.42, .52, .52], 'aluminum', 'fixed', { aircraft_motor: true }, 18);
+  const propeller = builder.component('propeller', 'three-blade aircraft propeller', assembly, [2.28, 1.3, 0], [1.52, .16, 1.52], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'forward', operation_spin: true }, 3.6);
+  builder.rotate(propeller, [0, Math.PI / 2, 0]);
+  const propJoint = builder.joint('revolute', motor, propeller, [1, 0, 0]);
+  const propBody = builder.components.find((item) => item.id === propeller)!;
+  const motorBody = builder.components.find((item) => item.id === motor)!;
+  const hinge = builder.joints.find((item) => item.id === propJoint)!;
+  hinge.anchorA = propBody.position.map((value, index) => value - motorBody.position[index]) as Vec3;
+  hinge.anchorB = [0, 0, 0];
+  hinge.limits = undefined;
+  const drive = builder.motor(motor, propJoint, Math.max(140, values.torqueNm * 2), 2200);
+  builder.connect(motor, fuselage, 'mechanical', 'firewall_motor_mount');
+  for (const [role, position] of [
+    ['left main landing gear', [-.38, .72, -.78] as Vec3], ['right main landing gear', [-.38, .72, .78] as Vec3], ['nose landing gear', [1.35, .7, 0] as Vec3],
+  ] as const) {
+    const gear = builder.component('landing-gear', role, assembly, position, [.38, .72, .24], 'steel', 'fixed', { aircraft_landing_gear: true }, 7);
+    builder.connect(gear, fuselage, 'mechanical', 'landing_gear_mount');
+  }
+  const battery = builder.component('battery', 'aircraft propulsion battery', assembly, [.3, 1.2, 0], [.78, .3, .48], 'polymer', 'fixed', { aircraft_battery: true }, 24);
+  const controller = builder.component('controller', 'flight controller and motor inverter', assembly, [-.35, 1.22, 0], [.38, .23, .34], 'polymer', 'fixed', { aircraft_controller: true }, 2.2);
+  const camera = builder.component('camera', 'forward navigation camera', assembly, [1.35, 1.48, 0], [.18, .14, .16], 'polymer', 'fixed', { aircraft_camera: true }, .18);
+  const imu = builder.sensor(camera, 'imu', 'aircraft_attitude', fuselage, 12);
+  builder.connect(battery, controller, 'power', 'flight_power_bus'); builder.connect(controller, motor, 'signal', 'propulsion_command');
+  builder.control('aircraft attitude and propulsion', 'pid', [imu], [], 'stabilize pitch and roll, animate the propeller, and preserve pilot control-surface commands', 0);
+  return { id: 'fixed-wing-aircraft', mountId: fuselage, editableId: wing, handles: ['mobile', 'rotate', 'stabilize', 'measure'], outputId: propeller, driveId: drive };
+}
+
+function addHelicopter(context: ModuleContext): ModuleResult {
+  const { builder, values, rootAssemblyId } = context;
+  const assembly = builder.assembly('helicopter assembly', 'Rotorcraft assembled from a cabin, tail boom, powered main rotor, anti-torque tail rotor, skids, controls, battery, and flight sensors', rootAssemblyId);
+  const fuselage = builder.component('fuselage', 'helicopter cabin fuselage', assembly, [.25, 1.42, 0], [2.05, 1.1, 1.25], 'aluminum', 'fixed', { helicopter_fuselage: true }, 105);
+  const canopy = builder.component('body-shell', 'wraparound cockpit canopy', assembly, [.85, 1.56, 0], [.88, .72, 1.05], 'composite', 'fixed', { cockpit_canopy: true, helicopter_canopy: true }, 10);
+  const tailBoom = builder.member('tube', 'tapered tail boom', assembly, [-.45, 1.52, 0], [-2.45, 1.62, 0], .2, 'aluminum', 'fixed', { helicopter_tail_boom: true, round_tube: true });
+  builder.connect(canopy, fuselage, 'mechanical', 'cabin_shell'); builder.connect(tailBoom, fuselage, 'mechanical', 'tail_boom_mount');
+  const mast = builder.component('shaft', 'main rotor mast', assembly, [.05, 2.2, 0], [.16, .82, .16], 'steel', 'fixed', { helicopter_mast: true }, 8);
+  const rotor = builder.component('rotor', 'four-blade main lift rotor', assembly, [.05, 2.64, 0], [5.0, .12, 5.0], 'composite', 'dynamic', { blade_count: 4, rotor_axis: 'vertical', operation_spin: true, main_rotor: true }, 14);
+  const mainJoint = builder.joint('revolute', mast, rotor, [0, 1, 0]);
+  const mastBody = builder.components.find((item) => item.id === mast)!;
+  const rotorBody = builder.components.find((item) => item.id === rotor)!;
+  const mainHinge = builder.joints.find((item) => item.id === mainJoint)!;
+  mainHinge.anchorA = rotorBody.position.map((value, index) => value - mastBody.position[index]) as Vec3; mainHinge.anchorB = [0, 0, 0]; mainHinge.limits = undefined;
+  const mainMotor = builder.component('motor', 'main rotor electric motor', assembly, [.05, 2.03, 0], [.44, .38, .44], 'aluminum', 'fixed', { helicopter_motor: true }, 28);
+  const mainDrive = builder.motor(mainMotor, mainJoint, Math.max(260, values.torqueNm * 3.5), 520);
+  const tailMotor = builder.component('motor', 'tail rotor motor', assembly, [-2.42, 1.62, 0], [.25, .28, .25], 'aluminum', 'fixed', { helicopter_tail_motor: true }, 5);
+  const tailRotor = builder.component('propeller', 'anti-torque tail rotor', assembly, [-2.54, 1.62, 0], [1.02, .1, 1.02], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'tail', operation_spin: true, tail_rotor: true }, 2.1);
+  builder.rotate(tailRotor, [0, Math.PI / 2, 0]);
+  const tailJoint = builder.joint('revolute', tailMotor, tailRotor, [1, 0, 0]);
+  const tailMotorBody = builder.components.find((item) => item.id === tailMotor)!;
+  const tailRotorBody = builder.components.find((item) => item.id === tailRotor)!;
+  const tailHinge = builder.joints.find((item) => item.id === tailJoint)!;
+  tailHinge.anchorA = tailRotorBody.position.map((value, index) => value - tailMotorBody.position[index]) as Vec3; tailHinge.anchorB = [0, 0, 0]; tailHinge.limits = undefined;
+  builder.motor(tailMotor, tailJoint, 55, 1600);
+  builder.connect(mast, fuselage, 'mechanical', 'rotor_transmission_mount'); builder.connect(mainMotor, mast, 'power', 'main_rotor_drive'); builder.connect(tailMotor, tailBoom, 'mechanical', 'tail_motor_mount');
+  for (const side of [-1, 1]) {
+    const skid = builder.member('tube', `${side < 0 ? 'left' : 'right'} landing skid`, assembly, [-.78, .5, side * .62], [1.05, .5, side * .62], .08, 'steel', 'fixed', { helicopter_skid: true, grounded_structure: true });
+    const frontStrut = builder.member('tube', `${side < 0 ? 'left' : 'right'} front skid strut`, assembly, [.65, .52, side * .62], [.55, 1.08, side * .45], .055, 'steel', 'fixed');
+    const rearStrut = builder.member('tube', `${side < 0 ? 'left' : 'right'} rear skid strut`, assembly, [-.48, .52, side * .62], [-.35, 1.02, side * .45], .055, 'steel', 'fixed');
+    builder.connect(skid, frontStrut, 'mechanical', 'skid_weld'); builder.connect(frontStrut, fuselage, 'mechanical', 'landing_gear_mount'); builder.connect(rearStrut, fuselage, 'mechanical', 'landing_gear_mount');
+  }
+  const battery = builder.component('battery', 'rotorcraft battery pack', assembly, [.1, 1.16, 0], [.72, .28, .62], 'polymer', 'fixed', { helicopter_battery: true }, 34);
+  const flightComputer = builder.component('controller', 'rotorcraft flight computer', assembly, [-.25, 1.46, .38], [.3, .2, .2], 'polymer', 'fixed', { helicopter_controller: true }, 1.4);
+  const imuBody = builder.component('sensor', 'six-axis rotorcraft IMU', assembly, [.05, 1.78, 0], [.16, .12, .14], 'polymer', 'fixed', { helicopter_imu: true }, .1);
+  const imu = builder.sensor(imuBody, 'imu', 'rotorcraft_attitude', fuselage, 8);
+  builder.connect(battery, flightComputer, 'power', 'flight_bus'); builder.connect(flightComputer, mainMotor, 'signal', 'collective_speed'); builder.connect(flightComputer, tailMotor, 'signal', 'yaw_command');
+  builder.control('rotorcraft stabilization', 'pid', [imu], [], 'coordinate main-rotor lift and tail-rotor anti-torque while maintaining level attitude', 0);
+  return { id: 'helicopter', mountId: fuselage, editableId: rotor, handles: ['mobile', 'rotate', 'stabilize', 'measure'], outputId: tailRotor, driveId: mainDrive };
+}
+
+function addGeneralRobot(context: ModuleContext): ModuleResult {
+  const { builder, rootAssemblyId } = context;
+  const assembly = builder.assembly('articulated service robot', 'Human-readable robot assembled from feet, articulated limbs, torso shell, powered joints, grippers, battery, controller, and vision sensor', rootAssemblyId);
+  const leftFoot = builder.component('support', 'left stabilizing robot foot', assembly, [0, .16, -.32], [.62, .18, .28], 'steel', 'fixed', { robot_foot: true, grounded_structure: true }, 12);
+  const rightFoot = builder.component('support', 'right stabilizing robot foot', assembly, [0, .16, .32], [.62, .18, .28], 'steel', 'fixed', { robot_foot: true, grounded_structure: true }, 12);
+  const pelvis = builder.component('body-shell', 'robot pelvis housing', assembly, [0, 1.12, 0], [.72, .36, .68], 'composite', 'fixed', { robot_body: true }, 14);
+  for (const [side, foot] of [[-1, leftFoot], [1, rightFoot]] as const) {
+    const lower = builder.member('linkage', `${side < 0 ? 'left' : 'right'} shin link`, assembly, [0, .32, side * .28], [0, .78, side * .28], .13, 'aluminum', 'kinematic', { robot_limb: true });
+    const upper = builder.member('linkage', `${side < 0 ? 'left' : 'right'} thigh link`, assembly, [0, .78, side * .28], [0, 1.12, side * .24], .15, 'aluminum', 'kinematic', { robot_limb: true });
+    builder.joint('revolute', foot, lower, [0, 0, 1], { limits: [-.3, .3] }); builder.joint('revolute', lower, upper, [0, 0, 1], { limits: [-.8, .25] }); builder.joint('revolute', upper, pelvis, [0, 0, 1], { limits: [-.45, .45] });
+  }
+  const torso = builder.component('body-shell', 'service robot torso shell', assembly, [0, 1.72, 0], [.82, .95, .68], 'composite', 'fixed', { robot_body: true, robot_torso: true }, 22);
+  builder.connect(torso, pelvis, 'mechanical', 'waist_joint');
+  const head = builder.component('camera', 'stereo vision robot head', assembly, [.08, 2.42, 0], [.42, .34, .42], 'polymer', 'fixed', { robot_head: true }, 3);
+  builder.connect(head, torso, 'mechanical', 'neck_mount');
+  const vision = builder.sensor(head, 'camera', 'robot_vision', torso, 8);
+  const actuators: string[] = [];
+  for (const side of [-1, 1]) {
+    const shoulder = builder.component('servo', `${side < 0 ? 'left' : 'right'} shoulder servo`, assembly, [0, 2.0, side * .52], [.24, .3, .24], 'aluminum', 'kinematic', { robot_joint: true }, 2.8);
+    const upper = builder.member('linkage', `${side < 0 ? 'left' : 'right'} upper arm link`, assembly, [0, 1.98, side * .62], [.12, 1.48, side * .74], .13, 'aluminum', 'kinematic', { robot_limb: true });
+    const forearm = builder.member('linkage', `${side < 0 ? 'left' : 'right'} forearm link`, assembly, [.12, 1.48, side * .74], [.42, 1.12, side * .78], .11, 'aluminum', 'kinematic', { robot_limb: true });
+    const gripper = builder.component('gripper', `${side < 0 ? 'left' : 'right'} adaptive hand gripper`, assembly, [.48, 1.04, side * .78], [.3, .24, .25], 'aluminum', 'kinematic', { robot_hand: true }, 1.4);
+    const shoulderJoint = builder.joint('revolute', torso, upper, [1, 0, 0], { limits: [-1.1, 1.1] });
+    const elbowJoint = builder.joint('revolute', upper, forearm, [0, 0, 1], { limits: [-1.4, 0] });
+    builder.joint('revolute', forearm, gripper, [1, 0, 0], { limits: [-.6, .6] });
+    builder.connect(shoulder, torso, 'mechanical', 'shoulder_mount');
+    actuators.push(builder.actuator(shoulder, shoulderJoint, 'servo', 420, 1.2, 2.2));
+    const elbowServo = builder.component('servo', `${side < 0 ? 'left' : 'right'} elbow servo`, assembly, [.12, 1.48, side * .74], [.2, .24, .2], 'aluminum', 'kinematic', { robot_joint: true }, 1.8);
+    actuators.push(builder.actuator(elbowServo, elbowJoint, 'servo', 260, 1.5, 1.4));
+  }
+  const battery = builder.component('battery', 'removable robot battery', assembly, [-.38, 1.7, 0], [.25, .55, .42], 'polymer', 'fixed', { robot_battery: true }, 11);
+  const controller = builder.component('controller', 'robot motion controller', assembly, [0, 1.68, .36], [.28, .3, .18], 'polymer', 'fixed', { robot_controller: true }, 1.2);
+  builder.connect(battery, controller, 'power', 'robot_power_bus');
+  builder.control('whole-body robot motion', 'synchronized', [vision], actuators, 'coordinate both arms and leg joints while maintaining a stable support polygon and preserving human edits', 0);
+  return { id: 'articulated-service-robot', mountId: pelvis, editableId: head, handles: ['manipulate', 'stabilize', 'measure'] };
 }
 
 function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
@@ -2281,6 +2480,10 @@ function addBrazedPlateHeatExchanger(context: ModuleContext): ModuleResult {
 
 const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
   ['beam', /\bbeams?\b/], ['plate', /\bplates?\b/], ['frame', /\bframes?\b/], ['wheel', /\b(?:fly[- ]?wheels?|wheels?)\b/],
+  ['tube', /\b(?:tubes?|tubular members?)\b/], ['bearing', /\bbearings?\b/], ['linkage', /\b(?:linkages?|links?)\b/],
+  ['seat', /\b(?:seats?|saddles?)\b/], ['steering', /\b(?:steering wheels?|handlebars?|control yokes?)\b/], ['pedal', /\bpedals?\b/], ['battery', /\bbatter(?:y|ies)\b/],
+  ['body-shell', /\b(?:body shells?|fairings?|cowling|canop(?:y|ies))\b/], ['aerofoil', /\b(?:aerofoils?|airfoils?|wings?)\b/], ['fuselage', /\bfuselages?\b/],
+  ['propeller', /\bpropellers?\b/], ['rotor', /\brotors?\b/], ['landing-gear', /\blanding gear\b/], ['track', /\b(?:continuous )?tracks?\b/],
   ['shaft', /\bshafts?\b/], ['gear', /\bgears?\b/], ['pulley', /\bpulleys?\b/], ['belt', /\bbelts?\b/],
   ['motor', /\bmotors?\b/], ['servo', /\bservos?\b/], ['piston', /\bpistons?\b/], ['spring', /\bsprings?\b/],
   ['sensor', /\bsensors?\b/], ['camera', /\bcameras?\b/], ['conveyor', /\bconveyors?\b/], ['ramp', /\bramps?\b/],
@@ -2292,9 +2495,10 @@ const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
 function requestedPrimitiveCounts(text: string) {
   const result = new Map<PrimitiveKind, number>();
   for (const [kind, noun] of requestedPrimitivePatterns) {
+    const searchable = kind === 'gear' ? text.replace(/\blanding gear\b/g, '') : text;
     const source = noun.source.replace(/^\\b|\\b$/g, '');
     const wordPattern = Object.keys(NUMBER_WORDS).join('|');
-    const match = text.match(new RegExp(`(?:(${wordPattern}|\\d+)\\s+(?:[a-z-]+\\s+){0,2})?${source}\\b`));
+    const match = searchable.match(new RegExp(`(?:(${wordPattern}|\\d+)\\s+(?:[a-z-]+\\s+){0,2})?${source}\\b`));
     if (!match) continue;
     result.set(kind, match[1] ? Math.min(12, NUMBER_WORDS[match[1]] ?? Number(match[1])) : 1);
   }
@@ -2312,7 +2516,7 @@ function addRequestedPrimitiveBodies(context: ModuleContext, missing: Array<[Pri
   let offset = 0;
   for (const [kind, count] of missing) for (let index = 0; index < count; index += 1) {
     offset += 1;
-    const dynamic = ['gear', 'wheel', 'pulley', 'piston', 'servo', 'gripper', 'hook', 'spring'].includes(kind);
+    const dynamic = ['gear', 'wheel', 'pulley', 'piston', 'servo', 'gripper', 'hook', 'spring', 'propeller', 'rotor', 'linkage'].includes(kind);
     const body = builder.component(kind, `requested ${kind} ${index + 1}`, assembly, [
       mountPosition[0] + .55 + offset * .48,
       Math.max(.9, mountPosition[1] + .75 + (offset % 2) * .42),
@@ -2346,13 +2550,17 @@ const moduleRules: ModuleRule[] = [
   { id: 'hydraulic-press', matches: ({ text }) => isHydraulicPressGoal(text), compose: addHydraulicPress },
   { id: 'drum-winch', matches: ({ text }) => isStandaloneWinchGoal(text), compose: addDrumWinch },
   { id: 'span-members', matches: ({ text }) => /bridge|truss|structural span/.test(text), compose: addSpanMembers },
+  { id: 'motorcycle', matches: ({ text }) => isMotorcycleGoal(text), compose: addMotorcycle },
+  { id: 'fixed-wing-aircraft', matches: ({ text }) => isFixedWingAircraftGoal(text), compose: addFixedWingAircraft },
+  { id: 'helicopter', matches: ({ text }) => isHelicopterGoal(text), compose: addHelicopter },
+  { id: 'general-robot', matches: ({ text }) => isGeneralRobotGoal(text), compose: addGeneralRobot },
   { id: 'single-track-vehicle', matches: ({ text }) => isBicycleGoal(text), compose: addSingleTrackVehicle },
   { id: 'automotive-suspension', matches: ({ text }) => /suspension|coil[- ]?over|wishbone/.test(text), compose: addAutomotiveSuspension },
   { id: 'low-profile-road-vehicle', matches: ({ text }) => isRoadVehicleGoal(text) && !/suspension|coil[- ]?over|wishbone/.test(text), compose: addLowProfileRoadVehicle },
-  { id: 'rolling-support', matches: ({ text, capabilities }) => capabilities.includes('mobile') && !isBicycleGoal(text) && !isRoadVehicleGoal(text) && !/suspension|coil[- ]?over|wishbone/.test(text), compose: addRollingSupport },
+  { id: 'rolling-support', matches: ({ text, capabilities }) => capabilities.includes('mobile') && !isBicycleGoal(text) && !isRoadVehicleGoal(text) && !isMotorcycleGoal(text) && !isFixedWingAircraftGoal(text) && !isHelicopterGoal(text) && !isGeneralRobotGoal(text) && !/suspension|coil[- ]?over|wishbone/.test(text), compose: addRollingSupport },
   { id: 'planetary-differential', matches: ({ text }) => isPlanetaryDifferentialGoal(text), compose: addPlanetaryDifferential },
   { id: 'rotary-transmission', matches: ({ text, capabilities }) => capabilities.includes('transmit') && !isPlanetaryDifferentialGoal(text), compose: addRotaryTransmission },
-  { id: 'serial-linkage', matches: ({ capabilities }) => capabilities.includes('manipulate'), compose: addSerialLinkage },
+  { id: 'serial-linkage', matches: ({ text, capabilities }) => capabilities.includes('manipulate') && !isGeneralRobotGoal(text), compose: addSerialLinkage },
   { id: 'cable-suspension', matches: ({ text, capabilities }) => capabilities.includes('lift') && capabilities.includes('suspend') && !isStandaloneWinchGoal(text) && !/bridge|truss/.test(text), compose: addCableSuspension },
   { id: 'patient-lift', matches: ({ text }) => /patient/.test(text), compose: addPatientLift },
   { id: 'scissor-linkage-lift', matches: ({ text }) => isScissorLiftGoal(text), compose: addScissorLift },
@@ -2365,7 +2573,7 @@ const moduleRules: ModuleRule[] = [
   { id: 'centrifugal-pump', matches: ({ text }) => isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text), compose: addCentrifugalPump },
   { id: 'reciprocating-linkage', matches: ({ text }) => /reciprocat|piston pump|plunger pump/.test(text), compose: addReciprocatingLinkage },
   { id: 'closed-linkage', matches: ({ text }) => /four[- ]bar|linkage/.test(text), compose: addFourBar },
-  { id: 'parametric-cad-part', matches: ({ text }) => /\b(?:bearing|seal|flange|shaft|cover|coupling|sprocket|cam|impeller|propeller|fan|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe)\b/.test(text) && !isWindYawGoal(text) && !isPlanetaryDifferentialGoal(text) && (!isCentrifugalPumpGoal(text) || isCentrifugalPumpPartGoal(text)) && !/heat exchanger|braz/.test(text), compose: addParametricCadPart },
+  { id: 'parametric-cad-part', matches: ({ text }) => /\b(?:bearing|seal|flange|shaft|cover|coupling|sprocket|cam|impeller|propeller|fan|turbine|rotor|bracket|housing|enclosure|casing|manifold|duct|pipe)\b/.test(text) && !isWindYawGoal(text) && !isPlanetaryDifferentialGoal(text) && !isMotorcycleGoal(text) && !isFixedWingAircraftGoal(text) && !isHelicopterGoal(text) && !isGeneralRobotGoal(text) && (!isCentrifugalPumpGoal(text) || isCentrifugalPumpPartGoal(text)) && !/heat exchanger|braz/.test(text), compose: addParametricCadPart },
 ];
 
 export function compileDesignBrief(raw: string): CompiledWorldPlan {

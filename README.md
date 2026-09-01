@@ -8,7 +8,7 @@ The runtime is explicit about what is doing the work:
 - **Local deterministic engineer** — when no model key is available, ForgeTwin remains fully functional and runs the compositional planner, guarded tools, Rapier simulation, and bounded evidence-driven optimizer locally. The UI labels this mode honestly; it is never presented as a connected model.
 - **External WebMCP agent** — in a browser host that implements `document.modelContext`, all scoped tools are registered against the same live world. A normal browser without that host is reported as “WebMCP host not connected.”
 
-There is no conveyor-first workflow and no catalog of complete machines. The same world model can compose conveyors, cranes, lifts, rovers, robotic mechanisms, gear trains, suspension, solar trackers, structural spans, warehouse systems, agricultural equipment, factory buffers, medical lifting concepts, recycling systems, or a novel mechanism assembled from lower-level bodies.
+There is no conveyor-first workflow and no catalog of complete machines. The 39-part vocabulary spans structure, power transmission, controls, road vehicles, motorcycles, aircraft, rotorcraft, tracked mobility, and articulated robots. The same world model can compose conveyors, cranes, lifts, go-karts, bicycles, motorcycles, airplanes, helicopters, rovers, robotic mechanisms, gear trains, suspension, solar trackers, structural spans, warehouse systems, agricultural equipment, factory buffers, medical lifting concepts, recycling systems, or a novel mechanism assembled from lower-level bodies.
 
 ## The core loop
 
@@ -32,6 +32,10 @@ Try prompts such as:
 - “Design a 4:1 gearbox with 120 rpm input and at least 80 N·m output torque.”
 - “Build a rover that carries 5 kg across uneven terrain in under 20 seconds.”
 - “Build a solar-powered electric bicycle.”
+- “Build an electric go-kart with four wheels, steering, accelerator and brake pedals.”
+- “Build an electric fixed-wing aircraft with a propeller and landing gear.”
+- “Build a utility helicopter with a main rotor and tail rotor.”
+- “Build a humanoid service robot with two grippers and stereo vision.”
 - “Create an 8 meter bridge that supports 3,000 kg with less than 6 mm deflection.”
 - “Build an automatic rotating hatch with an obstruction sensor.”
 

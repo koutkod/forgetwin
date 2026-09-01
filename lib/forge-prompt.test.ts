@@ -121,6 +121,11 @@ describe('ForgeTwin world-first brief compiler', () => {
       sorter: (plan) => ['package-red', 'package-blue'].every((form) => plan.components.some((item) => item.parameters?.product_form === form)) && plan.components.filter((item) => item.parameters?.sorting_bin).length === 2,
       crane: (plan) => plan.components.some((item) => item.parameters?.crane_winch) && plan.components.some((item) => item.primitive === 'hook') && plan.components.some((item) => item.primitive === 'counterweight'),
       rover: (plan) => plan.components.some((item) => item.parameters?.rover_chassis) && plan.components.filter((item) => item.parameters?.rover_wheel).length === 4,
+      'go-kart': (plan) => plan.components.filter((item) => item.parameters?.road_vehicle_wheel).length === 4 && plan.components.filter((item) => item.primitive === 'body-shell').length === 3 && plan.components.some((item) => item.primitive === 'steering'),
+      motorcycle: (plan) => plan.components.filter((item) => item.parameters?.motorcycle_wheel).length === 2 && plan.components.some((item) => item.primitive === 'seat') && plan.components.some((item) => item.parameters?.motorcycle_motor),
+      airplane: (plan) => plan.components.some((item) => item.primitive === 'fuselage') && plan.components.filter((item) => item.primitive === 'aerofoil').length === 3 && plan.components.filter((item) => item.primitive === 'landing-gear').length === 3,
+      helicopter: (plan) => plan.components.some((item) => item.primitive === 'rotor') && plan.components.some((item) => item.primitive === 'propeller') && plan.components.filter((item) => item.parameters?.helicopter_skid).length === 2,
+      'service-robot': (plan) => plan.components.filter((item) => item.primitive === 'linkage').length >= 8 && plan.components.filter((item) => item.primitive === 'gripper').length === 2 && plan.components.filter((item) => item.primitive === 'servo').length === 4,
       arm: (plan) => plan.components.some((item) => item.primitive === 'gripper') && plan.components.filter((item) => item.role.startsWith('link servo')).length === 3,
       gearbox: (plan) => plan.components.some((item) => item.parameters?.gearbox_housing) && plan.components.filter((item) => item.primitive === 'gear').length === 2 && plan.components.filter((item) => item.parameters?.gearbox_bearing).length === 2,
       suspension: (plan) => plan.components.filter((item) => item.primitive === 'spring').length === 4 && plan.components.filter((item) => item.parameters?.suspension_wheel).length === 4 && plan.components.some((item) => item.parameters?.automotive_body) && plan.components.filter((item) => item.parameters?.suspension_arm).length === 8 && !plan.components.some((item) => item.parameters?.rover_chassis || item.role === 'mobile payload'),
@@ -369,11 +374,11 @@ describe('ForgeTwin world-first brief compiler', () => {
     const plan = compileDesignBrief('build an electric go kart');
     expect(plan.goal.machineName).toBe('Electric go-kart');
     expect(plan.goal.domain).toBe('Personal electric mobility');
-    expect(plan.assemblies.map((item) => item.name)).toEqual(['engineered world', 'road vehicle assembly']);
+    expect(plan.assemblies.map((item) => item.name)).toEqual(['engineered world', 'go-kart assembly']);
     expect(plan.goal.summary).toContain('low-profile-road-vehicle');
     expect(plan.components.filter((item) => item.parameters?.road_vehicle_wheel)).toHaveLength(4);
     expect(plan.components.filter((item) => item.parameters?.road_vehicle_frame).length).toBeGreaterThanOrEqual(9);
-    expect(plan.components.some((item) => item.role === 'single bucket seat')).toBe(true);
+    expect(plan.components.some((item) => item.role === 'single high-back bucket seat' && item.primitive === 'seat')).toBe(true);
     expect(plan.components.some((item) => item.role === 'steering wheel')).toBe(true);
     expect(plan.components.some((item) => item.role === 'front steering rack')).toBe(true);
     expect(plan.components.some((item) => item.role === 'high-voltage traction battery')).toBe(true);
@@ -398,12 +403,27 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(plan.components.some((item) => item.role === 'mobile payload')).toBe(false);
     expect(plan.components.some((item) => item.role === 'mobile chassis deck')).toBe(false);
     expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+    expect(plan.components.filter((item) => item.primitive === 'body-shell')).toHaveLength(3);
+    expect(plan.components.some((item) => item.role === 'wraparound front bumper' && item.primitive === 'tube')).toBe(true);
     expect(plan.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['course_time', 'traction_margin', 'assembly_integrity', 'component_count']));
 
     const illuminated = compileDesignBrief('Build an electric go-cart with two LED headlights for night driving.');
     expect(illuminated.goal.machineName).toBe('Electric go-kart');
     expect(illuminated.components.filter((item) => item.primitive === 'light')).toHaveLength(2);
     expect(illuminated.connections.filter((item) => item.channel === 'lighting_bus')).toHaveLength(2);
+  });
+
+  it.each([
+    ['electric motorcycle', 'Build an electric motorcycle with a headlight.', 'Electric motorcycle', ['wheel', 'tube', 'seat', 'steering', 'motor', 'battery']],
+    ['fixed-wing aircraft', 'Build an electric fixed-wing aircraft with a propeller and landing gear.', 'Electric fixed-wing aircraft', ['fuselage', 'aerofoil', 'propeller', 'landing-gear', 'motor']],
+    ['helicopter', 'Build a utility helicopter with a main rotor and tail rotor.', 'Utility helicopter', ['fuselage', 'rotor', 'propeller', 'tube', 'motor']],
+    ['service robot', 'Build a humanoid service robot with two grippers and vision.', 'Articulated service robot', ['body-shell', 'linkage', 'servo', 'gripper', 'camera', 'battery']],
+  ])('builds a distinct recognizable %s from reusable component families', (_label, prompt, machineName, required) => {
+    const plan = compileDesignBrief(prompt);
+    expect(plan.goal.machineName).toBe(machineName);
+    for (const kind of required) expect(plan.components.some((item) => item.primitive === kind), `missing ${kind}`).toBe(true);
+    expect(plan.components.some((item) => item.primitive === 'conveyor')).toBe(false);
+    expect(plan.connections.length + plan.joints.length).toBeGreaterThan(4);
   });
 
   it.each([

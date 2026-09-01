@@ -38,7 +38,7 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   // Road wheels animate internally so steering and tire roll remain independent
   // and must not receive a second body transform.
   const selfAnimatedShape = Boolean(component.parameters.road_vehicle_wheel || component.parameters.road_vehicle_steering_wheel || component.parameters.buffer_gate)
-    || ['servo', 'piston', 'spring', 'gripper', 'conveyor'].includes(component.primitive);
+    || ['servo', 'piston', 'spring', 'gripper', 'conveyor', 'propeller', 'rotor'].includes(component.primitive);
   const mechanismPose = !selfAnimatedShape ? context.mechanismMotion?.poseAt(component.id, elapsed) : null;
   const jointPoseApplied = Boolean(mechanismPose?.animated);
   if (jointPoseApplied && mechanismPose) {
@@ -372,7 +372,7 @@ function RoadVehicleSteeringWheel({ component, xray, selected }: { component: Ma
   const operationTime = useContext(OperationTimeContext);
   useFrame(() => { if (steeringRef.current) steeringRef.current.rotation.z = roadVehicleSteeringWheelTurn(operationTime.current); });
   return <group rotation={[0, Math.PI / 2, 0]}><group ref={steeringRef}>
-    <mesh castShadow><torusGeometry args={[radius * .82, radius * .12, 12, 48]} /><StandardMaterial color="#171f23" xray={xray} selected={selected} metalness={.1} roughness={.82} /></mesh>
+    <mesh castShadow><torusGeometry args={[radius * .82, radius * .12, 12, 48]} /><StandardMaterial color={component.color || '#171f23'} xray={xray} selected={selected} metalness={.16} roughness={.68} /></mesh>
     {Array.from({ length: 3 }, (_, index) => <mesh key={index} rotation={[0, 0, index / 3 * Math.PI * 2]} position={[radius * .36, 0, 0]}><boxGeometry args={[radius * .72, radius * .09, component.dimensions[1] * .8]} /><StandardMaterial color="#86969d" xray={xray} selected={selected} metalness={.86} roughness={.2} /></mesh>)}
     <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .22, radius * .22, component.dimensions[1] * 1.3, 24]} /><StandardMaterial color="#263238" xray={xray} selected={selected} metalness={.68} roughness={.28} /></mesh>
   </group></group>;
@@ -1031,6 +1031,83 @@ function CableBody({ component, color, xray, selected, operating }: { component:
   return <group ref={cableRef}><mesh castShadow><cylinderGeometry args={[radius, radius, 1, 12]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.32} /></mesh></group>;
 }
 
+function BearingBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const radius = component.dimensions[0] / 2;
+  const width = Math.max(.06, component.dimensions[1]);
+  return <group>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, 0, side * width * .35]}><torusGeometry args={[radius * .7, radius * .16, 14, 42]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.92} roughness={.16} /></mesh>)}
+    {Array.from({ length: 10 }, (_, index) => { const angle = index / 10 * Math.PI * 2; return <mesh key={index} position={[Math.cos(angle) * radius * .7, Math.sin(angle) * radius * .7, 0]}><sphereGeometry args={[radius * .105, 12, 12]} /><StandardMaterial color="#dce5e8" xray={xray} selected={selected} metalness={.96} roughness={.1} /></mesh>; })}
+  </group>;
+}
+
+function LinkageBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const length = component.dimensions[0];
+  const radius = Math.max(.035, Math.max(component.dimensions[1], component.dimensions[2]) / 2);
+  return <group>
+    <group rotation={[0, 0, Math.PI / 2]}><mesh castShadow><cylinderGeometry args={[radius * .62, radius * .62, Math.max(.06, length - radius * 2.5), 20]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.25} /></mesh></group>
+    {[-1, 1].map((side) => <group key={side} position={[side * (length / 2 - radius), 0, 0]} rotation={[Math.PI / 2, 0, 0]}><mesh><torusGeometry args={[radius * .72, radius * .28, 10, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.8} roughness={.2} /></mesh></group>)}
+  </group>;
+}
+
+function SteeringControlBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const form = String(component.parameters.control_form ?? 'wheel');
+  if (form === 'handlebar') {
+    const width = component.dimensions[2];
+    return <group><group rotation={[Math.PI / 2, 0, 0]}><mesh><cylinderGeometry args={[.035, .035, width, 18]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.75} roughness={.25} /></mesh></group>{[-1, 1].map((side) => <group key={side} position={[0, 0, side * width * .46]} rotation={[Math.PI / 2, 0, 0]}><mesh><cylinderGeometry args={[.052, .052, width * .18, 16]} /><StandardMaterial color="#1b2327" xray={xray} selected={selected} roughness={.88} /></mesh></group>)}</group>;
+  }
+  return <RoadVehicleSteeringWheel component={{ ...component, parameters: { ...component.parameters, road_vehicle_steering_wheel: true } }} xray={xray} selected={selected} />;
+}
+
+function BodyShellBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  if (component.parameters.cockpit_canopy) return <group><mesh scale={[x / 2, y / 2, z / 2]}><sphereGeometry args={[1, 30, 20]} /><StandardMaterial color="#68c6e8" xray={xray} selected={selected} metalness={.12} roughness={.16} /></mesh><group position={[-x * .34, -y * .28, 0]}><BoxBody size={[x * .5, y * .18, z * .82]} color={color} xray={xray} selected={selected} radius={.06} /></group></group>;
+  return <group>
+    <BoxBody size={[x * .82, y, z]} color={color} xray={xray} selected={selected} radius={Math.min(.18, y * .45, z * .25)} metalness={.48} roughness={.3} />
+    <group position={[x * .42, -y * .07, 0]} rotation={[0, 0, -Math.PI / 2]}><mesh><coneGeometry args={[Math.max(.08, z * .48), Math.max(.12, x * .35), 24]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.48} roughness={.3} /></mesh></group>
+  </group>;
+}
+
+function AerofoilBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <BoxBody size={[x * .72, Math.max(.035, y), z * .82]} color={color} xray={xray} selected={selected} radius={Math.min(.08, y * .5)} metalness={.55} roughness={.26} />
+    {[-1, 1].map((side) => <group key={side} position={[-x * .06, 0, side * z * .43]} rotation={[0, side * -.18, 0]}><BoxBody size={[x * .56, Math.max(.03, y * .75), z * .18]} color={color} xray={xray} selected={selected} radius={.04} metalness={.55} roughness={.26} /></group>)}
+  </group>;
+}
+
+function FuselageBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <mesh scale={[x / 2, y / 2, z / 2]} castShadow receiveShadow><sphereGeometry args={[1, 36, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.42} roughness={.3} /></mesh>
+    <group position={[-x * .43, 0, 0]} rotation={[0, 0, Math.PI / 2]}><mesh><coneGeometry args={[Math.max(.08, z * .38), x * .42, 28]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.42} roughness={.3} /></mesh></group>
+  </group>;
+}
+
+function PropulsorBody({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
+  const bladesRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  const vertical = component.primitive === 'rotor' || component.parameters.rotor_axis === 'vertical';
+  const bladeCount = Math.max(2, Math.min(6, Number(component.parameters.blade_count ?? (vertical ? 4 : 3))));
+  const radius = Math.max(.18, Math.max(component.dimensions[0], component.dimensions[2]) / 2);
+  useFrame(() => { if (!bladesRef.current || !operating) return; if (vertical) bladesRef.current.rotation.y = operationTime.current * 3.8; else bladesRef.current.rotation.z = operationTime.current * 7.2; });
+  return <group>
+    <group ref={bladesRef}>{Array.from({ length: bladeCount }, (_, index) => <group key={index} rotation={vertical ? [0, index / bladeCount * Math.PI * 2, 0] : [0, 0, index / bladeCount * Math.PI * 2]}>
+      <group position={vertical ? [radius * .52, 0, 0] : [radius * .52, 0, 0]} rotation={vertical ? [0, 0, -.04] : [0, 0, -.08]}><BoxBody size={[radius * .9, Math.max(.025, component.dimensions[1] * .32), Math.max(.055, radius * .13)]} color={color} xray={xray} selected={selected} radius={.035} metalness={.58} roughness={.25} /></group>
+    </group>)}</group>
+    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .13, radius * .18, Math.max(.1, component.dimensions[1]), 24]} /><StandardMaterial color="#6f7d84" xray={xray} selected={selected} metalness={.88} roughness={.18} /></mesh>
+  </group>;
+}
+
+function LandingGearBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group><group rotation={[0, 0, -.14]}><BoxBody size={[Math.max(.07, x * .15), y, Math.max(.07, z * .16)]} color={color} xray={xray} selected={selected} radius={.025} /></group><group position={[x * .08, -y * .44, 0]}><mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[Math.max(.1, x * .3), Math.max(.1, x * .3), Math.max(.08, z), 24]} /><StandardMaterial color="#151b1f" xray={xray} selected={selected} roughness={.88} /></mesh></group></group>;
+}
+
+function TrackBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group><RoundedBox args={[x, y, z]} radius={Math.min(.18, y * .45)} smoothness={5}><StandardMaterial color="#171d20" xray={xray} selected={selected} roughness={.88} /></RoundedBox>{Array.from({ length: 10 }, (_, index) => <group key={index} position={[-x * .43 + index * x * .095, y * .51, 0]}><BoxBody size={[x * .065, y * .12, z * 1.08]} color={color} xray={xray} selected={selected} radius={.01} /></group>)}</group>;
+}
+
 function ComponentShape({ component, xray, selected, actuatorValue, operating, operationSpeed = 1 }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean; operationSpeed?: number }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
   if (component.parameters.product_form) return <ProductItem component={component} xray={xray} selected={selected} />;
@@ -1077,6 +1154,19 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (/lattice.*mast|tower mast/.test(component.role)) return <LatticeMast component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.panel) return <SolarPanel component={component} xray={xray} selected={selected} />;
   if (component.primitive === 'gear') return <Gear component={{ ...component, color }} xray={xray} selected={selected} />;
+  if (component.primitive === 'tube') return <BicycleTube component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'bearing') return <BearingBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'linkage') return <LinkageBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'seat') return component.parameters.seat_form === 'saddle' ? <BicycleSeat component={component} color={color} xray={xray} selected={selected} /> : <RoadVehicleSeat component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'steering') return <SteeringControlBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'pedal') return <RoadVehiclePedal component={component} xray={xray} selected={selected} />;
+  if (component.primitive === 'battery') return <BicycleBattery component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'body-shell') return <BodyShellBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'aerofoil') return <AerofoilBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'fuselage') return <FuselageBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'propeller' || component.primitive === 'rotor') return <PropulsorBody component={component} color={color} xray={xray} selected={selected} operating={operating} />;
+  if (component.primitive === 'landing-gear') return <LandingGearBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.primitive === 'track') return <TrackBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'spring') return <Spring component={{ ...component, color }} xray={xray} selected={selected} operating={operating} />;
   if (component.primitive === 'frame') return <IndustrialFrame component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'beam') return <StructuralBeam component={component} color={color} xray={xray} selected={selected} />;

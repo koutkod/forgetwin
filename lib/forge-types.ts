@@ -6,7 +6,10 @@ export type PrimitiveKind =
   | 'beam' | 'plate' | 'frame' | 'wheel' | 'shaft' | 'gear' | 'pulley'
   | 'belt' | 'motor' | 'servo' | 'piston' | 'spring' | 'sensor' | 'camera'
   | 'conveyor' | 'ramp' | 'gripper' | 'container' | 'counterweight'
-  | 'support' | 'controller' | 'cable' | 'hook' | 'roller' | 'light';
+  | 'support' | 'controller' | 'cable' | 'hook' | 'roller' | 'light'
+  | 'tube' | 'bearing' | 'linkage' | 'seat' | 'steering' | 'pedal' | 'battery'
+  | 'body-shell' | 'aerofoil' | 'fuselage' | 'propeller' | 'rotor'
+  | 'landing-gear' | 'track';
 
 export type ShapeKind = 'box' | 'cylinder' | 'sphere' | 'capsule';
 export type BodyType = 'fixed' | 'dynamic' | 'kinematic';

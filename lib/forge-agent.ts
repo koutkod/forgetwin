@@ -6,7 +6,7 @@ const identifier = z.string().trim().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const channelKey = z.string().trim().regex(/^[a-z][a-z0-9_-]{0,63}$/);
 const supportedMetric = z.enum(SUPPORTED_METRIC_KEYS);
 const capability = z.enum(['structure', 'transport', 'classify', 'lift', 'suspend', 'mobile', 'manipulate', 'transmit', 'stabilize', 'track', 'buffer', 'contain', 'rotate', 'measure']);
-const primitiveKind = z.enum(['beam', 'plate', 'frame', 'wheel', 'shaft', 'gear', 'pulley', 'belt', 'motor', 'servo', 'piston', 'spring', 'sensor', 'camera', 'light', 'conveyor', 'ramp', 'gripper', 'container', 'counterweight', 'support', 'controller', 'cable', 'hook', 'roller']);
+const primitiveKind = z.enum(['beam', 'plate', 'frame', 'wheel', 'shaft', 'gear', 'pulley', 'belt', 'motor', 'servo', 'piston', 'spring', 'sensor', 'camera', 'light', 'conveyor', 'ramp', 'gripper', 'container', 'counterweight', 'support', 'controller', 'cable', 'hook', 'roller', 'tube', 'bearing', 'linkage', 'seat', 'steering', 'pedal', 'battery', 'body-shell', 'aerofoil', 'fuselage', 'propeller', 'rotor', 'landing-gear', 'track']);
 const bodyType = z.enum(['fixed', 'dynamic', 'kinematic']);
 const materialId = z.enum(['steel', 'aluminum', 'copper', 'polymer', 'rubber', 'concrete', 'composite']);
 const jointType = z.enum(['fixed', 'revolute', 'prismatic', 'spherical', 'spring', 'rope', 'gear', 'belt']);
@@ -181,6 +181,10 @@ const identityChecks: Array<{ requested: RegExp; designed: RegExp }> = [
   { requested: /\b(?:crane)\b/, designed: /\b(?:crane|boom|hoist)\b/ },
   { requested: /\b(?:go-kart|gokart|go cart|kart)\b/, designed: /\b(?:go-kart|gokart|kart)\b/ },
   { requested: /\b(?:bicycle|bike)\b/, designed: /\b(?:bicycle|bike)\b/ },
+  { requested: /\b(?:motorcycle|motorbike|dirt bike|scooter)\b/, designed: /\b(?:motorcycle|motorbike|scooter)\b/ },
+  { requested: /\b(?:airplane|aeroplane|fixed[- ]wing aircraft)\b/, designed: /\b(?:airplane|aircraft|fixed[- ]wing|fuselage)\b/ },
+  { requested: /\b(?:helicopter|rotorcraft)\b/, designed: /\b(?:helicopter|rotorcraft|main rotor)\b/ },
+  { requested: /\b(?:humanoid|service|walking|quadruped|tracked)\s+robot\b/, designed: /\b(?:humanoid|service|walking|quadruped|tracked|articulated)\s+robot\b/ },
   { requested: /\b(?:rover|agv)\b/, designed: /\b(?:rover|agv|mobile robot)\b/ },
   { requested: /\b(?:car|automobile|buggy|vehicle)\b/, designed: /\b(?:car|automobile|buggy|vehicle)\b/ },
   { requested: /\b(?:gearbox|gear train|transmission)\b/, designed: /\b(?:gearbox|gear train|transmission|gear mesh)\b/ },
@@ -296,10 +300,10 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   if (cranePart === 'pulley') requireSignature(count('pulley') >= 1, 'a grooved crane pulley');
   if (cranePart === 'counterweight') requireSignature(count('counterweight') >= 1, 'a crane counterweight body');
   if (pumpHousing || transmissionHousing) requireSignature(count('plate') + count('frame') + count('support') >= 1 && /housing|casing|enclosure|shell/.test(roles), 'a dimensioned housing or casing body');
-  if (vehicleChassis) requireSignature(count('frame') + count('beam') + count('plate') >= 2 && /chassis|frame|rail/.test(roles), 'a load-bearing chassis frame');
+  if (vehicleChassis) requireSignature(count('frame') + count('beam') + count('tube') + count('plate') >= 2 && /chassis|frame|rail/.test(roles), 'a load-bearing chassis frame');
   if (vehicleWheel) requireSignature(count('wheel') >= 1, 'a road wheel and hub body');
   if (vehicleAxle) requireSignature(count('shaft') >= 1, 'a supported axle shaft');
-  if (bicycleFork) requireSignature(count('beam') + count('frame') >= 2 && /fork|stanchion|steerer/.test(roles), 'paired fork members and a steerer or crown');
+  if (bicycleFork) requireSignature(count('beam') + count('tube') + count('frame') >= 2 && /fork|stanchion|steerer/.test(roles), 'paired fork members and a steerer or crown');
   if (vehicleSuspension) requireSignature(count('spring') >= 1 && count('beam') + count('frame') + count('wheel') >= 1, 'a compliant suspension member connected to an arm, frame, or wheel');
 
   if (/\bcrane\b/.test(requested) && !cranePart) {
@@ -312,12 +316,12 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   }
   if (/\b(?:go-kart|gokart|go cart|kart|car|automobile|buggy|rover|agv|vehicle)\b/.test(requested) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(requested) && !vehicleSuspension && !vehicleChassis && !vehicleWheel && !vehicleAxle) {
     requireSignature(count('wheel') >= 3, 'a multi-wheel rolling chassis');
-    requireSignature(count('frame') + count('plate') + count('beam') >= 1, 'a load-bearing chassis');
+    requireSignature(count('frame') + count('plate') + count('beam') + count('tube') >= 1, 'a load-bearing chassis');
     requireSignature(relevantDrivenJoints((component, text) => (component.primitive === 'wheel' && /road wheel|drive wheel|driven wheel|front[^.]{0,24}wheel|rear[^.]{0,24}wheel|traction|wheel hub/.test(text))
       || (component.primitive === 'shaft' && /drive axle|powered axle|axle shaft|traction/.test(text))).length >= 1, 'a drive coupled to a road wheel or axle');
   }
   if (/\b(?:bicycle|bike)\b/.test(requested) && !bicycleFork) {
-    requireSignature(count('wheel') >= 2 && count('beam') + count('frame') >= 2, 'two wheels and a recognizable frame');
+    requireSignature(count('wheel') >= 2 && count('beam') + count('tube') + count('frame') >= 2, 'two wheels and a recognizable frame');
     const rollingWheelIds = new Set(motionJoints.filter((joint) => joint.joint_type === 'revolute' && jointTouches(joint, (component) => component.primitive === 'wheel'))
       .flatMap((joint) => [joint.component_a, joint.component_b]).filter((id) => componentById.get(id)?.primitive === 'wheel'));
     requireSignature(rollingWheelIds.size >= 2, 'two independently mounted rolling wheels');
@@ -330,10 +334,29 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
     requireSignature(relevantDrivenJoints((component) => component.primitive === 'gear' || component.primitive === 'shaft').length >= 1, 'a driven input shaft coupled into the gear train');
   }
   if (/\b(?:robotic arm|robot arm|manipulator)\b/.test(requested)) {
-    requireSignature(count('beam') >= 2 && count('gripper') >= 1, 'an articulated link chain and end effector');
+    requireSignature(count('beam') + count('linkage') >= 2 && count('gripper') >= 1, 'an articulated link chain and end effector');
     const armDrivenJoints = new Set(relevantDrivenJoints((component, text) => ['beam', 'gripper', 'servo', 'motor'].includes(component.primitive) || /arm|joint|link|gripper|wrist/.test(text)).map((joint) => joint.id));
     requireSignature(armDrivenJoints.size >= 2, 'multiple independently actuated arm joints');
     requireSignature(pathHasMotionCount((component) => component.body_type === 'fixed', (component) => component.primitive === 'gripper', 2), 'a connected base-to-gripper chain with at least two articulated degrees of freedom');
+  }
+  if (/\b(?:motorcycle|motorbike|dirt bike|scooter)\b/.test(requested)) {
+    requireSignature(count('wheel') >= 2 && count('tube') + count('frame') + count('beam') >= 3, 'two wheels on a recognizable tubular motorcycle frame');
+    requireSignature(count('seat') >= 1 && count('steering') >= 1, 'a rider saddle and handlebar steering control');
+    requireSignature(relevantDrivenJoints((component, text) => component.primitive === 'wheel' || /chain|drive wheel|traction/.test(text)).length >= 1, 'a power unit coupled to the rear wheel');
+  }
+  if (/\b(?:airplane|aeroplane|fixed[- ]wing aircraft)\b/.test(requested)) {
+    requireSignature(count('fuselage') >= 1 && count('aerofoil') >= 2, 'a fuselage with main wing and stabilizing tail surfaces');
+    requireSignature(count('propeller') + count('rotor') >= 1 && count('landing-gear') >= 2, 'a powered propulsor and supported landing gear');
+    requireSignature(relevantDrivenJoints((component) => component.primitive === 'propeller' || component.primitive === 'rotor').length >= 1, 'a motor coupled to the aircraft propeller');
+  }
+  if (/\b(?:helicopter|rotorcraft)\b/.test(requested)) {
+    requireSignature(count('fuselage') >= 1 && count('rotor') >= 1 && count('propeller') >= 1, 'a cabin, main lift rotor, and anti-torque tail rotor');
+    requireSignature(count('tube') >= 3 && /tail boom|landing skid/.test(roles), 'a supported tail boom and grounded landing skids');
+    requireSignature(relevantDrivenJoints((component) => component.primitive === 'rotor' || component.primitive === 'propeller').length >= 2, 'separately driven main and tail rotors');
+  }
+  if (/\b(?:humanoid|service|walking|quadruped|tracked)\s+robot\b/.test(requested)) {
+    requireSignature(count('linkage') >= 4 && count('servo') >= 2, 'multiple articulated limb links with powered joints');
+    requireSignature(count('camera') + count('sensor') >= 1 && count('controller') >= 1, 'perception and motion control hardware');
   }
   if (scissorLift) {
     const scissorArmIds = new Set(plan.components.filter((component) => ['beam', 'frame'].includes(component.primitive) && /scissor|cross|lift arm/.test(componentText(component.id))).map((component) => component.id));
