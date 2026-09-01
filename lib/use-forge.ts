@@ -51,6 +51,7 @@ export const schemas = {
 } satisfies Record<ForgeToolName, z.ZodType<Record<string, unknown>>>;
 
 export const FORGE_TOOL_COUNT = Object.keys(schemas).length;
+export const WEBMCP_CHECKING = -1;
 const readTools = new Set<ForgeToolName>(['inspect_workspace', 'inspect_primitive_catalog', 'inspect_telemetry', 'inspect_failure', 'measure_constraint', 'compare_designs']);
 const guardedTools = new Set<ForgeToolName>([...Object.keys(schemas).filter((name) => !readTools.has(name as ForgeToolName)) as ForgeToolName[]]);
 
@@ -253,25 +254,60 @@ function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
 }
 
 export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], runMachine: ReturnType<typeof useForge>['runMachine'], getSnapshot: ReturnType<typeof useForge>['getSnapshot'], hydrated = true) {
-  const [count, setCount] = useState(0);
+  const [count, setCount] = useState(WEBMCP_CHECKING);
   const commandRef = useRef(command), runRef = useRef(runMachine), snapshotRef = useRef(getSnapshot);
   useEffect(() => { commandRef.current = command; runRef.current = runMachine; snapshotRef.current = getSnapshot; }, [command, runMachine, getSnapshot]);
   useEffect(() => {
     if (!hydrated) return;
-    if (!('modelContext' in document) || !document.modelContext) return;
     const lifecycle = new AbortController();
     const names = Object.keys(schemas) as ForgeToolName[];
-    const registrations = names.map((name) => document.modelContext!.registerTool({ name, title: name.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), description: descriptions[name], inputSchema: jsonSchemaFor(name), annotations: { readOnlyHint: readTools.has(name) }, execute: async (raw, { signal }) => {
-      signal?.throwIfAborted();
-      try {
-        const input = schemas[name].parse(raw) as Record<string, unknown>;
-        const before = snapshotRef.current();
-        if (guardedTools.has(name) && (input.expected_revision !== before.revision || input.expected_workspace_nonce !== before.workspaceNonce)) throw new Error(`STALE_REVISION: inspect revision ${before.revision} before retrying.`);
-        return name === 'run_simulation' ? await runRef.current('WebMCP', input) : commandRef.current(name, input, 'WebMCP');
-      } catch (error) { return failure(snapshotRef.current(), error); }
-    } }, { signal: lifecycle.signal }));
-    void Promise.allSettled(registrations).then((results) => { if (!lifecycle.signal.aborted) setCount(results.filter((result) => result.status === 'fulfilled').length); });
-    return () => { lifecycle.abort(); setCount(0); };
+    let discoveryTimer: number | undefined;
+    let registering = false;
+    let attempts = 0;
+
+    // ChatGPT can attach the WebMCP host after the page has already hydrated.
+    // Keep discovery alive instead of permanently deciding that the host is
+    // absent from one early read of document.modelContext.
+    const discoverAndRegister = async () => {
+      if (lifecycle.signal.aborted || registering) return;
+      const context = document.modelContext;
+      if (!context) {
+        discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 250);
+        return;
+      }
+      registering = true;
+      attempts += 1;
+      window.clearTimeout(unavailableTimer);
+      setCount(WEBMCP_CHECKING);
+      const registrations = names.map((name) => context.registerTool({ name, title: name.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), description: descriptions[name], inputSchema: jsonSchemaFor(name), annotations: { readOnlyHint: readTools.has(name) }, execute: async (raw, { signal }) => {
+        signal?.throwIfAborted();
+        try {
+          const input = schemas[name].parse(raw) as Record<string, unknown>;
+          const before = snapshotRef.current();
+          if (guardedTools.has(name) && (input.expected_revision !== before.revision || input.expected_workspace_nonce !== before.workspaceNonce)) throw new Error(`STALE_REVISION: inspect revision ${before.revision} before retrying.`);
+          return name === 'run_simulation' ? await runRef.current('WebMCP', input) : commandRef.current(name, input, 'WebMCP');
+        } catch (error) { return failure(snapshotRef.current(), error); }
+      } }, { signal: lifecycle.signal }));
+      const results = await Promise.allSettled(registrations);
+      if (lifecycle.signal.aborted) return;
+      const registered = results.filter((result) => result.status === 'fulfilled').length;
+      setCount(registered);
+      registering = false;
+      // Some hosts expose modelContext just before they are ready to accept
+      // registrations. A complete rejection is safe to retry because no tool
+      // from that attempt was installed.
+      if (registered === 0 && attempts < 5) discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 500);
+    };
+
+    const unavailableTimer = window.setTimeout(() => {
+      if (!lifecycle.signal.aborted && !document.modelContext) setCount(0);
+    }, 3500);
+    void discoverAndRegister();
+    return () => {
+      lifecycle.abort();
+      if (discoveryTimer !== undefined) window.clearTimeout(discoveryTimer);
+      window.clearTimeout(unavailableTimer);
+    };
   }, [hydrated]);
   return count;
 }
