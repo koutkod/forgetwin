@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialForgeState } from './forge-data';
-import { buildAsciiStl } from './forge-export';
+import { buildBinaryStl } from './forge-export';
 import { testCommand } from './forge-test-utils';
 
 function exportWorld() {
@@ -19,17 +19,27 @@ function exportWorld() {
 }
 
 describe('ForgeTwin CAD export', () => {
-  it('exports every component as finite, transformed STL triangles', () => {
+  it('exports every component as finite, transformed binary STL triangles in millimeters', () => {
     const state = exportWorld();
-    const stl = buildAsciiStl(state);
-    expect(stl).toMatch(/^solid exported/);
-    expect(stl).toMatch(/endsolid exported\s*$/);
-    expect(stl).not.toMatch(/NaN|Infinity/);
-    expect(stl.match(/facet normal/g)?.length).toBeGreaterThan(30);
-    expect(stl).toContain('vertex');
+    const stl = buildBinaryStl(state);
+    const view = new DataView(stl.buffer, stl.byteOffset, stl.byteLength);
+    const triangles = view.getUint32(80, true);
+    expect(triangles).toBeGreaterThan(30);
+    expect(stl.byteLength).toBe(84 + triangles * 50);
+
+    let largestCoordinate = 0;
+    for (let triangle = 0; triangle < triangles; triangle += 1) {
+      const triangleOffset = 84 + triangle * 50;
+      for (let coordinate = 0; coordinate < 9; coordinate += 1) {
+        const value = view.getFloat32(triangleOffset + 12 + coordinate * 4, true);
+        expect(Number.isFinite(value)).toBe(true);
+        largestCoordinate = Math.max(largestCoordinate, Math.abs(value));
+      }
+    }
+    expect(largestCoordinate).toBeGreaterThan(1_000);
   });
 
   it('rejects an empty world instead of downloading a misleading CAD file', () => {
-    expect(() => buildAsciiStl(createInitialForgeState('lab'))).toThrow(/at least one physical body/i);
+    expect(() => buildBinaryStl(createInitialForgeState('lab'))).toThrow(/at least one physical body/i);
   });
 });

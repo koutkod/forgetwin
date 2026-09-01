@@ -723,7 +723,7 @@ const EXPORT_OPTIONS: Array<{ format: ForgeExportFormat; title: string; extensio
   { format: 'png', title: 'Presentation PNG', extension: '.PNG · 1800 × 1200', description: 'Lossless 3:2 image of the current live camera view with design evidence.', icon: 'image' },
   { format: 'jpg', title: 'Shareable JPG', extension: '.JPG · 1800 × 1200', description: 'High-quality compressed image for galleries, slides, and submissions.', icon: 'image' },
   { format: 'pdf', title: 'Engineering report', extension: '.PDF · MULTI-PAGE', description: 'Branded design summary, current render, metrics, constraints, and bill of materials.', icon: 'report' },
-  { format: 'stl', title: 'CAD exchange geometry', extension: '.STL · ASCII MESH', description: 'Combined 3D assembly mesh for SolidWorks, Creo, Fusion 360, FreeCAD, and other CAD tools.', icon: 'cad' },
+  { format: 'stl', title: 'CAD exchange geometry', extension: '.STL · BINARY · MM', description: 'Compact combined assembly mesh in millimeters for SolidWorks, Creo, Fusion 360, FreeCAD, ShareCAD, and other CAD tools.', icon: 'cad' },
   { format: 'json', title: 'Engineering data', extension: '.JSON · FULL WORLD', description: 'Machine goal, bodies, transforms, materials, joints, controls, and latest telemetry.', icon: 'data' },
 ];
 

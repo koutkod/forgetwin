@@ -129,8 +129,8 @@ function geometryFor(component: MachineComponent): BufferGeometry {
   return new BoxGeometry(x, y, z, 1, 1, 1);
 }
 
-/** A standards-compliant ASCII STL mesh that mainstream mechanical CAD tools can import. */
-export function buildAsciiStl(state: ForgeState) {
+/** A compact binary STL in millimeters for reliable interchange with mechanical CAD viewers. */
+export function buildBinaryStl(state: ForgeState) {
   if (!state.components.length) throw new Error('Add at least one physical body before exporting CAD geometry.');
   const group = new Group();
   for (const component of state.components) {
@@ -141,12 +141,17 @@ export function buildAsciiStl(state: ForgeState) {
     mesh.updateMatrixWorld(true);
     group.add(mesh);
   }
+  // ForgeTwin simulates in SI meters, while STL is unitless and mechanical CAD
+  // applications conventionally interpret its coordinates as millimeters.
+  group.scale.setScalar(1_000);
   group.updateMatrixWorld(true);
-  const result = new STLExporter().parse(group, { binary: false });
+  const result = new STLExporter().parse(group, { binary: true });
+  const bytes = new Uint8Array(result.byteLength);
+  bytes.set(new Uint8Array(result.buffer, result.byteOffset, result.byteLength));
   group.traverse((object) => {
     if (object instanceof Mesh) { object.geometry.dispose(); (object.material as MeshStandardMaterial).dispose(); }
   });
-  return result;
+  return bytes;
 }
 
 async function exportPdf(state: ForgeState) {
@@ -219,7 +224,7 @@ export async function exportForgeDesign(state: ForgeState, format: ForgeExportFo
   }
   if (format === 'pdf') { await exportPdf(state); return; }
   if (format === 'stl') {
-    download(new Blob([buildAsciiStl(state)], { type: 'model/stl' }), `${base}-cad-assembly.stl`);
+    download(new Blob([buildBinaryStl(state)], { type: 'model/stl' }), `${base}-cad-assembly-mm.stl`);
     return;
   }
   const payload = {

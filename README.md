@@ -103,7 +103,7 @@ The workspace **Export** center turns the current revision into useful downstrea
 
 - **PNG and JPG** — a polished 1800 × 1200 (3:2) capture of the live 3D camera with the machine name, revision, physics state, body/joint count, mass, and constraint score.
 - **PDF engineering report** — a branded multi-page summary containing the live render, design evidence, goal, status, and a paginated bill of materials with dimensions, material, mass, and rigid-body mode.
-- **STL CAD exchange geometry** — one real triangulated assembly mesh with component transforms applied. It imports into SolidWorks, Creo, Fusion 360, FreeCAD, and other mainstream CAD tools.
+- **STL CAD exchange geometry** — one compact binary triangulated assembly mesh with component transforms applied and SI meters converted to CAD-standard millimeters. It imports into ShareCAD, SolidWorks, Creo, Fusion 360, FreeCAD, and other mainstream CAD tools.
 - **ForgeTwin JSON** — the complete machine goal, world, assemblies, bodies, transforms, materials, joints, connections, sensors, actuators, controls, and latest physics evidence.
 
 STL is intentionally described as exchange geometry, not a native SolidWorks `.SLDASM` or Creo `.ASM` feature tree. Imported meshes can be measured, referenced, converted, or rebuilt parametrically in the destination CAD system, but a browser-generated mesh cannot preserve proprietary feature history.
