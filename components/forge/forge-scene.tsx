@@ -360,8 +360,8 @@ function RoadVehicleSeat({ component, color, xray, selected }: { component: Mach
   const [x, y, z] = component.dimensions;
   return <group>
     <group position={[0, -y * .27, 0]}><BoxBody size={[x, y * .42, z]} color="#1d272d" xray={xray} selected={selected} radius={.1} metalness={.05} roughness={.88} /></group>
-    <group position={[-x * .37, y * .2, 0]} rotation={[0, 0, -.16]}><BoxBody size={[x * .34, y * 1.05, z]} color="#26343b" xray={xray} selected={selected} radius={.1} metalness={.06} roughness={.84} /></group>
-    {[-1, 1].map((side) => <group key={side} position={[-x * .18, 0, side * z * .47]}><BoxBody size={[x * .52, y * .68, z * .16]} color={color} xray={xray} selected={selected} radius={.05} metalness={.08} roughness={.75} /></group>)}
+    <group position={[-x * .37, y * .2, 0]} rotation={[0, 0, -.16]}><BoxBody size={[x * .34, y * 1.05, z]} color={color} xray={xray} selected={selected} radius={.1} metalness={.08} roughness={.76} /></group>
+    {[-1, 1].map((side) => <group key={side} position={[-x * .18, 0, side * z * .47]}><BoxBody size={[x * .52, y * .68, z * .16]} color="#1d272d" xray={xray} selected={selected} radius={.05} metalness={.08} roughness={.82} /></group>)}
     {!xray && <><Line points={[[-x * .43, y * .42, 0], [x * .23, -y * .33, 0]]} color="#6e7e86" lineWidth={2} /><Line points={[[-x * .35, y * .34, -z * .2], [x * .18, -y * .32, z * .18]]} color="#4fd8ef" lineWidth={1.2} /></>}
   </group>;
 }
