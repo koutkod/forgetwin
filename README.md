@@ -97,6 +97,17 @@ The **Edit with chat** panel changes the existing world rather than silently sta
 
 The renderer uses the same primitive graph to produce industrial frames, rounded structural members, geared shafts, grooved pulleys, rigging, wheels with hubs and tread, drive housings, crates, solar panels, conveyors, supports, and control devices. Camera framing is derived from the current world bounds, so a compact gearbox and a tall crane both fill the workspace without machine-specific camera presets.
 
+## Export and CAD handoff
+
+The workspace **Export** center turns the current revision into useful downstream artifacts:
+
+- **PNG and JPG** — a polished 1800 × 1200 (3:2) capture of the live 3D camera with the machine name, revision, physics state, body/joint count, mass, and constraint score.
+- **PDF engineering report** — a branded multi-page summary containing the live render, design evidence, goal, status, and a paginated bill of materials with dimensions, material, mass, and rigid-body mode.
+- **STL CAD exchange geometry** — one real triangulated assembly mesh with component transforms applied. It imports into SolidWorks, Creo, Fusion 360, FreeCAD, and other mainstream CAD tools.
+- **ForgeTwin JSON** — the complete machine goal, world, assemblies, bodies, transforms, materials, joints, connections, sensors, actuators, controls, and latest physics evidence.
+
+STL is intentionally described as exchange geometry, not a native SolidWorks `.SLDASM` or Creo `.ASM` feature tree. Imported meshes can be measured, referenced, converted, or rebuilt parametrically in the destination CAD system, but a browser-generated mesh cannot preserve proprietary feature history.
+
 ## Security model
 
 - The design brief is treated as untrusted data, never executable instructions. The model route wraps it as `USER_DATA`, uses strict Structured Outputs, and performs one feedback-guided repair if a structurally valid answer violates mechanical or prompt-fidelity invariants.
@@ -125,6 +136,7 @@ Key modules:
 - `lib/forge-simulation.ts` — Rapier execution, graph-derived measurements, failures, and replay.
 - `lib/forge-agent.ts` — strict model-plan/redesign/chat-edit schemas, semantic validation, client boundary, status, and temporary-key transport.
 - `lib/forge-model-plan.ts` — conversion from a validated model-authored design graph into the executable world plan and renderer semantics.
+- `lib/forge-export.ts` — 3:2 viewport capture, PDF engineering report, STL CAD assembly, and full-world data export.
 - `lib/use-forge.ts` — Zod tool schemas, atomic edit batches, WebMCP registration, persistence, and optimistic concurrency.
 - `components/forge/forge-scene.tsx` — generic 3D primitive renderer and X-Ray world view.
 - `app/forgetwin-app.tsx` — agent loop, editor, activity feed, telemetry, compare, and demo UX.
@@ -141,7 +153,8 @@ Key modules:
 7. Select any body and move, rotate, resize, or change its material.
 8. Open **Edit with chat**, enter “Make the base wider,” and watch the agent revise and resimulate the same world.
 9. Select **Redesign around my change** and verify that the human-owned field remains fixed.
-10. Use **Compare runs**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
+10. Select **Export** to download a PNG/JPG presentation view, a multi-page PDF engineering report, an STL for SolidWorks/Creo, or the full engineering graph as JSON.
+11. Use **Compare runs**, **Version history**, **Undo**, and **Reset** to repeat the judging flow.
 
 ## Run locally
 

@@ -524,6 +524,8 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .view-controls { min-width:0; max-width:none; overflow:visible; }
 .view-controls .animation-control { border-color:rgba(92,226,170,.28); color:#8bddb8; background:rgba(56,184,124,.065); }
 .view-controls .animation-control.active { border-color:rgba(92,226,170,.5); color:#8ff0c0; background:rgba(56,184,124,.12); box-shadow:0 0 18px rgba(66,218,153,.08); }
+.ghost-button.export-button,.view-controls .viewport-export { border-color:rgba(73,220,255,.3); color:#76e4fb; background:rgba(73,220,255,.07); }
+.ghost-button.export-button:hover,.view-controls .viewport-export:hover { border-color:rgba(73,220,255,.55); background:rgba(73,220,255,.12); color:#dffaff; }
 .inspector-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .inspector-actions button { white-space:nowrap; }
 .inspector-actions button:last-child { grid-column:1/-1; }
@@ -573,4 +575,36 @@ button:disabled { cursor:not-allowed; opacity:.58; }
   .generation-counters { grid-template-columns:repeat(2,48px); }
   .generation-counters span:last-child { display:none; }
   .generation-footer button { min-height:36px; }
+}
+
+/* Export center */
+.export-backdrop { position:fixed; z-index:95; inset:0; display:grid; place-items:center; padding:20px; background:rgba(1,4,7,.78); backdrop-filter:blur(12px); }
+.export-dialog { width:min(880px,100%); max-height:min(820px,calc(100vh - 36px)); overflow:auto; border:1px solid rgba(73,220,255,.2); border-radius:18px; background:linear-gradient(145deg,#0d151b,#080d12 60%); box-shadow:0 34px 120px rgba(0,0,0,.68),0 0 80px rgba(66,210,244,.06); animation:export-in .22s ease both; }
+.export-dialog>header { padding:25px 27px 21px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:20px; }
+.export-dialog h2 { margin:7px 0 5px; font-size:24px; letter-spacing:-.035em; }
+.export-dialog header p { margin:0; color:#6f7d85; font-size:10px; line-height:1.5; }
+.export-dialog>header>button { flex:none; width:34px; height:34px; display:grid; place-items:center; border:1px solid var(--line); border-radius:8px; background:#11191f; color:#75838c; }
+.export-grid { padding:20px 27px 24px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.export-option { min-width:0; min-height:118px; display:grid; grid-template-columns:44px minmax(0,1fr) 18px; align-items:start; gap:12px; padding:15px; text-align:left; border:1px solid rgba(255,255,255,.075); border-radius:12px; background:rgba(255,255,255,.022); color:#d9e2e6; transition:border-color .18s ease,transform .18s ease,background .18s ease; }
+.export-option:hover { transform:translateY(-2px); border-color:rgba(73,220,255,.3); background:rgba(73,220,255,.045); }
+.export-option.featured { border-color:rgba(91,229,173,.24); background:linear-gradient(135deg,rgba(73,220,255,.05),rgba(91,229,173,.035)); }
+.export-option-icon { width:42px; height:42px; display:grid; place-items:center; border:1px solid rgba(73,220,255,.17); border-radius:10px; color:#63def8; background:rgba(73,220,255,.06); }
+.export-option.featured .export-option-icon { border-color:rgba(91,229,173,.2); color:#70e5b3; background:rgba(91,229,173,.06); }
+.export-option small { display:block; color:#50616b; font:700 7px var(--font-geist-mono),monospace; letter-spacing:.1em; }
+.export-option strong { display:block; margin-top:6px; color:#e2eaed; font-size:11px; }
+.export-option p { margin:6px 0 0; color:#687780; font-size:8px; line-height:1.55; }
+.export-download-icon { margin-top:2px; color:#46565f; }
+.export-option:disabled .export-option-icon svg { animation:export-spin 1s linear infinite; }
+.export-dialog>footer { padding:15px 27px 20px; border-top:1px solid var(--line); display:grid; gap:7px; }
+.export-dialog>footer span { display:flex; align-items:center; gap:7px; color:#73dfad; font-size:9px; }
+.export-dialog>footer p { margin:0; color:#57666f; font-size:8px; line-height:1.55; }
+.export-dialog>footer strong { color:#819099; }
+@keyframes export-in { from { opacity:0; transform:translateY(14px) scale(.985); } }
+@keyframes export-spin { to { transform:rotate(360deg); } }
+@media(max-width:720px) {
+  .export-backdrop { padding:10px; }
+  .export-dialog { max-height:calc(100vh - 20px); border-radius:14px; }
+  .export-dialog>header,.export-grid,.export-dialog>footer { padding-left:17px; padding-right:17px; }
+  .export-grid { grid-template-columns:1fr; }
+  .export-option { min-height:106px; }
 }

@@ -2,7 +2,7 @@
 
 import {
   Activity, AlertTriangle, ArrowRight, BadgeCheck, Bot, Box, Check, ChevronDown,
-  CircleDot, Clock3, Code2, Cpu, Gauge, GitCompareArrows, History, Layers3, Move3D,
+  CircleDot, Clock3, Code2, Cpu, Download, FileText, Gauge, GitCompareArrows, History, Image as ImageIcon, Layers3, Move3D,
   KeyRound, MessageSquareText, MoveHorizontal, Pause, Play, Radio, Redo2, RotateCcw, Save, Send,
   Settings2, Sparkles, Square, TimerReset, Undo2, Waypoints, X, Zap,
 } from 'lucide-react';
@@ -17,6 +17,7 @@ import { conveyorSpeedEdits, pendingClarification, resolvedEditPrompt, type Chat
 import { compileAgentPlan, localAnchorAt, semanticParametersForEdit } from '../lib/forge-model-plan';
 import { translateInForgeCoordinates } from '../lib/forge-motion';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
+import { exportForgeDesign, type ForgeExportFormat } from '../lib/forge-export';
 import { FORGE_TOOL_COUNT, useForge, useForgeWebMCP, WEBMCP_CHECKING } from '../lib/use-forge';
 import type {
   EngineeringExample,
@@ -61,6 +62,7 @@ export function ForgeTwinApp() {
   const [agentModel, setAgentModel] = useState('gpt-5.6-sol');
   const [agentKey, setAgentKey] = useState('');
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [agentConnecting, setAgentConnecting] = useState(false);
   const [agentConnectionError, setAgentConnectionError] = useState<string | null>(null);
   const [agentTrace, setAgentTrace] = useState<AgentTraceItem[]>([]);
@@ -684,7 +686,7 @@ export function ForgeTwinApp() {
     <header className="forge-header">
       <button className="brand-lockup" aria-label="ForgeTwin home" onClick={() => patchUi({ screen: 'landing' })} disabled={busy}><span className="brand-mark"><span>F</span></span><span><strong>ForgeTwin</strong><small>world-first AI engineering</small></span></button>
       <div className="header-center"><span className={`live-dot ${agentRuntime === 'session-model' ? 'cyan' : ''}`} />{agentRuntime === 'session-model' ? `${agentModel} connected with your key` : 'Local engineer ready'} <span className="header-divider" /> REV {state.revision.toString().padStart(2, '0')} <span className="header-divider" /> {registeredTools === FORGE_TOOL_COUNT ? `${registeredTools} WebMCP tools live` : registeredTools === WEBMCP_CHECKING ? 'Connecting WebMCP…' : 'Open in a WebMCP-enabled browser'}</div>
-      <div className="header-actions"><button className="ghost-button chat-edit-button" disabled={busy} onClick={() => setSideTab('chat')}><MessageSquareText size={14} />Chat edit</button><button className="ghost-button" disabled={busy} onClick={() => setAgentSettingsOpen(true)}><KeyRound size={14} />Agent</button><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Checkpoint</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare runs</button><button className="ghost-button" disabled={busy} onClick={() => { setAnimationPlaying(false); reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setAgentTrace([]); setEditMessages([]); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
+      <div className="header-actions"><button className="ghost-button chat-edit-button" disabled={busy} onClick={() => setSideTab('chat')}><MessageSquareText size={14} />Chat edit</button><button className="ghost-button" disabled={busy} onClick={() => setAgentSettingsOpen(true)}><KeyRound size={14} />Agent</button><button className="ghost-button export-button" disabled={busy || !state.components.length} onClick={() => setExportOpen(true)}><Download size={14} />Export</button><button className="ghost-button" disabled={busy} onClick={() => { checkpoint('Manual world checkpoint'); setToast('World checkpoint saved'); }}><Save size={14} />Checkpoint</button><button className="ghost-button" disabled={busy} onClick={undo}><Undo2 size={14} />Undo</button><button className="ghost-button" disabled={busy} onClick={() => setDrawer('compare')}><GitCompareArrows size={14} />Compare runs</button><button className="ghost-button" disabled={busy} onClick={() => { setAnimationPlaying(false); reset('landing'); setGoalPrompt(DEFAULT_DESIGN_PROMPT); setPromptError(null); setAgentTrace([]); setEditMessages([]); setToast('Sandbox reset — ready for any mechanical goal'); }}><RotateCcw size={14} />Reset</button><button className="run-button" onClick={runHeaderSimulation} disabled={busy}>{busy ? <Cpu size={14} /> : <Play size={14} fill="currentColor" />}{busy ? 'Engineering…' : 'Run physics'}</button></div>
     </header>
     <main id="forge-main" className="forge-main">
       <aside className="catalog-panel" aria-label="World hierarchy">
@@ -697,7 +699,7 @@ export function ForgeTwinApp() {
       </aside>
       <section className="viewport-panel" aria-label="3D mechanical world">
         <ForgeScene state={state} operating={animationPlaying} onComponentMove={handleEditableMove} onSelect={(id) => patchUi({ selectedComponentId: id || null })} />
-        <div className="viewport-topbar"><div className="scene-path"><span>{state.goal?.domain ?? 'Mechanical world'}</span><i>/</i><strong>{state.goal?.machineName ?? 'Empty sandbox'}</strong>{selected && <><i>/</i><b>{selected.role}</b></>}</div><div className="view-controls"><button className={animationPlaying ? 'active animation-control' : 'animation-control'} onClick={() => { const next = !animationPlaying; if (next) patchUi({ replayRunId: null, replayMode: 'normal' }); setAnimationPlaying(next); setToast(next ? 'Operation animation playing' : 'Operation animation paused'); }} aria-pressed={animationPlaying} disabled={busy || !state.components.length}>{animationPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}{animationPlaying ? 'Pause animation' : 'Animate design'}</button><button onClick={() => patchUi({ xray: !state.xray })} aria-pressed={state.xray} className={state.xray ? 'active' : ''}><Layers3 size={14} />X-Ray</button><button onClick={() => setDrawer('telemetry')}><Gauge size={14} />Telemetry</button><button onClick={() => { setSideTab('history'); setDrawer('history'); }}><History size={14} />Revisions</button></div></div>
+        <div className="viewport-topbar"><div className="scene-path"><span>{state.goal?.domain ?? 'Mechanical world'}</span><i>/</i><strong>{state.goal?.machineName ?? 'Empty sandbox'}</strong>{selected && <><i>/</i><b>{selected.role}</b></>}</div><div className="view-controls"><button className={animationPlaying ? 'active animation-control' : 'animation-control'} onClick={() => { const next = !animationPlaying; if (next) patchUi({ replayRunId: null, replayMode: 'normal' }); setAnimationPlaying(next); setToast(next ? 'Operation animation playing' : 'Operation animation paused'); }} aria-pressed={animationPlaying} disabled={busy || !state.components.length}>{animationPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}{animationPlaying ? 'Pause animation' : 'Animate design'}</button><button onClick={() => patchUi({ xray: !state.xray })} aria-pressed={state.xray} className={state.xray ? 'active' : ''}><Layers3 size={14} />X-Ray</button><button onClick={() => setDrawer('telemetry')}><Gauge size={14} />Telemetry</button><button onClick={() => { setSideTab('history'); setDrawer('history'); }}><History size={14} />Revisions</button><button className="viewport-export" onClick={() => setExportOpen(true)} disabled={!state.components.length}><Download size={14} />Export</button></div></div>
         <div className="viewport-status"><span className="live-dot cyan" />RAPIER MULTI-BODY <i />60 HZ <i />SEED 424242 <i />{state.components.length} BODIES · {state.joints.length} JOINTS</div>
         {!state.components.length && <div className="empty-machine-card"><span className="goal-avatar"><Sparkles size={18} /></span><span className="eyebrow">General-purpose physical sandbox</span><h1>Describe the system.<br />ForgeTwin builds the world.</h1><p>No profile selector. The agent creates reusable primitives, physical properties, joints, sensing, actuation, and control logic from scratch.</p><GoalComposer id="lab-design-goal" prompt={goalPrompt} error={promptError} busy={busy} compact agentRuntime={agentRuntime} onPromptChange={updateGoalPrompt} onGenerate={generateFromPrompt} /></div>}
         {state.phase === 'failed' && latestRun && <FailureBanner run={latestRun} onReplay={() => startFailureReplay(latestRun.id)} onFix={diagnoseAndFix} busy={busy} />}
@@ -712,8 +714,49 @@ export function ForgeTwinApp() {
     {drawer && <Drawer type={drawer} state={state} onClose={() => setDrawer(null)} onRestore={(revision) => { const result = command('restore_revision', { revision }, 'UI'); if (result.ok) setToast(`Revision ${revision} restored`); else setError(result.error.message); }} onAddPrimitive={addPrimitive} />}
     {generationVisual && <GenerationSequence state={generationVisual} onCancel={cancelAgentRun} />}
     {agentSettingsOpen && <AgentSettingsDialog runtime={agentRuntime} model={agentModel} hasTemporaryKey={Boolean(agentKey)} connecting={agentConnecting} connectionError={agentConnectionError} onConnect={connectTemporaryModel} onDisconnect={disconnectTemporaryModel} onClose={() => setAgentSettingsOpen(false)} />}
+    {exportOpen && <ExportDialog state={state} onClose={() => setExportOpen(false)} onSuccess={(message) => setToast(message)} onError={(message) => setError(message)} />}
     <div className="sr-only" aria-live="polite">{busy ? 'Agent is engineering the shared physical world' : toast ?? error ?? ''}</div>
   </div>;
+}
+
+const EXPORT_OPTIONS: Array<{ format: ForgeExportFormat; title: string; extension: string; description: string; icon: 'image' | 'report' | 'cad' | 'data' }> = [
+  { format: 'png', title: 'Presentation PNG', extension: '.PNG · 1800 × 1200', description: 'Lossless 3:2 image of the current live camera view with design evidence.', icon: 'image' },
+  { format: 'jpg', title: 'Shareable JPG', extension: '.JPG · 1800 × 1200', description: 'High-quality compressed image for galleries, slides, and submissions.', icon: 'image' },
+  { format: 'pdf', title: 'Engineering report', extension: '.PDF · MULTI-PAGE', description: 'Branded design summary, current render, metrics, constraints, and bill of materials.', icon: 'report' },
+  { format: 'stl', title: 'CAD exchange geometry', extension: '.STL · ASCII MESH', description: 'Combined 3D assembly mesh for SolidWorks, Creo, Fusion 360, FreeCAD, and other CAD tools.', icon: 'cad' },
+  { format: 'json', title: 'Engineering data', extension: '.JSON · FULL WORLD', description: 'Machine goal, bodies, transforms, materials, joints, controls, and latest telemetry.', icon: 'data' },
+];
+
+function ExportDialog({ state, onClose, onSuccess, onError }: { state: ForgeState; onClose: () => void; onSuccess: (message: string) => void; onError: (message: string) => void }) {
+  const [exporting, setExporting] = useState<ForgeExportFormat | null>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.querySelector<HTMLElement>('button[aria-label="Close export dialog"]')?.focus();
+    const handle = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !exporting) { event.preventDefault(); onCloseRef.current(); }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')];
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handle);
+    return () => { document.removeEventListener('keydown', handle); previous?.focus(); };
+  }, [exporting]);
+  const startExport = async (format: ForgeExportFormat) => {
+    setExporting(format);
+    try {
+      await exportForgeDesign(state, format);
+      onSuccess(format === 'stl' ? 'CAD assembly exported for SolidWorks, Creo, and compatible tools' : `${format.toUpperCase()} export downloaded`);
+    } catch (caught) { onError(caught instanceof Error ? caught.message : 'The design could not be exported.'); }
+    finally { setExporting(null); }
+  };
+  const iconFor = (kind: typeof EXPORT_OPTIONS[number]['icon']) => kind === 'image' ? <ImageIcon size={20} /> : kind === 'report' ? <FileText size={20} /> : kind === 'cad' ? <Box size={20} /> : <Code2 size={20} />;
+  return <div className="export-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !exporting) onClose(); }}><section ref={dialogRef} className="export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title"><header><div><span className="eyebrow">Fabrication handoff</span><h2 id="export-title">Export this engineered world</h2><p>Take the current camera view, evidence report, or exchange geometry into the next tool.</p></div><button onClick={onClose} disabled={Boolean(exporting)} aria-label="Close export dialog"><X size={17} /></button></header><div className="export-grid">{EXPORT_OPTIONS.map((option) => <button key={option.format} type="button" className={`export-option ${option.format === 'stl' ? 'featured' : ''}`} onClick={() => startExport(option.format)} disabled={Boolean(exporting)}><span className="export-option-icon">{exporting === option.format ? <Cpu size={20} /> : iconFor(option.icon)}</span><span><small>{option.extension}</small><strong>{option.title}</strong><p>{option.description}</p></span><Download size={15} className="export-download-icon" /></button>)}</div><footer><span><BadgeCheck size={13} />Exports preserve the current revision and human-authored transforms.</span><p><strong>CAD note:</strong> STL is real triangulated exchange geometry. Native SolidWorks/Creo parametric feature trees require reconstruction after import.</p></footer></section></div>;
 }
 
 const GENERATION_PHASES: Array<{ id: GenerationPhase; label: string; short: string }> = [
