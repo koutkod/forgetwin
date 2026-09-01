@@ -6,7 +6,7 @@ import {
 } from '../../../lib/forge-agent';
 
 const DEFAULT_MODEL = 'gpt-5.6-sol';
-const DEFAULT_HOSTED_MODEL = 'gpt-5.6-luna';
+const DEFAULT_HOSTED_MODEL = 'gpt-5.6-terra';
 const HOSTED_REQUEST_LIMIT = 60;
 const HOSTED_REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const hostedRequestWindows = new Map<string, { startedAt: number; count: number }>();
