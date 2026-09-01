@@ -214,7 +214,7 @@ Editing contract:
       ? { edit_request: task.prompt, current_world: task.context }
       : { user_goal: task.prompt, measured_trial: task.context };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 55_000);
+  const timeout = setTimeout(() => controller.abort(), 50_000);
   try {
     let validationFeedback = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -225,7 +225,7 @@ Editing contract:
         body: JSON.stringify({
           model: modelName(), store: false, instructions,
           input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ USER_DATA: input }) }] }],
-          reasoning: { effort: planTask || editTask ? 'high' : 'medium' }, max_output_tokens: planTask ? 12_000 : editTask ? 7_000 : 2_400,
+          reasoning: { effort: planTask || editTask ? 'medium' : 'low' }, max_output_tokens: planTask ? 9_000 : editTask ? 6_000 : 2_400,
           text: { verbosity: 'low', format: { type: 'json_schema', name: planTask ? 'forgetwin_agent_plan' : editTask ? 'forgetwin_agent_edit' : 'forgetwin_agent_redesign', strict: true, schema } },
         }),
         signal: controller.signal,
@@ -262,6 +262,28 @@ Editing contract:
   } finally { clearTimeout(timeout); }
 }
 
+function streamedJsonResponse(work: Promise<Response>) {
+  const encoder = new TextEncoder();
+  let keepalive: ReturnType<typeof setInterval> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode('\n'));
+      keepalive = setInterval(() => controller.enqueue(encoder.encode(' \n')), 5_000);
+      void work.then(async (response) => {
+        if (keepalive) clearInterval(keepalive);
+        controller.enqueue(encoder.encode(await response.text()));
+        controller.close();
+      }).catch(() => {
+        if (keepalive) clearInterval(keepalive);
+        controller.enqueue(encoder.encode(JSON.stringify({ ok: false, code: 'MODEL_UNAVAILABLE', error: 'The hosted model agent is temporarily unavailable.' })));
+        controller.close();
+      });
+    },
+    cancel() { if (keepalive) clearInterval(keepalive); },
+  });
+  return new Response(stream, { headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
+}
+
 export async function GET() {
   return Response.json({ ok: true, configured: Boolean(serverKey()), model: modelName() }, { headers: { 'cache-control': 'no-store' } });
 }
@@ -280,7 +302,8 @@ export async function POST(request: Request) {
   if (credential.source === 'hosted' && !hostedRequestAllowed(request)) return Response.json({ ok: false, code: 'HOSTED_MODEL_RATE_LIMIT', error: 'The hosted demo limit was reached for this network. Wait ten minutes or use your own API key in Agent settings.' }, { status: 429, headers: { 'retry-after': '600' } });
   try {
     const body = requestSchema.parse(await request.json());
-    return await createStructuredResponse(credential.key, body);
+    const work = createStructuredResponse(credential.key, body);
+    return credential.source === 'hosted' ? streamedJsonResponse(work) : await work;
   } catch (error) {
     if (error instanceof z.ZodError || error instanceof SyntaxError) return Response.json({ ok: false, code: 'INVALID_AGENT_REQUEST', error: 'The engineering request did not match the guarded agent schema.' }, { status: 400 });
     return Response.json({ ok: false, code: 'AGENT_REQUEST_FAILED', error: 'The agent request could not be processed.' }, { status: 500 });
