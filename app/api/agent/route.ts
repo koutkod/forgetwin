@@ -6,6 +6,7 @@ import {
 } from '../../../lib/forge-agent';
 
 const DEFAULT_MODEL = 'gpt-5.6-sol';
+const DEFAULT_HOSTED_MODEL = 'gpt-5.6-luna';
 const HOSTED_REQUEST_LIMIT = 60;
 const HOSTED_REQUEST_WINDOW_MS = 10 * 60 * 1000;
 const hostedRequestWindows = new Map<string, { startedAt: number; count: number }>();
@@ -112,9 +113,9 @@ function hostedRequestAllowed(request: Request) {
   return true;
 }
 
-function modelName() {
-  const candidate = process.env.OPENAI_MODEL?.trim();
-  return candidate && candidate.length <= 100 ? candidate : DEFAULT_MODEL;
+function modelName(source: 'visitor' | 'hosted' = 'visitor') {
+  const candidate = (source === 'hosted' ? process.env.OPENAI_HOSTED_MODEL : process.env.OPENAI_MODEL)?.trim();
+  return candidate && candidate.length <= 100 ? candidate : source === 'hosted' ? DEFAULT_HOSTED_MODEL : DEFAULT_MODEL;
 }
 
 function extractOutputText(payload: unknown) {
@@ -145,35 +146,36 @@ function modelOutputIssue(payload: unknown) {
   return null;
 }
 
-function providerError(status: number, fallback = 'OpenAI could not complete this request.') {
+function providerError(status: number, model: string, fallback = 'OpenAI could not complete this request.') {
   if (status === 401) return { code: 'MODEL_KEY_REJECTED', error: 'OpenAI rejected this API key. Check that it is active and copied completely.', status: 401 };
-  if (status === 403 || status === 404) return { code: 'MODEL_ACCESS_DENIED', error: `This OpenAI project cannot access ${modelName()}. Check the project permissions and API model access.`, status: 403 };
+  if (status === 403 || status === 404) return { code: 'MODEL_ACCESS_DENIED', error: `This OpenAI project cannot access ${model}. Check the project permissions and API model access.`, status: 403 };
   if (status === 429) return { code: 'MODEL_QUOTA_OR_RATE_LIMIT', error: 'The API key is valid, but the OpenAI project has no available quota or is currently rate-limited. Check API billing and limits.', status: 429 };
   if (status >= 500) return { code: 'MODEL_PROVIDER_UNAVAILABLE', error: 'OpenAI is temporarily unavailable. ForgeTwin can use the local engineer for this run and retry later.', status: 502 };
   return { code: 'MODEL_PROVIDER_ERROR', error: fallback, status: 400 };
 }
 
-function providerErrorResponse(status: number, fallback?: string) {
-  const failure = providerError(status, fallback);
+function providerErrorResponse(status: number, model: string, fallback?: string) {
+  const failure = providerError(status, model, fallback);
   return Response.json({ ok: false, code: failure.code, error: failure.error }, { status: failure.status });
 }
 
 async function validateModelAccess(apiKey: string) {
+  const model = modelName('visitor');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
-    const response = await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(modelName())}`, {
+    const response = await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(model)}`, {
       method: 'GET', headers: { authorization: `Bearer ${apiKey}` }, signal: controller.signal,
     });
-    if (!response.ok) return providerErrorResponse(response.status, 'OpenAI could not validate this key for the selected model.');
-    return Response.json({ ok: true, configured: true, model: modelName() }, { headers: { 'cache-control': 'no-store' } });
+    if (!response.ok) return providerErrorResponse(response.status, model, 'OpenAI could not validate this key for the selected model.');
+    return Response.json({ ok: true, configured: true, model }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') return Response.json({ ok: false, code: 'MODEL_VALIDATION_TIMEOUT', error: 'OpenAI did not validate the key in time. Check your connection and try again.' }, { status: 504 });
     return Response.json({ ok: false, code: 'MODEL_PROVIDER_UNAVAILABLE', error: 'OpenAI could not be reached to validate this key. Try again in a moment.' }, { status: 502 });
   } finally { clearTimeout(timeout); }
 }
 
-async function createStructuredResponse(apiKey: string, task: z.infer<typeof requestSchema>) {
+async function createStructuredResponse(apiKey: string, task: z.infer<typeof requestSchema>, model: string) {
   const planTask = task.task === 'plan';
   const editTask = task.task === 'edit';
   const schema = planTask ? AGENT_PLAN_JSON_SCHEMA : editTask ? AGENT_EDIT_JSON_SCHEMA : AGENT_REDESIGN_JSON_SCHEMA;
@@ -223,7 +225,7 @@ Editing contract:
         method: 'POST',
         headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: modelName(), store: false, instructions,
+          model, store: false, instructions,
           input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ USER_DATA: input }) }] }],
           reasoning: { effort: 'low' }, max_output_tokens: planTask ? 6_500 : editTask ? 4_500 : 2_000,
           text: { verbosity: 'low', format: { type: 'json_schema', name: planTask ? 'forgetwin_agent_plan' : editTask ? 'forgetwin_agent_edit' : 'forgetwin_agent_redesign', strict: true, schema } },
@@ -232,7 +234,7 @@ Editing contract:
       });
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined);
-        return providerErrorResponse(response.status, 'OpenAI rejected the structured engineering request. Try again or use the local engineer for this run.');
+        return providerErrorResponse(response.status, model, 'OpenAI rejected the structured engineering request. Try again or use the local engineer for this run.');
       }
       const payload = await response.json() as unknown;
       const outputIssue = modelOutputIssue(payload);
@@ -246,7 +248,7 @@ Editing contract:
           : editTask
             ? validateAgentEditSemantics(agentEditSchema.parse(parsedJson), task.context)
             : agentRedesignSchema.parse(parsedJson);
-        return Response.json({ ok: true, mode: 'model', model: modelName(), result });
+        return Response.json({ ok: true, mode: 'model', model, result });
       } catch (error) {
         if (!(error instanceof z.ZodError) && !(error instanceof SyntaxError) && !(error instanceof Error)) throw error;
         validationFeedback = (error instanceof z.ZodError
@@ -285,7 +287,7 @@ function streamedJsonResponse(work: Promise<Response>) {
 }
 
 export async function GET() {
-  return Response.json({ ok: true, configured: Boolean(serverKey()), model: modelName() }, { headers: { 'cache-control': 'no-store' } });
+  return Response.json({ ok: true, configured: Boolean(serverKey()), model: modelName(serverKey() ? 'hosted' : 'visitor') }, { headers: { 'cache-control': 'no-store' } });
 }
 
 export async function PUT(request: Request) {
@@ -302,7 +304,7 @@ export async function POST(request: Request) {
   if (credential.source === 'hosted' && !hostedRequestAllowed(request)) return Response.json({ ok: false, code: 'HOSTED_MODEL_RATE_LIMIT', error: 'The hosted demo limit was reached for this network. Wait ten minutes or use your own API key in Agent settings.' }, { status: 429, headers: { 'retry-after': '600' } });
   try {
     const body = requestSchema.parse(await request.json());
-    const work = createStructuredResponse(credential.key, body);
+    const work = createStructuredResponse(credential.key, body, modelName(credential.source));
     return credential.source === 'hosted' ? streamedJsonResponse(work) : await work;
   } catch (error) {
     if (error instanceof z.ZodError || error instanceof SyntaxError) return Response.json({ ok: false, code: 'INVALID_AGENT_REQUEST', error: 'The engineering request did not match the guarded agent schema.' }, { status: 400 });
