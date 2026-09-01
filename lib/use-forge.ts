@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { createInitialForgeState } from './forge-data';
 import { applyForgeTool, commitSimulation, createCheckpoint, markSimulationRunning, toggleUi } from './forge-engine';
 import { simulateDesign } from './forge-simulation';
-import type { Actor, ForgeState, ForgeToolName, ToolResult, Vec3 } from './forge-types';
+import type { Actor, CompiledWorldPlan, ForgeState, ForgeToolName, ToolResult, Vec3 } from './forge-types';
 
 export const STORAGE_KEY = 'forgetwin-workspace-v3';
 const revision = z.number().int().nonnegative();
@@ -79,9 +79,51 @@ export function prepareForgeToolArguments(name: ForgeToolName, rawInput: Record<
   }
   if (name === 'create_component' && (repaired.mass === 0 || repaired.mass === null)) delete repaired.mass;
   if (name === 'add_motor' && repaired.direction === undefined) repaired.direction = 1;
+  const boundedText = (key: string, maximum: number) => {
+    if (typeof repaired[key] === 'string' && repaired[key].length > maximum) repaired[key] = repaired[key].slice(0, maximum).trimEnd();
+  };
+  if (name === 'set_design_goal') {
+    boundedText('summary', 240); boundedText('disclaimer', 240); boundedText('simulation_model', 160); boundedText('editable_label', 80);
+    if (Array.isArray(repaired.assumptions)) repaired.assumptions = repaired.assumptions.map((item) => typeof item === 'string' ? item.slice(0, 180).trimEnd() : item).slice(0, 16);
+  }
+  if (name === 'create_assembly') { boundedText('name', 80); boundedText('purpose', 160); }
+  if (name === 'create_component') boundedText('role', 80);
   const parsed = schemas[name].safeParse(repaired);
-  if (!parsed.success) throw direct.error;
+  if (!parsed.success) {
+    const detail = parsed.error.issues.slice(0, 3).map((issue) => `${issue.path.join('.') || 'root'} ${issue.message}`).join('; ');
+    throw new Error(`INVALID_INPUT: ${name} arguments are invalid: ${detail}`);
+  }
   return { input: parsed.data as Record<string, unknown>, repaired: true, detail: 'Removed empty optional fields and normalized schema-safe defaults before execution.' };
+}
+
+/** Verify every command emitted by a compiled design before resetting the
+ * visible workspace. This turns model/schema drift into a bounded fallback
+ * instead of leaving the user in an empty world after the first tool call. */
+export function preflightCompiledWorldPlan(plan: CompiledWorldPlan) {
+  const guard = { expected_revision: 0, expected_workspace_nonce: 'preflight-workspace' };
+  const steps: Array<{ name: ForgeToolName; input: Record<string, unknown> }> = [
+    { name: 'set_design_goal', input: {
+      machine_name: plan.goal.machineName, domain: plan.goal.domain, brief: plan.brief,
+      summary: plan.goal.summary, capabilities: plan.goal.capabilities, constraints: plan.goal.constraints,
+      max_components: plan.goal.maxComponents, assumptions: plan.assumptions,
+      disclaimer: plan.goal.disclaimer, simulation_model: plan.goal.simulationModel,
+      editable_component_id: plan.goal.editableComponentId, editable_label: plan.goal.editableLabel,
+      world: { gravity: plan.world.gravity, duration: plan.world.duration, bounds: plan.world.bounds, environment: plan.world.environment },
+    } },
+    ...plan.assemblies.map((item) => ({ name: 'create_assembly' as const, input: { assembly_id: item.id, name: item.name, purpose: item.purpose, parent_id: item.parentId } })),
+    ...plan.components.map((item) => ({ name: 'create_component' as const, input: {
+      component_id: item.id, primitive: item.primitive, assembly_id: item.assemblyId, role: item.role,
+      position: item.position, rotation: item.rotation, dimensions: item.dimensions, material_id: item.materialId,
+      body_type: item.bodyType, mass: item.mass, color: item.color, parameters: item.parameters,
+    } })),
+    ...plan.connections.map((item) => ({ name: 'connect_components' as const, input: { connection_id: item.id, source_id: item.sourceId, target_id: item.targetId, connection_type: item.type, channel: item.channel } })),
+    ...plan.joints.map((item) => ({ name: 'create_joint' as const, input: { joint_id: item.id, joint_type: item.type, component_a: item.componentA, component_b: item.componentB, anchor_a: item.anchorA, anchor_b: item.anchorB, axis: item.axis, limits: item.limits, ratio: item.ratio, stiffness: item.stiffness, damping: item.damping } })),
+    ...plan.motors.map((item) => ({ name: 'add_motor' as const, input: { motor_id: item.id, component_id: item.componentId, joint_id: item.jointId, max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction } })),
+    ...plan.sensors.map((item) => ({ name: 'add_sensor' as const, input: { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range } })),
+    ...plan.actuators.map((item) => ({ name: 'add_actuator' as const, input: { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel } })),
+    ...plan.controls.map((item) => ({ name: 'set_control_logic' as const, input: { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX } })),
+  ];
+  return steps.map((step) => ({ name: step.name, ...prepareForgeToolArguments(step.name, { ...step.input, ...guard }) }));
 }
 
 function recordSchemaRepair(state: ForgeState, name: ForgeToolName, actor: Actor, detail: string) {

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { agentIntentSchema } from './forge-agent';
 import { contextualMechanicalEdits } from './forge-chat';
 import { normalizeEngineeringIntent } from './forge-intent';
+import { agentPlanFromCompiled, compileAgentPlan } from './forge-model-plan';
 import { compileDesignBrief } from './forge-prompt';
 import { assemblePlan, testCommand } from './forge-test-utils';
-import { prepareForgeToolArguments } from './use-forge';
+import { preflightCompiledWorldPlan, prepareForgeToolArguments } from './use-forge';
 
 describe('judge prompt acceptance matrix', () => {
   it('normalizes domain misspellings without changing the requested machine family', () => {
@@ -67,6 +69,29 @@ describe('judge prompt acceptance matrix', () => {
     expect(plan.components.filter((item) => item.parameters?.aircraft_control_surface).length).toBeGreaterThanOrEqual(3);
   });
 
+  it('preflights a verbose model-authored airplane without exceeding world-tool text limits', () => {
+    const prompt = 'Build an airplane with two wings, a propeller and navigation lights.';
+    const deterministic = compileDesignBrief(prompt);
+    const architecture = [
+      'Central fuselage with cockpit and internal structural frame',
+      'Two cantilever main wings with separately hinged control surfaces',
+      'Tailplane and vertical fin with elevator and rudder mechanisms',
+      'Nose motor, supported shaft, bearing, and propeller assembly',
+      'Tricycle landing gear mounted to reinforced fuselage hardpoints',
+      'Battery, pilot controls, and conventional navigation-light circuit',
+    ];
+    const intent = agentIntentSchema.parse({
+      normalized_prompt: prompt, design_brief: prompt, machine_name: 'Twin-wing propeller airplane', domain: 'Light aviation',
+      reasoning_summary: 'Compose a recognizable fixed-wing airplane with supported propulsion, control surfaces, landing gear, and navigation lighting.',
+      architecture, assumptions: ['Concept-level rigid-body aircraft'], capabilities: deterministic.goal.capabilities,
+      requirements: deterministic.goal.constraints.slice(0, 8),
+    });
+    const raw = agentPlanFromCompiled(prompt, intent, deterministic);
+    const plan = compileAgentPlan(prompt, raw);
+    expect(plan.goal.summary.length).toBeLessThanOrEqual(240);
+    expect(() => preflightCompiledWorldPlan(plan)).not.toThrow();
+  });
+
   it('builds and contextually edits a four-wheel electric go-kart', () => {
     let state = assemblePlan(compileDesignBrief('Build a four-wheel electric go kart.'));
     expect(state.goal?.machineName).toBe('Electric go-kart');
@@ -97,6 +122,16 @@ describe('schema-safe tool preparation', () => {
     expect(prepared.repaired).toBe(true);
     expect(prepared.input).not.toHaveProperty('limits');
     expect(prepared.input).not.toHaveProperty('ratio');
+  });
+
+  it('bounds optional goal copy before guarded execution', () => {
+    const prepared = prepareForgeToolArguments('set_design_goal', {
+      machine_name: 'Airplane', domain: 'Aviation', brief: 'Build a complete propeller airplane.', capabilities: ['structure'],
+      constraints: [{ metric: 'component_count', label: 'Parts', operator: 'max', target: 40, unit: '', source: 'inferred' }],
+      max_components: 40, summary: 'x'.repeat(420), expected_revision: 0, expected_workspace_nonce: 'workspace-nonce',
+    });
+    expect(prepared.repaired).toBe(true);
+    expect(String(prepared.input.summary)).toHaveLength(240);
   });
 
   it('does not repair away freshness guards', () => {

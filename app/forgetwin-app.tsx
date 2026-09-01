@@ -18,7 +18,7 @@ import { compileAgentPlan, localAnchorAt, semanticParametersForEdit } from '../l
 import { translateInForgeCoordinates } from '../lib/forge-motion';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
 import { exportForgeDesign, type ForgeExportFormat } from '../lib/forge-export';
-import { FORGE_TOOL_COUNT, useForge, useForgeWebMCP, WEBMCP_CHECKING } from '../lib/use-forge';
+import { FORGE_TOOL_COUNT, preflightCompiledWorldPlan, useForge, useForgeWebMCP, WEBMCP_CHECKING } from '../lib/use-forge';
 import type {
   EngineeringExample,
 } from '../lib/forge-data';
@@ -192,15 +192,16 @@ export function ForgeTwinApp() {
       if (modelPlan) {
         try {
           plan = compileAgentPlan(requestedPrompt, modelPlan);
+          preflightCompiledWorldPlan(plan);
           addTrace('action', 'AI architecture compiled', `${modelPlan.machine_name} will be materialized from ${modelPlan.components.length} guarded bodies and ${modelPlan.joints.length} validated joints selected from the model-authored engineering intent.`);
         } catch (caught) {
           actor = 'Deterministic';
           addTrace('fallback', 'AI graph could not be materialized', caught instanceof Error ? `${caught.message} Trying a known high-fidelity local mechanism instead.` : 'Trying a known high-fidelity local mechanism instead.');
-          try { plan = compileDesignBrief(requestedPrompt); }
+          try { plan = compileDesignBrief(requestedPrompt); preflightCompiledWorldPlan(plan); }
           catch (fallbackError) { throw new Error(fallbackError instanceof Error ? fallbackError.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
         }
       } else {
-        try { plan = compileDesignBrief(requestedPrompt); }
+        try { plan = compileDesignBrief(requestedPrompt); preflightCompiledWorldPlan(plan); }
         catch (caught) { throw new Error(caught instanceof Error ? caught.message.replace(/^[A-Z_]+:\s*/, '') : 'The physical goal could not be decomposed.'); }
       }
       plan.brief = requestedPrompt; plan.goal.brief = requestedPrompt;

@@ -9,6 +9,15 @@ import { finalizeCompiledWorldPlan } from './forge-design-validator';
 
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
 
+function boundedGoalSummary(architecture: string[], componentCount: number) {
+  const suffix = ` from ${componentCount} guarded physical bodies.`;
+  const prefix = 'AI-composed ';
+  const available = Math.max(24, 240 - prefix.length - suffix.length);
+  const joined = architecture.join(' + ');
+  const compact = joined.length <= available ? joined : `${joined.slice(0, Math.max(1, available - 1)).trimEnd()}…`;
+  return `${prefix}${compact}${suffix}`;
+}
+
 function orderedAssemblies(plan: AgentPlan): AssemblyBlueprint[] {
   const pending = new Map(plan.assemblies.map((item) => [item.id, item]));
   const ordered: AssemblyBlueprint[] = [];
@@ -153,7 +162,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
       machineName: plan.machine_name,
       domain: plan.domain,
       brief: requestedPrompt,
-      summary: `AI-composed ${plan.architecture.join(' + ')} from ${components.length} guarded physical bodies.`,
+      summary: boundedGoalSummary(plan.architecture, components.length),
       capabilities: [...plan.capabilities],
       constraints: plan.requirements.map((item) => ({ ...item })),
       maxComponents: explicitComponentLimit?.target ?? Math.min(80, Math.max(24, components.length + 8)),
