@@ -518,7 +518,7 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(url).toBe('https://api.openai.com/v1/responses');
     expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${visitorKey}`);
     expect(String(init.body)).not.toContain(visitorKey);
-    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-sol', reasoning: { effort: 'medium' }, store: false });
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.6-sol', reasoning: { effort: 'low' }, store: false });
     expect(JSON.stringify(await response.json())).not.toContain(visitorKey);
 
     const rejected = await POST(new Request('http://localhost/api/agent', {

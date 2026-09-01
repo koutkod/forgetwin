@@ -214,7 +214,7 @@ Editing contract:
       ? { edit_request: task.prompt, current_world: task.context }
       : { user_goal: task.prompt, measured_trial: task.context };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 50_000);
+  const timeout = setTimeout(() => controller.abort(), 55_000);
   try {
     let validationFeedback = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -225,7 +225,7 @@ Editing contract:
         body: JSON.stringify({
           model: modelName(), store: false, instructions,
           input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ USER_DATA: input }) }] }],
-          reasoning: { effort: planTask || editTask ? 'medium' : 'low' }, max_output_tokens: planTask ? 9_000 : editTask ? 6_000 : 2_400,
+          reasoning: { effort: 'low' }, max_output_tokens: planTask ? 6_500 : editTask ? 4_500 : 2_000,
           text: { verbosity: 'low', format: { type: 'json_schema', name: planTask ? 'forgetwin_agent_plan' : editTask ? 'forgetwin_agent_edit' : 'forgetwin_agent_redesign', strict: true, schema } },
         }),
         signal: controller.signal,
