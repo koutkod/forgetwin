@@ -227,7 +227,12 @@ export function agentPlanFromCompiled(originalPrompt: string, intent: AgentInten
   // Numeric requirements that ForgeTwin can parse directly from the original
   // user text are authoritative. This prevents a model from accidentally
   // downgrading a stated throughput/load/limit to an inferred requirement.
-  for (const candidate of [...explicitRequirements.filter((item) => item.source === 'user'), ...intent.requirements, ...inferredRequirements]) {
+  // Do not copy model requirements into the executable measurement contract:
+  // supported metrics are aggregate simulator values, so a plausible mapping
+  // such as “two wings” -> component_count=2 would mean “two total bodies.”
+  // The model still owns intent and architecture; the deterministic compiler
+  // owns the simulator constraints that must have exact physical semantics.
+  for (const candidate of [...explicitRequirements.filter((item) => item.source === 'user'), ...inferredRequirements]) {
     const parsed = agentPlanSchema.shape.requirements.element.safeParse(candidate);
     if (!parsed.success) continue;
     const requirement = parsed.data;

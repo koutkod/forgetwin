@@ -55,6 +55,31 @@ describe('model-authored world compilation', () => {
     expect(result.requirements).toContainEqual(expect.objectContaining({ metric: 'throughput', target: 20, unit: '/min', source: 'user' }));
   });
 
+  it('does not reinterpret requested subparts as aggregate simulator metrics', () => {
+    const prompt = 'Build an airplane with two wings, a propeller and navigation lights.';
+    const compiled = compileDesignBrief(prompt);
+    const intent: AgentIntent = {
+      normalized_prompt: prompt,
+      design_brief: 'Airplane with two wings, a propeller, landing gear and navigation lights.',
+      machine_name: 'Fixed-wing aircraft', domain: 'Aircraft engineering',
+      reasoning_summary: 'A light aircraft needs two wings and a driven propeller.',
+      architecture: ['fuselage', 'two main wings', 'propeller drive', 'landing gear'],
+      assumptions: ['Concept scale'], capabilities: ['structure', 'rotate', 'mobile'],
+      requirements: [
+        { metric: 'component_count', label: 'Main wing count', operator: 'exact', target: 2, unit: 'wings', source: 'user' },
+        { metric: 'actuator_count', label: 'Propeller motor count', operator: 'exact', target: 1, unit: 'motor', source: 'inferred' },
+      ],
+    };
+
+    const result = agentPlanFromCompiled(prompt, intent, compiled, compiled.goal.constraints.filter((item) => item.source === 'user'));
+
+    expect(result.requirements.some((item) => item.label === 'Main wing count')).toBe(false);
+    expect(result.requirements.some((item) => item.label === 'Propeller motor count')).toBe(false);
+    expect(result.components.filter((item) => /main wing/.test(item.role))).toHaveLength(2);
+    expect(result.assemblies.map((item) => item.name)).not.toContain('parallel linear guides');
+    expect(result.assemblies.map((item) => item.name)).not.toContain('requested primitive extension');
+  });
+
   it('uses bounded semantic tags instead of accidental machine-name substrings', () => {
     const cargo = compileAgentPlan('Build a cargo carrier.', twoBodyPlan('Cargo carrier', { primitive: 'wheel', role: 'stationary idler wheel', body_type: 'dynamic' }));
     expect(cargo.components.find((item) => item.id === 'subject')?.parameters?.road_vehicle_wheel).toBeUndefined();

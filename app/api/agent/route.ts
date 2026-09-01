@@ -257,10 +257,15 @@ Editing contract:
               const legacy = agentPlanSchema.safeParse(parsedJson);
               if (legacy.success) return validateAgentPlanSemantics(repairAgentPlanGraph(legacy.data), task.prompt);
               const intent = agentIntentSchema.parse(parsedJson);
-              const compiled = compileDesignBrief(intent.design_brief);
-              let explicitRequirements: ReturnType<typeof compileDesignBrief>['goal']['constraints'] = [];
-              try { explicitRequirements = compileDesignBrief(task.prompt).goal.constraints.filter((item) => item.source === 'user'); }
-              catch { /* The model-authored brief can still unlock a novel topology. */ }
+              // Keep the user's own nouns authoritative. Model-authored briefs
+              // can contain explanatory words such as “lifting surface” or
+              // “roller bearing” that must not select unrelated machine modules.
+              // Expanded model prose is reserved for genuinely novel goals that
+              // the original request cannot compile on its own.
+              let compiled: ReturnType<typeof compileDesignBrief>;
+              try { compiled = compileDesignBrief(task.prompt); }
+              catch { compiled = compileDesignBrief(intent.design_brief); }
+              const explicitRequirements = compiled.goal.constraints.filter((item) => item.source === 'user');
               return agentPlanFromCompiled(task.prompt, intent, compiled, explicitRequirements);
             })()
           : editTask
