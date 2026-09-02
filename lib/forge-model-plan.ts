@@ -52,6 +52,11 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   if (component.primitive === 'wheel' && bicycle) parameters.bicycle_wheel = true;
   if (component.primitive === 'wheel' && vehicle && !/steering wheel/.test(role)) parameters.road_vehicle_wheel = true;
   if (tags.has('road-wheel')) parameters.road_vehicle_wheel = true;
+  if (tags.has('road-wheel-hub')) { parameters.road_vehicle_wheel_hub = true; parameters.axle_axis = 'Z'; }
+  if (tags.has('road-axle-spindle')) { parameters.road_vehicle_spindle = true; parameters.axle_axis = 'Z'; }
+  if (tags.has('steering-kingpin')) { parameters.road_vehicle_kingpin = true; parameters.kingpin_axis = 'Y'; }
+  if (tags.has('steering-knuckle')) parameters.road_vehicle_steering_knuckle = true;
+  if (tags.has('steering-tie-rod')) parameters.road_vehicle_steering_tie_rod = true;
   if (tags.has('bicycle-wheel')) parameters.bicycle_wheel = true;
   if (tags.has('front-steering') || /front (?:left|right).*wheel|(?:left|right) front.*wheel/.test(role)) {
     parameters.road_vehicle_front_steering = true;
@@ -59,11 +64,19 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   }
   if (tags.has('steering-wheel') || /steering wheel/.test(role)) parameters.road_vehicle_steering_wheel = true;
   if (tags.has('steering-rack') || /steering rack/.test(role)) parameters.road_vehicle_steering_rack = true;
-  if (tags.has('headlight') || /headlight|head lamp|work light/.test(role)) { parameters.headlight = true; parameters.beam_range = 5; }
+  if (tags.has('cockpit-windshield')) { parameters.cockpit_windshield = true; parameters.attached_to_cockpit = true; parameters.facing_axis = '+X'; parameters.windshield_angle_deg = 16; }
+  if (tags.has('transparent-glazing')) parameters.transparent_glazing = true;
+  if (tags.has('nav-light-left') || tags.has('nav-light-right') || tags.has('nav-light-tail')) {
+    const side = tags.has('nav-light-left') ? 'left' : tags.has('nav-light-right') ? 'right' : 'tail';
+    parameters.aircraft_navigation_light = true; parameters.marker_light = true; parameters.navigation_side = side;
+    parameters.facing_axis = side === 'left' ? '-Z' : side === 'right' ? '+Z' : '-X';
+    parameters.light_direction = side === 'tail' ? 'rear' : side; parameters.facing_x = side === 'tail' ? -1 : 0;
+  }
+  if (tags.has('headlight') || tags.has('landing-light') || /headlight|head lamp|work light|landing light/.test(role)) { parameters.headlight = true; parameters.landing_light = tags.has('landing-light') || /landing light/.test(role); parameters.beam_range = 5; }
   if (tags.has('brake-light') || /brake light|tail light|taillight|rear lamp/.test(role)) {
-    parameters.brake_light = true; parameters.vehicle_light = true; parameters.light_direction = 'rear'; parameters.facing_x = -1; parameters.beam_range = 2.2;
+    parameters.brake_light = true; parameters.vehicle_light = true; parameters.light_direction = 'rear'; parameters.facing_axis = '-X'; parameters.facing_x = -1; parameters.beam_range = 2.2;
   } else if (parameters.headlight === true) {
-    parameters.vehicle_light = true; parameters.light_direction = 'front'; parameters.facing_x = 1;
+    parameters.vehicle_light = true; parameters.light_direction = 'front'; parameters.facing_axis = '+X'; parameters.facing_x = 1;
   }
   if (tags.has('solar-panel') || /solar (?:array|panel)|tracked panel/.test(role)) parameters.panel = true;
   if (tags.has('solar-moving')) parameters.solar_moving = true;
@@ -210,6 +223,16 @@ function tagsFromParameters(component: ComponentBlueprint) {
   }
   if (parameters.payload_kg !== undefined) tags.add('payload');
   if (parameters.road_vehicle_wheel === true) tags.add('road-wheel');
+  if (parameters.road_vehicle_wheel_hub === true) tags.add('road-wheel-hub');
+  if (parameters.road_vehicle_spindle === true) tags.add('road-axle-spindle');
+  if (parameters.road_vehicle_kingpin === true) tags.add('steering-kingpin');
+  if (parameters.road_vehicle_steering_knuckle === true) tags.add('steering-knuckle');
+  if (parameters.road_vehicle_steering_tie_rod === true) tags.add('steering-tie-rod');
+  if (parameters.road_vehicle_steering_rack === true) tags.add('steering-rack');
+  if (parameters.cockpit_windshield === true) tags.add('cockpit-windshield');
+  if (parameters.transparent_glazing === true) tags.add('transparent-glazing');
+  if (parameters.aircraft_navigation_light === true) tags.add(`nav-light-${String(parameters.navigation_side ?? 'tail')}`);
+  if (parameters.landing_light === true) tags.add('landing-light');
   if (parameters.bicycle_wheel === true) tags.add('bicycle-wheel');
   if (parameters.human_power_input === true) tags.add('human-power-input');
   if (parameters.headlight === true) tags.add('headlight');

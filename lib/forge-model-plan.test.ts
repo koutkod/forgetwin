@@ -38,6 +38,34 @@ describe('model-authored world compilation', () => {
     expect(result.joints.some((item) => item.joint_type === 'revolute')).toBe(true);
   });
 
+  it('keeps model planning connected for detailed vehicles above the legacy forty-body boundary', () => {
+    const prompt = 'Build an electric go-kart with headlights and brake lights.';
+    const compiled = compileDesignBrief(prompt);
+    const intent: AgentIntent = {
+      normalized_prompt: prompt,
+      design_brief: prompt,
+      machine_name: compiled.goal.machineName,
+      domain: compiled.goal.domain,
+      reasoning_summary: 'Use a low tubular chassis, independent steering knuckles, Ackermann linkage, powered rear wheels, driver controls, and correctly oriented lights.',
+      architecture: ['tubular chassis', 'four-wheel running gear', 'Ackermann steering', 'rear traction drive', 'driver controls and lighting'],
+      assumptions: ['Concept-scale rigid-body validation'],
+      capabilities: compiled.goal.capabilities,
+      requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 64, unit: '', source: 'inferred' }],
+    };
+
+    const result = agentPlanFromCompiled(prompt, intent, compiled);
+
+    expect(result.components.length).toBeGreaterThan(40);
+    expect(result.components.length).toBeLessThanOrEqual(80);
+    expect(result.joints).toHaveLength(17);
+    const roundTrip = compileAgentPlan(prompt, result);
+    expect(roundTrip.components.filter((item) => item.parameters?.road_vehicle_kingpin)).toHaveLength(2);
+    expect(roundTrip.components.filter((item) => item.parameters?.road_vehicle_wheel_hub)).toHaveLength(4);
+    expect(roundTrip.components.filter((item) => item.parameters?.road_vehicle_steering_tie_rod)).toHaveLength(2);
+    expect(roundTrip.components.filter((item) => item.parameters?.headlight).every((item) => item.parameters?.facing_axis === '+X')).toBe(true);
+    expect(roundTrip.components.filter((item) => item.parameters?.brake_light).every((item) => item.parameters?.facing_axis === '-X')).toBe(true);
+  });
+
   it('keeps explicit user targets authoritative when the model marks one as inferred', () => {
     const prompt = 'Build a conveyor that sorts red and blue boxes into separate bins at 20 boxes per minute.';
     const intent: AgentIntent = {
@@ -78,6 +106,12 @@ describe('model-authored world compilation', () => {
     expect(result.components.filter((item) => /main wing/.test(item.role))).toHaveLength(2);
     expect(result.assemblies.map((item) => item.name)).not.toContain('parallel linear guides');
     expect(result.assemblies.map((item) => item.name)).not.toContain('requested primitive extension');
+    const roundTrip = compileAgentPlan(prompt, result);
+    const navigationLights = roundTrip.components.filter((item) => item.parameters?.aircraft_navigation_light);
+    expect(navigationLights.map((item) => [item.parameters?.navigation_side, item.parameters?.facing_axis, item.color])).toEqual(expect.arrayContaining([
+      ['left', '-Z', '#ff3344'], ['right', '+Z', '#32e875'], ['tail', '-X', '#f3f8ff'],
+    ]));
+    expect(roundTrip.components.find((item) => item.parameters?.cockpit_windshield)?.parameters?.transparent_glazing).toBe(true);
   });
 
   it('uses bounded semantic tags instead of accidental machine-name substrings', () => {

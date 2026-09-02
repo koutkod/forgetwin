@@ -84,7 +84,11 @@ export const agentPlanSchema = z.object({
   capabilities: z.array(capability).min(1).max(14),
   requirements: z.array(planRequirementSchema).min(1).max(8),
   assemblies: z.array(planAssemblySchema).min(1).max(8),
-  components: z.array(planComponentSchema).min(2).max(40),
+  // The guarded workspace supports up to 80 bodies. High-fidelity vehicles
+  // such as the Ackermann go-kart legitimately exceed the legacy 40-body
+  // model boundary after hubs, spindles, knuckles, lights, and controls are
+  // expanded from a compact intent.
+  components: z.array(planComponentSchema).min(2).max(80),
   connections: z.array(planConnectionSchema).max(80),
   joints: z.array(planJointSchema).max(60),
   motors: z.array(planMotorSchema).max(12),
@@ -335,8 +339,9 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
   if (/\b(?:go-kart|gokart|go cart|kart|car|automobile|buggy|rover|agv|vehicle)\b/.test(requested) && !/\bcar\s+(?:jack|lift|hoist)\b/.test(requested) && !vehicleSuspension && !vehicleChassis && !vehicleWheel && !vehicleAxle) {
     requireSignature(count('wheel') >= 3, 'a multi-wheel rolling chassis');
     requireSignature(count('frame') + count('plate') + count('beam') + count('tube') >= 1, 'a load-bearing chassis');
-    requireSignature(relevantDrivenJoints((component, text) => (component.primitive === 'wheel' && /road wheel|drive wheel|driven wheel|front[^.]{0,24}wheel|rear[^.]{0,24}wheel|traction|wheel hub/.test(text))
-      || (component.primitive === 'shaft' && /drive axle|powered axle|axle shaft|traction/.test(text))).length >= 1, 'a drive coupled to a road wheel or axle');
+    requireSignature(relevantDrivenJoints((component, text) => (component.primitive === 'wheel' && /road wheel|drive wheel|driven wheel|front[^.]{0,24}wheel|rear[^.]{0,24}wheel|traction/.test(text))
+      || (component.primitive === 'bearing' && /wheel hub|road-wheel-hub/.test(text))
+      || (component.primitive === 'shaft' && /drive axle|powered axle|axle shaft|rear axle spindle|road-axle-spindle|traction/.test(text))).length >= 1, 'a drive coupled to a road wheel or axle, including its wheel hub');
   }
   if (/\b(?:bicycle|bike)\b/.test(requested) && !bicycleFork) {
     requireSignature(count('wheel') >= 2 && count('beam') + count('tube') + count('frame') >= 2, 'two wheels and a recognizable frame');
