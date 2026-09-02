@@ -1,13 +1,16 @@
-import type { Capability, CompiledWorldPlan, PrimitiveKind, Vec3 } from './forge-types';
+import type { Capability, CompiledWorldPlan, MachineOrientation, PrimitiveKind, Vec3 } from './forge-types';
 
-export const FORGE_COORDINATE_CONVENTION = {
+export const FORGE_COORDINATE_CONVENTION: MachineOrientation = {
+  front: '+X',
   up: '+Y',
+  down: '-Y',
   forward: '+X',
   rear: '-X',
   left: '-Z',
   right: '+Z',
-  description: '+Y is up; vehicles face +X; -X is rear; -Z is left and +Z is right when facing forward.',
-} as const;
+  vectors: { front: [1, 0, 0], rear: [-1, 0, 0], left: [0, 0, -1], right: [0, 0, 1], up: [0, 1, 0], down: [0, -1, 0] },
+  description: 'Universal ForgeTwin frame: front/forward +X, rear -X, left -Z, right +Z, up +Y, and down -Y.',
+};
 
 export interface IntentCorrection { from: string; to: string; reason: string }
 

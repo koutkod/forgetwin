@@ -1,5 +1,6 @@
 import { catalogFor, componentMass, materialFor, materials, primitiveCatalog } from './forge-data';
 import { localPointToWorld, worldPointToLocal } from './forge-motion';
+import { FORGE_COORDINATE_CONVENTION } from './forge-intent';
 import type {
   Actor, Assembly, BodyType, Capability, ControlMode, DesignGoal, DesignSnapshot,
   ForgeState, ForgeToolName, GoalConstraint, JointType, MachineComponent,
@@ -185,6 +186,7 @@ function asGoal(input: Record<string, unknown>): DesignGoal {
     simulationModel: String(input.simulation_model ?? 'Generic multi-body Rapier world').slice(0, 160),
     editableComponentId: String(input.editable_component_id ?? ''),
     editableLabel: String(input.editable_label ?? 'selected primitive').slice(0, 80),
+    orientation: structuredClone(FORGE_COORDINATE_CONVENTION),
   };
 }
 
@@ -600,7 +602,7 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     const target = component(state, input.component_id);
     const targetJoint = input.joint_id ? joint(state, input.joint_id) : undefined;
     const jointId = targetJoint?.id;
-    if (target.primitive !== 'motor') throw new Error('INVALID_INPUT: add_motor targets a motor primitive.');
+    if (target.primitive !== 'motor' && target.parameters.human_power_input !== true) throw new Error('INVALID_INPUT: add_motor targets a motor primitive or an explicitly modeled human-power input.');
     if (targetJoint) assertDrivenJoint(state, targetJoint, target.id, actor);
     else if (actor === 'WebMCP' && !driveBodyHasOutputInterface(state, target.id)) throw new Error('INVALID_TOPOLOGY: connect an unbound motor to its physical output before registering the drive.');
     const value = { id: idValue(input.motor_id, 'motor_id'), componentId: target.id, jointId, maxTorque: Number(input.max_torque), maxRpm: Number(input.max_rpm), direction: Number(input.direction ?? 1) };

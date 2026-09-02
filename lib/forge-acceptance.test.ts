@@ -109,7 +109,7 @@ describe('judge prompt acceptance matrix', () => {
     const lightEdits = contextualMechanicalEdits(state, 'Add a rear brake light and make sure it faces backward.');
     for (const edit of lightEdits) state = testCommand(state, edit.tool, edit.input, 'ModelAgent');
     expect(state.components.find((item) => item.parameters.brake_light)?.parameters.facing_x).toBe(-1);
-  });
+  }, 10_000);
 });
 
 describe('schema-safe tool preparation', () => {

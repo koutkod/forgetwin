@@ -2,14 +2,14 @@
 
 import { ContactShadows, Edges, Grid, Line, OrbitControls, RoundedBox } from '@react-three/drei';
 import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { type Group, MathUtils, Plane, Vector3 } from 'three';
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { type Group, MathUtils, Plane, Quaternion, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
 import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPose, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
-type Props = { state: ForgeState; preview?: boolean; operating?: boolean; onComponentMove: (componentId: string, position: Vec3) => void; onSelect: (id: string) => void };
+type Props = { state: ForgeState; preview?: boolean; operating?: boolean; rotationSnapDegrees?: number | null; onComponentMove: (componentId: string, position: Vec3) => void; onComponentRotate?: (componentId: string, rotation: Vec3) => void; onSelect: (id: string) => void };
 
 type OperatingContext = {
   enabled: boolean;
@@ -125,8 +125,8 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   if (!jointPoseApplied && (component.parameters.drill_press_spindle || component.parameters.drill_press_chuck || component.parameters.drill_press_bit)) rotation[1] += elapsed * 5.8;
   if (!jointPoseApplied && component.parameters.drill_press_feed_handle) rotation[2] -= wave * .78;
 
-  if (!jointPoseApplied && component.parameters.steering_rack_moving) position[2] += signed * .16;
-  if (!jointPoseApplied && component.parameters.steering_pinion) rotation[0] += signed * 1.05;
+  if (!jointPoseApplied && component.parameters.steering_rack_moving && !component.parameters.road_vehicle_steering_rack) position[2] += signed * .16;
+  if (!jointPoseApplied && (component.parameters.steering_pinion || component.parameters.road_vehicle_steering_pinion)) rotation[0] += signed * 1.05;
   if (!jointPoseApplied && component.parameters.steering_input_wheel) rotation[0] += signed * .72;
   if (!jointPoseApplied && component.parameters.steering_tie_rod) {
     position[2] += signed * .08;
@@ -136,6 +136,9 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     const side = component.parameters.steering_side === 'left' ? -1 : 1;
     const inside = signed * side < 0 ? 1.12 : .92;
     rotation[1] += signed * .34 * inside;
+  }
+  if (!jointPoseApplied && (component.parameters.road_vehicle_steering_knuckle || (component.parameters.road_vehicle_front_steering && (component.parameters.road_vehicle_spindle || component.parameters.road_vehicle_wheel_hub || component.parameters.road_vehicle_brake)))) {
+    rotation[1] += roadVehicleWheelYaw(elapsed, component.role, true, String(component.parameters.steering_side ?? ''), Number(component.parameters.ackermann_wheelbase_m ?? 1.7), Number(component.parameters.ackermann_track_m ?? 1.38));
   }
 
   if (!jointPoseApplied && (component.parameters.bicycle_brake_rotor || component.parameters.bicycle_brake_axle)) rotation[2] -= elapsed * 3.2;
@@ -312,7 +315,7 @@ function RoadVehicleWheel({ component, xray, selected }: { component: MachineCom
   useFrame(() => {
     if (!steeringRef.current || !rollingRef.current) return;
     const elapsed = operationTime.current;
-    steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, Boolean(component.parameters.road_vehicle_front_steering), String(component.parameters.steering_side ?? ''));
+    steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, Boolean(component.parameters.road_vehicle_front_steering), String(component.parameters.steering_side ?? ''), Number(component.parameters.ackermann_wheelbase_m ?? 1.7), Number(component.parameters.ackermann_track_m ?? 1.38));
     rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
   });
   return <group ref={steeringRef}><group ref={rollingRef}>
@@ -386,7 +389,7 @@ function RoadVehicleBrake({ component, xray, selected }: { component: MachineCom
   useFrame(() => {
     if (!steeringRef.current || !rollingRef.current) return;
     const elapsed = operationTime.current;
-    steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, true, String(component.parameters.steering_side ?? ''));
+    steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, true, String(component.parameters.steering_side ?? ''), Number(component.parameters.ackermann_wheelbase_m ?? 1.7), Number(component.parameters.ackermann_track_m ?? 1.38));
     rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
   });
   return <group ref={steeringRef}><group ref={rollingRef}>
@@ -995,23 +998,29 @@ function LightBody({ component, color, xray, selected }: { component: MachineCom
   </group>;
   const vehicleHeadlight = /headlight|brake light|tail light|bicycle|vehicle|rover/i.test(component.role) || Boolean(component.parameters.headlight) || Boolean(component.parameters.vehicle_light) || Boolean(component.parameters.brake_light);
   const facingX = Number(component.parameters.facing_x ?? (component.parameters.light_direction === 'rear' || component.parameters.brake_light ? -1 : 1)) < 0 ? -1 : 1;
+  const facingAxis = String(component.parameters.facing_axis ?? (vehicleHeadlight ? (facingX > 0 ? '+X' : '-X') : '+Z')).toUpperCase();
+  const direction = facingAxis === '-X' ? new Vector3(-1, 0, 0)
+    : facingAxis === '+X' ? new Vector3(1, 0, 0)
+      : facingAxis === '-Y' ? new Vector3(0, -1, 0)
+        : facingAxis === '+Y' ? new Vector3(0, 1, 0)
+          : facingAxis === '-Z' ? new Vector3(0, 0, -1)
+            : new Vector3(0, 0, 1);
+  const directionQuaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), direction);
   const brakeLight = Boolean(component.parameters.brake_light) || /brake light|tail light/i.test(component.role);
   const markerLight = Boolean(component.parameters.marker_light);
   const emitter = brakeLight ? '#ff3344' : color;
   const beamRange = Math.max(1.8, Math.min(6, Number(component.parameters.beam_range ?? 3.2)));
-  const axisRotation: Vec3 = vehicleHeadlight ? [0, 0, -Math.PI / 2] : [Math.PI / 2, 0, 0];
-  const beamRotation: Vec3 = vehicleHeadlight ? [0, 0, facingX > 0 ? Math.PI / 2 : -Math.PI / 2] : [-Math.PI / 2, 0, 0];
-  const lensPosition: Vec3 = vehicleHeadlight ? [facingX * length * .48, 0, 0] : [0, 0, width * .48];
-  const beamPosition: Vec3 = vehicleHeadlight ? [facingX * (length * .48 + beamRange / 2), 0, 0] : [0, 0, width * .48 + beamRange / 2];
-  return <group>
-    <group position={vehicleHeadlight ? [-facingX * length * .42, -height * .38, 0] : [0, -height * .62, -width * .3]}>
+  const lensPosition: Vec3 = [0, length * .48, 0];
+  const beamPosition: Vec3 = [0, length * .48 + beamRange / 2, 0];
+  return <group quaternion={directionQuaternion}>
+    <group position={[0, -length * .42, 0]}>
       <BoxBody size={[length * .34, height * .38, width * .48]} color="#2b373d" xray={xray} selected={selected} radius={.025} metalness={.78} roughness={.24} />
     </group>
-    <mesh rotation={axisRotation} castShadow><cylinderGeometry args={[Math.max(height, width) * .48, Math.max(height, width) * .39, length * .82, 32]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.2} /></mesh>
-    <mesh position={lensPosition} rotation={axisRotation}><cylinderGeometry args={[Math.max(height, width) * .39, Math.max(height, width) * .39, length * .09, 32]} /><meshStandardMaterial color={emitter} emissive={emitter} emissiveIntensity={xray ? .7 : 3.5} metalness={.05} roughness={.08} transparent opacity={xray ? .68 : .96} /></mesh>
-    <mesh position={vehicleHeadlight ? [facingX * length * .52, 0, 0] : [0, 0, width * .52]} rotation={vehicleHeadlight ? [0, Math.PI / 2, 0] : [0, 0, 0]}><torusGeometry args={[Math.max(height, width) * .43, Math.max(.012, height * .055), 10, 32]} /><StandardMaterial color="#c9d5da" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>
+    <mesh castShadow><cylinderGeometry args={[Math.max(height, width) * .48, Math.max(height, width) * .39, length * .82, 32]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.82} roughness={.2} /></mesh>
+    <mesh position={lensPosition}><cylinderGeometry args={[Math.max(height, width) * .39, Math.max(height, width) * .39, length * .09, 32]} /><meshStandardMaterial color={emitter} emissive={emitter} emissiveIntensity={xray ? .7 : 3.5} metalness={.05} roughness={.08} transparent opacity={xray ? .68 : .96} /></mesh>
+    <mesh position={[0, length * .52, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[Math.max(height, width) * .43, Math.max(.012, height * .055), 10, 32]} /><StandardMaterial color="#c9d5da" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>
     <pointLight position={lensPosition} color={emitter} intensity={xray ? .35 : brakeLight ? 2.2 : 1.4} distance={brakeLight ? 2.4 : 3.2} decay={2} />
-    {!markerLight && <mesh position={beamPosition} rotation={beamRotation}><coneGeometry args={[beamRange * (brakeLight ? .12 : .2), beamRange, 28, 1, true]} /><meshBasicMaterial color={emitter} transparent opacity={xray ? .14 : brakeLight ? .055 : .035} depthWrite={false} side={2} /></mesh>}
+    {!markerLight && <mesh position={beamPosition}><coneGeometry args={[beamRange * (brakeLight ? .12 : .2), beamRange, 28, 1, true]} /><meshBasicMaterial color={emitter} transparent opacity={xray ? .14 : brakeLight ? .055 : .035} depthWrite={false} side={2} /></mesh>}
   </group>;
 }
 
@@ -1064,11 +1073,15 @@ function SteeringControlBody({ component, color, xray, selected }: { component: 
 
 function BodyShellBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const [x, y, z] = component.dimensions;
-  if (component.parameters.cockpit_canopy) return <group><mesh scale={[x / 2, y / 2, z / 2]}><sphereGeometry args={[1, 30, 20]} /><StandardMaterial color="#68c6e8" xray={xray} selected={selected} metalness={.12} roughness={.16} /></mesh><group position={[-x * .34, -y * .28, 0]}><BoxBody size={[x * .5, y * .18, z * .82]} color={color} xray={xray} selected={selected} radius={.06} /></group></group>;
+  if (component.parameters.cockpit_canopy) return <group><mesh scale={[x / 2, y / 2, z / 2]} castShadow><sphereGeometry args={[1, 30, 20]} /><meshPhysicalMaterial color={selected ? '#65e5ff' : '#68c6e8'} transparent opacity={xray ? .2 : .48} depthWrite={false} transmission={xray ? .12 : .42} thickness={.06} metalness={0} roughness={.12} /></mesh><group position={[-x * .34, -y * .28, 0]}><BoxBody size={[x * .5, y * .18, z * .82]} color={color} xray={xray} selected={selected} radius={.06} /></group></group>;
   return <group>
     <BoxBody size={[x * .82, y, z]} color={color} xray={xray} selected={selected} radius={Math.min(.18, y * .45, z * .25)} metalness={.48} roughness={.3} />
     <group position={[x * .42, -y * .07, 0]} rotation={[0, 0, -Math.PI / 2]}><mesh><coneGeometry args={[Math.max(.08, z * .48), Math.max(.12, x * .35), 24]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.48} roughness={.3} /></mesh></group>
   </group>;
+}
+
+function TransparentGlazing({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  return <mesh castShadow><boxGeometry args={component.dimensions} /><meshPhysicalMaterial color={selected ? '#65e5ff' : '#75cce8'} transparent opacity={xray ? .18 : .42} depthWrite={false} transmission={xray ? .1 : .48} thickness={.04} roughness={.1} metalness={0} /></mesh>;
 }
 
 function AerofoilBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -1117,6 +1130,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.parameters.product_form) return <ProductItem component={component} xray={xray} selected={selected} />;
   if (component.parameters.patient_sling) return <PatientSling component={component} xray={xray} selected={selected} />;
   if (component.parameters.automotive_body) return <CarBody component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.transparent_glazing) return <TransparentGlazing component={component} xray={xray} selected={selected} />;
   if (component.parameters.recycling_hopper) return <RecyclingHopper component={component} xray={xray} selected={selected} />;
   if (component.parameters.recycling_drum) return <RecyclingDrum component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.recycling_magnet) return <RecyclingMagnet component={component} xray={xray} selected={selected} />;
@@ -1216,11 +1230,44 @@ function CameraRig({ center, radius, signature, dragging }: { center: Vec3; radi
   const [view] = useState(() => ({ center: [...center] as Vec3, radius }));
   return <>
     <CameraDirector center={view.center} radius={view.radius} signature={signature} />
-    <OrbitControls makeDefault enabled={!dragging} enablePan minDistance={.5} maxDistance={30} minPolarAngle={.22} maxPolarAngle={1.5} target={view.center} />
+    <OrbitControls makeDefault enabled={!dragging} enableRotate enableZoom enablePan minDistance={.5} maxDistance={30} minPolarAngle={.01} maxPolarAngle={Math.PI - .01} target={view.center} />
   </>;
 }
 
-function EditableBody({ component, bounds, xray, selected, actuatorValue, enabled, replay, operatingContext, operationSpeed, onMove, onSelect, onDragChange }: { component: MachineComponent; bounds: Vec3; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; operatingContext: OperatingContext; operationSpeed: number; onMove: (componentId: string, position: Vec3) => void; onSelect: () => void; onDragChange: (dragging: boolean) => void }) {
+function RotationGizmo({ component, bodyRef, snapDegrees, onRotate, onDragChange }: { component: MachineComponent; bodyRef: RefObject<Group | null>; snapDegrees?: number | null; onRotate?: (componentId: string, rotation: Vec3) => void; onDragChange: (dragging: boolean) => void }) {
+  const drag = useRef<{ axis: 0 | 1 | 2; startX: number; startY: number; start: Vec3; pointerId: number } | null>(null);
+  const draft = useRef<Vec3>(component.rotation);
+  const normalizeAngle = (value: number) => Math.atan2(Math.sin(value), Math.cos(value));
+  const start = (axis: 0 | 1 | 2) => (event: ThreeEvent<PointerEvent>) => {
+    event.stopPropagation();
+    drag.current = { axis, startX: event.clientX, startY: event.clientY, start: [...component.rotation] as Vec3, pointerId: event.pointerId };
+    draft.current = [...component.rotation] as Vec3; onDragChange(true);
+    (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId);
+  };
+  const move = (event: ThreeEvent<PointerEvent>) => {
+    if (!drag.current) return; event.stopPropagation();
+    const delta = (event.clientX - drag.current.startX - (event.clientY - drag.current.startY) * .45) * .012;
+    const step = snapDegrees ? snapDegrees * Math.PI / 180 : 0;
+    const angle = step ? Math.round((drag.current.start[drag.current.axis] + delta) / step) * step : drag.current.start[drag.current.axis] + delta;
+    draft.current = [...drag.current.start] as Vec3; draft.current[drag.current.axis] = normalizeAngle(angle);
+    bodyRef.current?.rotation.set(...draft.current);
+  };
+  const end = (event: ThreeEvent<PointerEvent>) => {
+    if (!drag.current) return; event.stopPropagation();
+    const target = event.target as unknown as { hasPointerCapture?(id: number): boolean; releasePointerCapture?(id: number): void };
+    if (target.hasPointerCapture?.(drag.current.pointerId)) target.releasePointerCapture?.(drag.current.pointerId);
+    drag.current = null; onDragChange(false); onRotate?.(component.id, draft.current);
+  };
+  const radius = Math.max(.38, Math.max(...component.dimensions) * .72);
+  const rings = [
+    { axis: 0 as const, color: '#ff5f6d', rotation: [0, Math.PI / 2, 0] as Vec3 },
+    { axis: 1 as const, color: '#65e58d', rotation: [Math.PI / 2, 0, 0] as Vec3 },
+    { axis: 2 as const, color: '#55a8ff', rotation: [0, 0, 0] as Vec3 },
+  ];
+  return <group>{rings.map((ring) => <mesh key={ring.axis} rotation={ring.rotation} onPointerDown={start(ring.axis)} onPointerMove={move} onPointerUp={end} onPointerCancel={end}><torusGeometry args={[radius, Math.max(.018, radius * .025), 10, 72]} /><meshBasicMaterial color={ring.color} transparent opacity={.92} depthTest={false} /></mesh>)}</group>;
+}
+
+function EditableBody({ component, bounds, xray, selected, actuatorValue, enabled, replay, operatingContext, operationSpeed, rotationSnapDegrees, onMove, onRotate, onSelect, onDragChange }: { component: MachineComponent; bounds: Vec3; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; operatingContext: OperatingContext; operationSpeed: number; rotationSnapDegrees?: number | null; onMove: (componentId: string, position: Vec3) => void; onRotate?: (componentId: string, rotation: Vec3) => void; onSelect: () => void; onDragChange: (dragging: boolean) => void }) {
   const [dragging, setDragging] = useState(false);
   const [draftPosition, setDraftPosition] = useState<Vec3>(component.position);
   const verticalDrag = useRef({ active: false, startClientY: 0, startY: component.position[1] });
@@ -1255,12 +1302,13 @@ function EditableBody({ component, bounds, xray, selected, actuatorValue, enable
   const vectorScale = speed > 0 ? Math.min(.45, 1.5 / speed) : 0;
   return <group ref={bodyRef} position={renderedPosition} rotation={replay ? undefined : component.rotation} quaternion={replay?.rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={(event) => { if (!enabled) return; event.stopPropagation(); setDraftPosition(component.position); verticalDrag.current = { active: event.shiftKey, startClientY: event.clientY, startY: component.position[1] }; setDragging(true); onDragChange(true); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
     <ComponentShape component={component} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operatingContext.enabled} operationSpeed={operationSpeed} />
+    {selected && enabled && !replay && <RotationGizmo component={component} bodyRef={bodyRef} snapDegrees={rotationSnapDegrees} onRotate={onRotate} onDragChange={onDragChange} />}
     {enabled && xray && <><Line points={[[-2.5, 0, 0], [2.5, 0, 0]]} color="#ff6478" dashed dashScale={3} transparent opacity={.72} /><Line points={[[0, -2.5, 0], [0, 2.5, 0]]} color="#65e58d" dashed dashScale={3} transparent opacity={.72} /><Line points={[[0, 0, -2.5], [0, 0, 2.5]]} color="#55a8ff" dashed dashScale={3} transparent opacity={.72} /></>}
     {xray && replay && speed > .01 && <Line points={[[0, component.dimensions[1], 0], [replay.velocity[0] * vectorScale, component.dimensions[1] + replay.velocity[1] * vectorScale, replay.velocity[2] * vectorScale]]} color="#ffffff" transparent opacity={.76} />}
   </group>;
 }
 
-function Machine({ state, preview, operating = false, frame, onComponentMove, onSelect }: Props & { frame: ReplayFrame | null }) {
+function Machine({ state, preview, operating = false, frame, onComponentMove, onComponentRotate, rotationSnapDegrees, onSelect }: Props & { frame: ReplayFrame | null }) {
   const previewData = useMemo(() => previewWorld(), []);
   const [componentDragging, setComponentDragging] = useState(false);
   const operationTime = useRef(0);
@@ -1308,7 +1356,7 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
       const connectedMotorIds = state.connections.filter((connection) => connection.type === 'power' && (connection.sourceId === component.id || connection.targetId === component.id)).flatMap((connection) => [connection.sourceId, connection.targetId]);
       const driveRpm = state.motors.filter((motor) => motor.componentId === component.id || connectedMotorIds.includes(motor.componentId) || (motor.jointId && targetJoint?.id === motor.jointId)).reduce((maximum, motor) => Math.max(maximum, motor.maxRpm), 0);
       const operationSpeed = driveRpm > 0 ? MathUtils.clamp(driveRpm / 100, .35, 3) : 1;
-      return <EditableBody key={component.id} component={component} bounds={state.world.bounds} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} operatingContext={operatingContext} operationSpeed={operationSpeed} onMove={onComponentMove} onSelect={() => onSelect(component.id)} onDragChange={setComponentDragging} />;
+      return <EditableBody key={component.id} component={component} bounds={state.world.bounds} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} operatingContext={operatingContext} operationSpeed={operationSpeed} rotationSnapDegrees={rotationSnapDegrees} onMove={onComponentMove} onRotate={onComponentRotate} onSelect={() => onSelect(component.id)} onDragChange={setComponentDragging} />;
     })}
     {state.replayMode === 'failure' && frame?.items.filter((item) => item.id === 'test-payload' || item.id.startsWith('sort-package-')).map((item) => <ReplayPackage key={item.id} item={item} xray={state.xray} />)}
     {state.replayMode === 'failure' && frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[.16, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={.92} /></mesh>)}
@@ -1348,5 +1396,5 @@ export function ForgeScene(props: Props) {
   const { run, frame } = useReplay(props.state);
   const label = props.state.goal ? `3D physical world for ${props.state.goal.machineName}. The adjacent world hierarchy and component inspector provide an accessible editing alternative.` : '3D general-purpose mechanical engineering world.';
   const replayFrame = props.state.replayMode === 'failure' ? frame : null;
-  return <div className="canvas-wrap" data-forgetwin-scene={props.preview ? undefined : 'true'}><Canvas aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true, preserveDrawingBuffer: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine key={props.state.designHash} {...props} frame={replayFrame} /></Suspense></Canvas>{!props.preview && <div className="sr-only">{run ? `${run.status} multi-body simulation ${props.state.replayMode === 'failure' ? 'failure replay' : 'result'} is active.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
+  return <div className="canvas-wrap" data-forgetwin-scene={props.preview ? undefined : 'true'}><Canvas style={{ touchAction: 'none' }} aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true, preserveDrawingBuffer: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine key={props.state.designHash} {...props} frame={replayFrame} /></Suspense></Canvas>{!props.preview && <div className="sr-only">{run ? `${run.status} multi-body simulation ${props.state.replayMode === 'failure' ? 'failure replay' : 'result'} is active.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
 }

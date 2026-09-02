@@ -393,6 +393,10 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(plan.components.filter((item) => /electric traction motor/.test(item.role))).toHaveLength(2);
     expect(plan.components.filter((item) => /front brake disc/.test(item.role))).toHaveLength(2);
     expect(plan.components.filter((item) => /steering tie rod/.test(item.role))).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.road_vehicle_kingpin)).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.road_vehicle_steering_knuckle)).toHaveLength(2);
+    expect(plan.components.filter((item) => item.parameters?.road_vehicle_spindle)).toHaveLength(4);
+    expect(plan.components.filter((item) => item.parameters?.road_vehicle_wheel_hub)).toHaveLength(4);
     const frontWheels = plan.components.filter((item) => item.parameters?.road_vehicle_front_steering && item.parameters?.road_vehicle_wheel);
     expect(frontWheels).toHaveLength(2);
     expect(frontWheels.map((item) => item.parameters?.steering_side).sort()).toEqual(['left', 'right']);
@@ -418,6 +422,26 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(illuminated.goal.machineName).toBe('Electric go-kart');
     expect(illuminated.components.filter((item) => item.primitive === 'light')).toHaveLength(2);
     expect(illuminated.connections.filter((item) => item.channel === 'lighting_bus')).toHaveLength(2);
+  });
+
+  it('keeps a regular bicycle human-powered unless electrification is requested', () => {
+    const bicycle = compileDesignBrief('Build a bicycle with pedals, a chain, and front and rear lights.');
+    expect(bicycle.components.filter((item) => item.parameters?.bicycle_pedal)).toHaveLength(2);
+    expect(bicycle.components.some((item) => item.parameters?.bicycle_hub_motor)).toBe(false);
+    expect(bicycle.components.some((item) => item.parameters?.bicycle_battery)).toBe(false);
+    expect(bicycle.components.some((item) => item.parameters?.bicycle_controller)).toBe(false);
+    expect(bicycle.components.find((item) => item.parameters?.headlight)?.parameters?.facing_axis).toBe('+X');
+    expect(bicycle.components.find((item) => item.parameters?.brake_light)?.parameters?.facing_axis).toBe('-X');
+  });
+
+  it('uses the universal frame for aircraft glazing and navigation lights', () => {
+    const aircraft = compileDesignBrief('Build an airplane with navigation lights and landing lights.');
+    expect(aircraft.goal.orientation).toMatchObject({ front: '+X', rear: '-X', left: '-Z', right: '+Z', up: '+Y', down: '-Y' });
+    expect(aircraft.components.find((item) => item.parameters?.cockpit_windshield)?.parameters).toMatchObject({ transparent_glazing: true, facing_axis: '+X', attached_to_cockpit: true });
+    expect(aircraft.components.find((item) => item.parameters?.navigation_side === 'left')).toMatchObject({ color: '#ff3344', parameters: expect.objectContaining({ facing_axis: '-Z' }) });
+    expect(aircraft.components.find((item) => item.parameters?.navigation_side === 'right')).toMatchObject({ color: '#32e875', parameters: expect.objectContaining({ facing_axis: '+Z' }) });
+    expect(aircraft.components.find((item) => item.parameters?.navigation_side === 'tail')).toMatchObject({ color: '#f3f8ff', parameters: expect.objectContaining({ facing_axis: '-X' }) });
+    expect(aircraft.components.filter((item) => item.parameters?.landing_light).every((item) => item.parameters?.facing_axis === '+X')).toBe(true);
   });
 
   it.each([

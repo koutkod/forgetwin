@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPoseAtProgress, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, sampleClearancePath, translateInForgeCoordinates } from './forge-motion';
+import { accumulationZoneActivity, ackermannSteeringAngles, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPoseAtProgress, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, sampleClearancePath, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -79,6 +79,12 @@ describe('collision-safe material-flow animation', () => {
 });
 
 describe('road vehicle operation motion', () => {
+  it('computes a larger inside-wheel angle with Ackermann geometry', () => {
+    const left = ackermannSteeringAngles(1, 1.7, 1.38);
+    const right = ackermannSteeringAngles(-1, 1.7, 1.38);
+    expect(left.left).toBeGreaterThan(left.right);
+    expect(Math.abs(right.right)).toBeGreaterThan(Math.abs(right.left));
+  });
   it('uses +X forward and negative Z left for natural-language moves', () => {
     expect(translateInForgeCoordinates([.85, .5, -.8], 'move the wheel right', ' right', .2)[2]).toBeCloseTo(-.6, 6);
     expect(translateInForgeCoordinates([.85, .5, -.8], 'move the wheel left', ' left', .2)[2]).toBeCloseTo(-1, 6);

@@ -6,6 +6,7 @@ import type {
   JointBlueprint, PrimitiveKind, Vec3,
 } from './forge-types';
 import { finalizeCompiledWorldPlan } from './forge-design-validator';
+import { FORGE_COORDINATE_CONVENTION } from './forge-intent';
 
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
 
@@ -44,6 +45,7 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
     nominal_rx: component.rotation[0], nominal_ry: component.rotation[1], nominal_rz: component.rotation[2],
   };
   for (const tag of tags) parameters[`semantic_${tag.replaceAll('-', '_')}`] = true;
+  if (tags.has('human-power-input')) parameters.human_power_input = true;
 
   const vehicle = /\b(?:car|go-kart|kart|buggy|automobile|road vehicle)\b/.test(machine);
   const bicycle = /\b(?:bicycle|bike)\b/.test(machine);
@@ -171,6 +173,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
       simulationModel: 'GPT-5.6 design graph executed through guarded WebMCP-style tools in a Rapier multi-body world',
       editableComponentId: editable.id,
       editableLabel: editable.role,
+      orientation: structuredClone(FORGE_COORDINATE_CONVENTION),
     },
     world: { ...worldDefaults, bounds: worldBounds(components), duration: 8 },
     assemblies: orderedAssemblies(plan),
@@ -208,6 +211,7 @@ function tagsFromParameters(component: ComponentBlueprint) {
   if (parameters.payload_kg !== undefined) tags.add('payload');
   if (parameters.road_vehicle_wheel === true) tags.add('road-wheel');
   if (parameters.bicycle_wheel === true) tags.add('bicycle-wheel');
+  if (parameters.human_power_input === true) tags.add('human-power-input');
   if (parameters.headlight === true) tags.add('headlight');
   if (parameters.brake_light === true) tags.add('brake-light');
   if (parameters.panel === true) tags.add('solar-panel');

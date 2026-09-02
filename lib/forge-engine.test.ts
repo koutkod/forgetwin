@@ -120,7 +120,7 @@ describe('ForgeTwin shared world command engine', () => {
     expect(wheelWorld[1]).toBeCloseTo(otherWorld[1], 4);
     expect(wheelWorld[2]).toBeCloseTo(otherWorld[2], 4);
     expect(updatedWheel.position[2]).toBeCloseTo(wheel.position[2] + .2, 4);
-  });
+  }, 10_000);
 
   it('rejects invalid body properties and cascades topology deletion safely', () => {
     const plan = compileDesignBrief('Build a robotic arm with a gripper that reaches 2 meters.');

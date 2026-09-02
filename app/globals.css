@@ -309,6 +309,14 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .axis-control label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:0; }
 .axis-control label code { color:#91a2aa; font-size:8px; white-space:nowrap; }
 .axis-control input[type="range"] { width:100%; margin:7px 0 2px; accent-color:#55dff7; }
+.rotation-editor { display:block!important; margin-top:10px!important; border-top:1px solid rgba(255,255,255,.06); padding-top:8px; }
+.rotation-editor>label { display:flex; align-items:center; justify-content:space-between; margin:0; }
+.rotation-editor select,.rotation-fields input { border:1px solid var(--line); border-radius:6px; background:#0b1116; color:#b9c6cc; font:600 9px var(--font-geist-mono),monospace; }
+.rotation-editor select { padding:5px 7px; }
+.rotation-fields { display:grid!important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; margin-top:7px!important; }
+.rotation-fields label { min-width:0; margin:0; }
+.rotation-fields input { box-sizing:border-box; width:100%; margin:4px 0 0; padding:6px 4px; }
+.rotation-nudges button { white-space:nowrap; }
 .inspector-actions { display:grid!important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; margin-top:9px!important; }
 .inspector-actions button,.catalog-drawer button { min-height:34px; border:1px solid var(--line); border-radius:6px; background:#0d1419; color:#8f9ca4; padding:6px; font-size:8px; font-weight:700; }
 .inspector-actions button:hover,.catalog-drawer button:hover { border-color:rgba(73,220,255,.28); color:#75e6ff; }

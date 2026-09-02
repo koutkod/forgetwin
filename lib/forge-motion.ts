@@ -288,14 +288,22 @@ export function roadVehicleSteeringCycle(elapsed: number) {
   return Math.sin(elapsed * STEERING_RATE);
 }
 
-export function roadVehicleWheelYaw(elapsed: number, role: string, frontSteering = false, side?: string) {
+export function ackermannSteeringAngles(cycle: number, wheelbase = 1.7, track = 1.38, maximum = .36) {
+  const centerAngle = cycle * maximum;
+  if (Math.abs(centerAngle) < 1e-6) return { left: 0, right: 0 };
+  const radius = wheelbase / Math.tan(Math.abs(centerAngle));
+  const inner = Math.atan(wheelbase / Math.max(.12, radius - track / 2));
+  const outer = Math.atan(wheelbase / (radius + track / 2));
+  const sign = Math.sign(centerAngle);
+  return centerAngle > 0 ? { left: sign * inner, right: sign * outer } : { left: sign * outer, right: sign * inner };
+}
+
+export function roadVehicleWheelYaw(elapsed: number, role: string, frontSteering = false, side?: string, wheelbase = 1.7, track = 1.38) {
   if (!frontSteering && !/\bfront\b/i.test(role)) return 0;
   const cycle = roadVehicleSteeringCycle(elapsed);
   const steeringSide = side?.trim() || (/\bleft\b/i.test(role) ? 'left' : /\bright\b/i.test(role) ? 'right' : 'center');
-  // Positive yaw turns the +X vehicle heading toward its left side (-Z).
-  // The inside tire receives a little more angle to suggest Ackermann geometry.
-  const inside = (cycle >= 0 && steeringSide === 'left') || (cycle < 0 && steeringSide === 'right');
-  return cycle * 0.36 * (inside ? 1.12 : 0.92);
+  const angles = ackermannSteeringAngles(cycle, wheelbase, track);
+  return steeringSide === 'left' ? angles.left : steeringSide === 'right' ? angles.right : cycle * .36;
 }
 
 export function roadVehicleWheelRoll(elapsed: number) {

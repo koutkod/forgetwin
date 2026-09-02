@@ -143,6 +143,19 @@ export interface DesignGoal {
   simulationModel: string;
   editableComponentId: string;
   editableLabel: string;
+  orientation: MachineOrientation;
+}
+
+export interface MachineOrientation {
+  front: '+X';
+  forward: '+X';
+  rear: '-X';
+  left: '-Z';
+  right: '+Z';
+  up: '+Y';
+  down: '-Y';
+  vectors: { front: Vec3; rear: Vec3; left: Vec3; right: Vec3; up: Vec3; down: Vec3 };
+  description: string;
 }
 
 export interface EngineeringPlan {
@@ -153,7 +166,7 @@ export interface EngineeringPlan {
   scope: string;
   functions: string[];
   constraints: string[];
-  coordinateConvention: { up: '+Y'; forward: '+X'; rear: '-X'; left: '-Z'; right: '+Z'; description: string };
+  coordinateConvention: MachineOrientation;
   assemblies: Array<{ id: string; purpose: string }>;
   components: Array<{ id: string; primitive: PrimitiveKind; role: string; dimensions: Vec3; material: string; mass: number | null; rationale: string }>;
   connections: ConnectionBlueprint[];

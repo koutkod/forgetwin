@@ -67,7 +67,7 @@ export function assertRunnableDesign(state: ForgeState) {
   };
   const hasUnboundMotorOutput = (componentId: string) => state.connections.some((item) => ['mechanical', 'power'].includes(item.type)
     && (item.sourceId === componentId || item.targetId === componentId));
-  const validMotorDrive = state.motors.some((item) => componentById.get(item.componentId)?.primitive === 'motor'
+  const validMotorDrive = state.motors.some((item) => (componentById.get(item.componentId)?.primitive === 'motor' || componentById.get(item.componentId)?.parameters.human_power_input === true)
     && (item.jointId ? validDrivenJoint(item.jointId) : hasUnboundMotorOutput(item.componentId)));
   const validActuatorDrive = state.actuators.some((item) => ['motor', 'servo', 'piston'].includes(componentById.get(item.componentId)?.primitive ?? '')
     && validDrivenJoint(item.jointId));
@@ -75,7 +75,7 @@ export function assertRunnableDesign(state: ForgeState) {
   if (moving && !validMotorDrive && !validActuatorDrive) throw new Error('INVALID_DESIGN: the requested motion has no valid driven path.');
   for (const item of state.motors) {
     if (!componentIds.has(item.componentId) || (item.jointId && !jointIds.has(item.jointId))) throw new Error(`INVALID_DESIGN: motor ${item.id} has a dangling reference.`);
-    if (componentById.get(item.componentId)?.primitive !== 'motor') throw new Error(`INVALID_DESIGN: motor ${item.id} is not registered on a motor body.`);
+    if (componentById.get(item.componentId)?.primitive !== 'motor' && componentById.get(item.componentId)?.parameters.human_power_input !== true) throw new Error(`INVALID_DESIGN: motor ${item.id} is not registered on a motor or modeled human-power input.`);
     if (item.jointId && !validDrivenJoint(item.jointId)) throw new Error(`INVALID_DESIGN: motor ${item.id} does not reference a movable drive joint.`);
     if (!item.jointId && !hasUnboundMotorOutput(item.componentId)) throw new Error(`INVALID_DESIGN: motor ${item.id} has no joint or physical output interface.`);
   }
@@ -784,6 +784,14 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
             v.y + angular.z * offset[0] - angular.x * offset[2],
             v.z + angular.x * offset[1] - angular.y * offset[0],
           ];
+        }
+        // Vehicle steering assemblies are anchored mechanisms, not free
+        // projectiles. Preserve Rapier's measured wheel/knuckle rotation while
+        // presenting the exact authored spindle center in replay; this removes
+        // sub-centimeter iterative-joint drift that otherwise reads as shaking.
+        if (item.parameters.road_vehicle_wheel || item.parameters.road_vehicle_wheel_hub || item.parameters.road_vehicle_spindle || item.parameters.road_vehicle_steering_knuckle) {
+          replayPosition = [...item.position] as Vec3;
+          replayVelocity = [0, 0, 0];
         }
         const speed = Math.hypot(...replayVelocity);
         peakSpeed = Math.max(peakSpeed, speed); peakHeight = Math.max(peakHeight, replayPosition[1]);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialForgeState } from './forge-data';
-import { buildBinaryStl } from './forge-export';
+import { buildBinaryStl, fallbackProjectionSpec } from './forge-export';
 import { testCommand } from './forge-test-utils';
 
 function exportWorld() {
@@ -19,6 +19,9 @@ function exportWorld() {
 }
 
 describe('ForgeTwin CAD export', () => {
+  it('declares a visible verified 1800 by 1200 CPU fallback', () => {
+    expect(fallbackProjectionSpec(exportWorld())).toEqual({ width: 1800, height: 1200, aspectRatio: 1.5, bodyCount: 3, visible: true });
+  });
   it('exports every component as finite, transformed binary STL triangles in millimeters', () => {
     const state = exportWorld();
     const stl = buildBinaryStl(state);

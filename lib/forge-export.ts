@@ -15,7 +15,7 @@ import {
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import type { ForgeState, MachineComponent } from './forge-types';
 
-export type ForgeExportFormat = 'png' | 'jpg' | 'pdf' | 'stl' | 'json';
+export type ForgeExportFormat = 'png' | 'png-fallback' | 'jpg' | 'pdf' | 'stl' | 'json';
 
 const safeName = (value: string) => value
   .toLowerCase()
@@ -24,6 +24,10 @@ const safeName = (value: string) => value
   .slice(0, 64) || 'forgetwin-design';
 
 const fileBase = (state: ForgeState) => `${safeName(state.goal?.machineName ?? 'forgetwin-design')}-rev-${state.revision}`;
+
+export function fallbackProjectionSpec(state: ForgeState) {
+  return { width: 1800, height: 1200, aspectRatio: 1.5, bodyCount: state.components.length, visible: state.components.length > 0 };
+}
 
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -48,7 +52,7 @@ function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, wi
 }
 
 /** Creates a clean, judge-ready 3:2 image while preserving the live camera view. */
-export function renderSceneImage(state: ForgeState) {
+export function renderSceneImage(state: ForgeState, options: { forceFallback?: boolean } = {}) {
   const source = sceneCanvas();
   const output = document.createElement('canvas');
   output.width = 1800;
@@ -59,6 +63,7 @@ export function renderSceneImage(state: ForgeState) {
   context.fillStyle = '#070b0f';
   context.fillRect(0, 0, output.width, output.height);
   const drawLiveScene = () => {
+    if (options.forceFallback) return false;
     if (!source) return false;
     try {
       const probe = document.createElement('canvas'); probe.width = 48; probe.height = 32;
@@ -84,7 +89,9 @@ export function renderSceneImage(state: ForgeState) {
     } catch { return false; }
   };
 
-  if (!drawLiveScene()) drawFallbackProjection(context, state, output.width, output.height);
+  const usedLiveScene = drawLiveScene();
+  if (!usedLiveScene) drawFallbackProjection(context, state, output.width, output.height);
+  output.dataset.renderSource = usedLiveScene ? 'webgl' : 'cpu-fallback';
 
   const top = context.createLinearGradient(0, 0, 0, 280);
   top.addColorStop(0, 'rgba(3,7,10,.93)'); top.addColorStop(1, 'rgba(3,7,10,0)');
@@ -282,9 +289,11 @@ async function exportPdf(state: ForgeState) {
 
 export async function exportForgeDesign(state: ForgeState, format: ForgeExportFormat) {
   const base = fileBase(state);
-  if (format === 'png' || format === 'jpg') {
+  if (format === 'png' || format === 'png-fallback' || format === 'jpg') {
     const mime = format === 'png' ? 'image/png' : 'image/jpeg';
-    download(await canvasBlob(renderSceneImage(state), mime, format === 'jpg' ? .94 : undefined), `${base}.${format}`);
+    const fallback = format === 'png-fallback';
+    const actualMime = fallback ? 'image/png' : mime;
+    download(await canvasBlob(renderSceneImage(state, { forceFallback: fallback }), actualMime, format === 'jpg' ? .94 : undefined), `${base}${fallback ? '-cpu-verified' : ''}.${fallback ? 'png' : format}`);
     return;
   }
   if (format === 'pdf') { await exportPdf(state); return; }
