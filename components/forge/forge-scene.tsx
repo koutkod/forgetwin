@@ -731,11 +731,36 @@ function RecyclingHopper({ component, xray, selected }: { component: MachineComp
 
 function CarBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const [x, y, z] = component.dimensions;
-  return <group>
+  const sedan = component.parameters.passenger_car_body === true || component.parameters.body_style === 'four-door-sedan';
+  if (!sedan) return <group>
     <group position={[0, -y * .18, 0]}><BoxBody size={[x, y * .48, z]} color={color} xray={xray} selected={selected} radius={.16} metalness={.68} roughness={.28} /></group>
     <group position={[-x * .08, y * .17, 0]}><BoxBody size={[x * .48, y * .55, z * .82]} color="#263d49" xray={xray} selected={selected} radius={.14} metalness={.2} roughness={.22} /></group>
     <group position={[x * .31, y * .06, 0]}><BoxBody size={[x * .35, y * .28, z * .9]} color={color} xray={xray} selected={selected} radius={.1} /></group>
-    {!xray && <><group position={[x * .51, -.02, -z * .28]}><BoxBody size={[.04, y * .17, z * .2]} color="#f6f1c8" xray={false} selected={selected} radius={.02} metalness={.05} roughness={.25} /></group><group position={[x * .51, -.02, z * .28]}><BoxBody size={[.04, y * .17, z * .2]} color="#f6f1c8" xray={false} selected={selected} radius={.02} /></group></>}
+  </group>;
+  const wheelX = Math.min(x * .38, Number(component.parameters.wheelbase_m ?? x * .66) / 2);
+  const wheelRadius = Number(component.parameters.wheel_diameter_m ?? y * .72) / 2;
+  const wheelY = Number(component.parameters.wheel_center_y_local ?? -y * .62);
+  const glass = selected ? '#65e5ff' : '#69b9da';
+  return <group>
+    <group position={[0, -y * .28, 0]}><BoxBody size={[x, y * .42, z]} color={color} xray={xray} selected={selected} radius={.18} metalness={.66} roughness={.27} /></group>
+    <group position={[x * .34, -y * .06, 0]}><BoxBody size={[x * .31, y * .3, z * .91]} color={color} xray={xray} selected={selected} radius={.13} metalness={.65} roughness={.27} /></group>
+    <group position={[-x * .4, -y * .08, 0]}><BoxBody size={[x * .18, y * .3, z * .9]} color={color} xray={xray} selected={selected} radius={.11} metalness={.65} roughness={.27} /></group>
+    <group position={[-x * .03, y * .4, 0]}><BoxBody size={[x * .43, y * .13, z * .79]} color={color} xray={xray} selected={selected} radius={.08} metalness={.62} roughness={.26} /></group>
+    {[-1, 1].map((side) => <group key={`side-${side}`}>
+      <group position={[-x * .03, y * .17, side * z * .43]}><mesh><boxGeometry args={[x * .38, y * .37, .026]} /><meshPhysicalMaterial color={glass} transparent opacity={xray ? .18 : .42} transmission={xray ? .08 : .42} depthWrite={false} roughness={.12} metalness={0} /></mesh></group>
+      <group position={[x * .18, y * .18, side * z * .455]} rotation={[0, 0, -.34]}><BoxBody size={[.085, y * .61, .075]} color={color} xray={xray} selected={selected} radius={.025} metalness={.62} roughness={.27} /></group>
+      <group position={[-x * .25, y * .18, side * z * .455]} rotation={[0, 0, .3]}><BoxBody size={[.085, y * .58, .075]} color={color} xray={xray} selected={selected} radius={.025} metalness={.62} roughness={.27} /></group>
+      <group position={[-x * .035, y * .18, side * z * .46]}><BoxBody size={[.075, y * .48, .07]} color={color} xray={xray} selected={selected} radius={.02} metalness={.62} roughness={.27} /></group>
+      <mesh position={[wheelX, wheelY, side * z * .505]}><torusGeometry args={[wheelRadius * 1.05, Math.max(.025, wheelRadius * .09), 12, 40]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.62} roughness={.28} /></mesh>
+      <mesh position={[-wheelX, wheelY, side * z * .505]}><torusGeometry args={[wheelRadius * 1.05, Math.max(.025, wheelRadius * .09), 12, 40]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.62} roughness={.28} /></mesh>
+      <group position={[x * .16, y * .15, side * z * .52]}><BoxBody size={[.22, .095, .11]} color={color} xray={xray} selected={selected} radius={.04} metalness={.58} roughness={.3} /></group>
+      {!xray && <><Line points={[[x * .2, -y * .31, side * z * .506], [x * .2, y * .04, side * z * .506], [-x * .03, y * .06, side * z * .506], [-x * .03, -y * .31, side * z * .506]]} color="#18384c" lineWidth={1.2} /><Line points={[[x * -.04, -y * .31, side * z * .506], [x * -.04, y * .05, side * z * .506], [-x * .27, y * .02, side * z * .506], [-x * .27, -y * .31, side * z * .506]]} color="#18384c" lineWidth={1.2} /><group position={[x * .055, -y * .02, side * z * .515]}><BoxBody size={[x * .055, .025, .025]} color="#d8e1e5" xray={false} selected={selected} radius={.01} metalness={.86} roughness={.16} /></group><group position={[-x * .15, -y * .02, side * z * .515]}><BoxBody size={[x * .055, .025, .025]} color="#d8e1e5" xray={false} selected={selected} radius={.01} metalness={.86} roughness={.16} /></group></>}
+    </group>)}
+    <group position={[x * .505, -y * .25, 0]}><BoxBody size={[.045, y * .21, z * .48]} color="#18252b" xray={xray} selected={selected} radius={.025} metalness={.35} roughness={.5} /></group>
+    {!xray && [-.3, -.15, 0, .15, .3].map((factor) => <group key={`grille-${factor}`} position={[x * .53, -y * .25, z * factor]}><BoxBody size={[.025, y * .16, .018]} color="#91a0a6" xray={false} selected={selected} radius={.006} metalness={.78} roughness={.24} /></group>)}
+    {[-1, 1].map((side) => <group key={`lamp-${side}`}><group position={[x * .505, -y * .08, side * z * .31]}><BoxBody size={[.05, y * .18, z * .18]} color="#e9f5e8" xray={xray} selected={selected} radius={.04} metalness={.08} roughness={.18} /></group><group position={[-x * .505, -y * .08, side * z * .32]}><BoxBody size={[.05, y * .17, z * .17]} color="#e83d4d" xray={xray} selected={selected} radius={.035} metalness={.08} roughness={.2} /></group></group>)}
+    <group position={[x * .515, -y * .37, 0]}><BoxBody size={[.08, y * .13, z * .88]} color="#263238" xray={xray} selected={selected} radius={.04} metalness={.5} roughness={.38} /></group>
+    <group position={[-x * .515, -y * .37, 0]}><BoxBody size={[.08, y * .13, z * .88]} color="#263238" xray={xray} selected={selected} radius={.04} metalness={.5} roughness={.38} /></group>
   </group>;
 }
 

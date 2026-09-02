@@ -88,7 +88,8 @@ function validateVehicleGeometry(plan: CompiledWorldPlan, prompt: string, issues
 }
 
 function validateWindshields(plan: CompiledWorldPlan, issues: DesignIssue[]) {
-  const windshields = plan.components.filter((component) => component.parameters?.cockpit_windshield || /windshield|windscreen/.test(component.role.toLowerCase()));
+  const windshields = plan.components.filter((component) => component.parameters?.cockpit_windshield
+    || (!component.parameters?.rear_windshield && /(?:front|cockpit) windshield|windscreen/.test(component.role.toLowerCase())));
   for (const windshield of windshields) {
     if (!windshield.parameters?.transparent_glazing || windshield.parameters?.facing_axis !== '+X') issues.push({ code: 'WINDSHIELD_PROPERTIES', severity: 'repair', message: `${windshield.role} must be transparent and face +X.`, componentIds: [windshield.id] });
     if (Math.abs(windshield.position[2]) > Math.max(.12, windshield.dimensions[2] * .18) || windshield.dimensions[1] < .3 || windshield.dimensions[2] < .5) issues.push({ code: 'WINDSHIELD_PROPORTION', severity: 'repair', message: `${windshield.role} must be centered and large enough for the driver sightline.`, componentIds: [windshield.id] });

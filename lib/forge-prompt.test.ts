@@ -424,6 +424,36 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(illuminated.connections.filter((item) => item.channel === 'lighting_bus')).toHaveLength(2);
   });
 
+  it('builds a proportioned passenger car with a readable cabin and driver layout', () => {
+    const car = compileDesignBrief('Build a realistic four-door road car with a clear windshield, headlights, tail lights, and four seats.');
+    const body = car.components.find((item) => item.parameters?.passenger_car_body)!;
+    const windshield = car.components.find((item) => item.parameters?.cockpit_windshield)!;
+    const rearWindow = car.components.find((item) => item.parameters?.rear_windshield)!;
+    const sideWindows = car.components.filter((item) => item.parameters?.side_window);
+    const steeringWheel = car.components.find((item) => item.parameters?.road_vehicle_steering_wheel)!;
+    const driverSeat = car.components.find((item) => item.parameters?.driver_seat)!;
+    const accelerator = car.components.find((item) => item.parameters?.pedal_kind === 'accelerator')!;
+    const brake = car.components.find((item) => item.parameters?.pedal_kind === 'brake')!;
+
+    expect(body.dimensions[0]).toBeGreaterThan(3.5);
+    expect(body.dimensions[2]).toBeGreaterThan(1.5);
+    expect(Number(body.parameters?.wheelbase_m)).toBeGreaterThan(2.4);
+    expect(car.components.filter((item) => item.parameters?.road_vehicle_wheel)).toHaveLength(4);
+    expect(car.components.some((item) => item.parameters?.passenger_seat)).toBe(true);
+    expect(car.components.some((item) => item.parameters?.rear_bench_seat)).toBe(true);
+    expect(windshield.parameters).toMatchObject({ transparent_glazing: true, facing_axis: '+X', attached_to_cockpit: true });
+    expect(windshield.position[0]).toBeGreaterThan(0);
+    expect(rearWindow.parameters).toMatchObject({ transparent_glazing: true, facing_axis: '-X' });
+    expect(sideWindows).toHaveLength(2);
+    expect(steeringWheel.position[2]).toBeLessThan(0);
+    expect(driverSeat.position[2]).toBeLessThan(0);
+    expect(accelerator.position[2]).toBeLessThan(0);
+    expect(brake.position[2]).toBeLessThan(accelerator.position[2]);
+    expect(car.assemblies.map((item) => item.name)).not.toContain('constructed motion stage');
+    expect(car.assemblies.map((item) => item.name)).not.toContain('requested primitive extension');
+    expect(car.components.length).toBeLessThanOrEqual(64);
+  });
+
   it('keeps a regular bicycle human-powered unless electrification is requested', () => {
     const bicycle = compileDesignBrief('Build a bicycle with pedals, a chain, and front and rear lights.');
     expect(bicycle.components.filter((item) => item.parameters?.bicycle_pedal)).toHaveLength(2);

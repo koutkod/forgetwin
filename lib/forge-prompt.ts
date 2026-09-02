@@ -151,6 +151,9 @@ function parseValues(text: string): ParsedValues {
 function inferCapabilities(text: string): Capability[] {
   const capabilities = new Set<Capability>(['structure']);
   const transmissionText = text.replace(/\blanding gear\b/g, '');
+  // "Four-door car" describes a body style, not a request for a hinged-door
+  // test rig. Keep that adjective from manufacturing an unrelated motion stage.
+  const motionText = text.replace(/\b(?:two|three|four|five)[- ]door\b/g, '');
   if (/\b(?:conveyors?|packages?|boxes?|sort(?:er|ing|ed|s)?|warehouse|factory line|buffers?|singulat(?:e|ion)|feed(?:er|ing)?|recycl(?:e|ing)|graders?|routing)\b/.test(text)) capabilities.add('transport');
   if (/\b(?:sort(?:er|ing|ed|s)?|separat(?:e|ion)|rout(?:e|ing)|classif(?:y|ication)|inspect(?:ion)?|reject|color|size|material|graders?|recycl(?:e|ing))\b/.test(text)) { capabilities.add('classify'); capabilities.add('measure'); }
   if (/lift|raise|elevator|crane|hoist|drawbridge|jack|patient|\bwinch\b/.test(text)) capabilities.add('lift');
@@ -164,7 +167,7 @@ function inferCapabilities(text: string): Capability[] {
   if (activeTracking) capabilities.add('track');
   if (/buffer|queue|spacing|irregular|singulat/.test(text)) capabilities.add('buffer');
   if (/\b(?:bins?|containers?|collect(?:or|ion)?|recycling|reject|tanks?|reservoirs?)\b/.test(text)) capabilities.add('contain');
-  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|reciprocat|piston pump|plunger pump/.test(text) || (isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text))) capabilities.add('rotate');
+  if (/rotat|hinge|pivot|door|hatch|drawbridge|crank|flywheel|four[- ]bar|linkage|reciprocat|piston pump|plunger pump/.test(motionText) || (isCentrifugalPumpGoal(text) && !isCentrifugalPumpPartGoal(text))) capabilities.add('rotate');
   if (isBenchViseGoal(text) || isWindYawGoal(text) || isDrillPressGoal(text) || isRackSteeringGoal(text) || isBicycleBrakeGoal(text) || isGrainMillGoal(text)) capabilities.add('rotate');
   if (isGrainMillGoal(text)) capabilities.add('contain');
   if (isBottleJackGoal(text)) capabilities.add('stabilize');
@@ -725,11 +728,12 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   const assembly = builder.assembly(kart ? 'go-kart assembly' : 'road vehicle assembly', 'Tubular chassis, four-wheel running gear, steering, cockpit, powertrain, brakes, sensors, bodywork, and lights built from reusable parts', rootAssemblyId);
   const electric = /electric|battery|ev\b/.test(text);
   const offRoad = /buggy|atv|all-terrain|off[- ]road/.test(text);
-  const length = offRoad ? 2.75 : 2.45;
-  const track = offRoad ? 1.55 : 1.38;
-  const wheelbase = offRoad ? 1.82 : 1.7;
-  const wheelDiameter = offRoad ? .72 : .58;
-  const wheelWidth = offRoad ? .28 : .22;
+  const roadCar = !kart && !offRoad;
+  const length = offRoad ? 2.75 : roadCar ? 4.15 : 2.45;
+  const track = offRoad ? 1.55 : roadCar ? 1.68 : 1.38;
+  const wheelbase = offRoad ? 1.82 : roadCar ? 2.58 : 1.7;
+  const wheelDiameter = offRoad ? .72 : roadCar ? .68 : .58;
+  const wheelWidth = offRoad ? .28 : roadCar ? .24 : .22;
   const rearX = -wheelbase / 2;
   const frontX = wheelbase / 2;
   const wheelY = wheelDiameter / 2 + .08;
@@ -751,7 +755,7 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   for (const [role, x] of [['rear bumper crossmember', -length / 2], ['rear chassis crossmember', rearX], ['seat crossmember', -.2], ['front chassis crossmember', frontX], ['front bumper crossmember', length / 2]] as const) {
     addTube(role, [x, role.includes('bumper') ? .53 : railY, -railZ], [x, role.includes('bumper') ? .53 : railY, railZ], role.includes('bumper') ? .075 : .06);
   }
-  const floor = builder.component('plate', 'go-kart floor pan', assembly, [.02, .62, 0], [1.55, .055, railZ * 1.62], 'aluminum', 'fixed', { road_vehicle_floor: true }, 4.2);
+  const floor = builder.component('plate', kart ? 'go-kart floor pan' : 'reinforced passenger-car floor pan', assembly, [.02, .62, 0], [roadCar ? length * .76 : 1.55, roadCar ? .075 : .055, roadCar ? track * .76 : railZ * 1.62], 'aluminum', 'fixed', { road_vehicle_floor: true, passenger_car_floor: roadCar }, roadCar ? 12.5 : 4.2);
   frameBodies.forEach((body, index) => builder.connect(index ? frameBodies[index - 1] : floor, body, 'mechanical', 'welded_tubular_frame'));
   builder.connect(floor, frameBodies[0], 'mechanical', 'floor_pan_fasteners');
   if (kart) {
@@ -840,11 +844,18 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
     }
   }
 
-  const seat = builder.component('seat', 'single high-back bucket seat', assembly, [-.3, 1.02, 0], [.62, .72, .62], 'polymer', 'fixed', { road_vehicle_seat: true, seat_form: 'bucket' }, 5.2);
+  const driverZ = roadCar ? -track * .22 : 0;
+  const seat = builder.component('seat', roadCar ? 'left-side driver seat' : 'single high-back bucket seat', assembly, [roadCar ? -.22 : -.3, 1.02, driverZ], [.62, .72, .58], 'polymer', 'fixed', { road_vehicle_seat: true, driver_seat: roadCar, seat_form: 'bucket' }, 5.2);
   if (kart) builder.components.find((item) => item.id === seat)!.color = '#2ab164';
   builder.connect(seat, floor, 'mechanical', 'seat_rails');
-  const column = addTube('steering column', [.45, .69, 0], [.64, 1.21, 0], .045);
-  const steeringWheel = builder.component('steering', 'steering wheel', assembly, [.66, 1.25, 0], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true, control_form: 'wheel' }, .68);
+  if (roadCar) {
+    const passengerSeat = builder.component('seat', 'front passenger seat', assembly, [-.22, 1.02, track * .22], [.62, .72, .58], 'polymer', 'fixed', { road_vehicle_seat: true, passenger_seat: true, seat_form: 'bucket' }, 5.1);
+    const rearBench = builder.component('seat', 'rear passenger bench seat', assembly, [-.88, 1.04, 0], [.62, .66, track * .62], 'polymer', 'fixed', { road_vehicle_seat: true, rear_bench_seat: true, seat_form: 'bench' }, 8.4);
+    builder.connect(passengerSeat, floor, 'mechanical', 'passenger_seat_rails');
+    builder.connect(rearBench, floor, 'mechanical', 'rear_bench_mounts');
+  }
+  const column = addTube('steering column', [.45, .69, driverZ], [.64, 1.21, driverZ], .045);
+  const steeringWheel = builder.component('steering', 'steering wheel', assembly, [.66, 1.25, driverZ], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true, driver_side: roadCar ? 'left' : 'center', control_form: 'wheel' }, .68);
   if (kart) builder.components.find((item) => item.id === steeringWheel)!.color = '#c94740';
   builder.rotate(steeringWheel, [0, 0, -.36]);
   builder.connect(column, steeringWheel, 'mechanical', 'steering_hub');
@@ -875,11 +886,24 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   builder.control('Ackermann steering linkage', 'tracking', [steeringSensor], [rackActuator], 'translate wheel input through rack and tie rods; pivot on vertical kingpins, spin on horizontal spindles, and steer the inside tire farther', .34);
 
   if (!kart) {
-    const body = builder.component('body-shell', 'recognizable road-car body shell', assembly, [-.03, 1.0, 0], [2.36, .72, 1.34], 'aluminum', 'fixed', { automotive_body: true, road_vehicle_body: true, front_axis: '+X' }, 32);
+    const bodyLength = roadCar ? length * .92 : 2.36;
+    const bodyWidth = roadCar ? track * .93 : 1.34;
+    const bodyHeight = roadCar ? .9 : .72;
+    const body = builder.component('body-shell', roadCar ? 'four-door passenger car body shell' : 'recognizable off-road vehicle body shell', assembly, [-.03, roadCar ? .98 : 1.0, 0], [bodyLength, bodyHeight, bodyWidth], 'aluminum', 'fixed', { automotive_body: true, road_vehicle_body: true, passenger_car_body: roadCar, body_style: roadCar ? 'four-door-sedan' : 'off-road', front_axis: '+X', wheelbase_m: wheelbase, wheel_diameter_m: wheelDiameter, wheel_center_y_local: wheelY - (roadCar ? .98 : 1) }, roadCar ? 44 : 32);
+    builder.components.find((item) => item.id === body)!.color = roadCar ? '#3478d4' : '#4276a1';
     builder.connect(body, floor, 'mechanical', 'body_to_frame_mounts');
-    const windshield = builder.component('plate', 'transparent centered cockpit windshield', assembly, [.42, 1.46, 0], [.07, .58, 1.02], 'polymer', 'fixed', { cockpit_windshield: true, transparent_glazing: true, windshield_angle_deg: 16, facing_axis: '+X', attached_to_cockpit: true }, 2.2);
-    builder.rotate(windshield, [0, 0, -.28]);
+    const windshield = builder.component('plate', 'transparent centered front windshield', assembly, [roadCar ? .68 : .42, roadCar ? 1.47 : 1.46, 0], [.06, roadCar ? .64 : .58, roadCar ? track * .72 : 1.02], 'polymer', 'fixed', { cockpit_windshield: true, transparent_glazing: true, windshield_angle_deg: roadCar ? 22 : 16, facing_axis: '+X', attached_to_cockpit: true }, roadCar ? 3.1 : 2.2);
+    builder.rotate(windshield, [0, 0, roadCar ? -.38 : -.28]);
     builder.connect(windshield, body, 'mechanical', 'windshield_frame_bond');
+    if (roadCar) {
+      const rearWindow = builder.component('plate', 'transparent rear windshield', assembly, [-.72, 1.45, 0], [.055, .55, track * .68], 'polymer', 'fixed', { rear_windshield: true, transparent_glazing: true, facing_axis: '-X', attached_to_cockpit: true }, 2.7);
+      builder.rotate(rearWindow, [0, 0, .34]);
+      builder.connect(rearWindow, body, 'mechanical', 'rear_window_frame_bond');
+      for (const side of [-1, 1]) {
+        const sideWindow = builder.component('plate', `${side < 0 ? 'left' : 'right'} transparent side windows`, assembly, [-.03, 1.46, side * track * .425], [1.32, .45, .035], 'polymer', 'fixed', { side_window: true, transparent_glazing: true, glazing_side: side < 0 ? 'left' : 'right', attached_to_cockpit: true }, 2.1);
+        builder.connect(sideWindow, body, 'mechanical', 'side_window_frame_bond');
+      }
+    }
   }
 
   const battery = builder.component('battery', electric ? 'high-voltage traction battery' : 'starter battery', assembly, [rearX + .12, .82, 0], [.62, .3, .5], 'polymer', 'fixed', { road_vehicle_battery: true }, electric ? 18 : 7);
@@ -887,8 +911,8 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   // The driver faces +X: negative Z is the left foot and positive Z the right.
   // Each pedal component is anchored at its floor pivot; the scene composes a
   // visible lever and upright foot pad from this low-level plate primitive.
-  const pedal = builder.component('pedal', 'accelerator pedal', assembly, [.38, .65, .13], [.038, .18, .095], 'aluminum', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'accelerator' }, .22);
-  const brakePedal = builder.component('pedal', 'brake pedal', assembly, [.38, .65, -.13], [.042, .19, .135], 'steel', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'brake' }, .28);
+  const pedal = builder.component('pedal', 'accelerator pedal', assembly, [.38, .65, driverZ + .11], [.038, .18, .095], 'aluminum', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'accelerator', driver_side: roadCar ? 'left' : 'center' }, .22);
+  const brakePedal = builder.component('pedal', 'brake pedal', assembly, [.38, .65, driverZ - .11], [.042, .19, .135], 'steel', 'fixed', { road_vehicle_pedal: true, pedal_kind: 'brake', driver_side: roadCar ? 'left' : 'center' }, .28);
   for (const item of [battery, controller, pedal, brakePedal]) builder.connect(item, floor, 'mechanical', 'cockpit_mount');
   builder.connect(battery, controller, 'power', 'dc_traction_bus');
   driveMotors.forEach((motor) => builder.connect(controller, motor, 'signal', 'motor_torque_command'));
@@ -2769,7 +2793,11 @@ export function compileDesignBrief(raw: string): CompiledWorldPlan {
   // the saddle). Do not append a second set of generic standalone objects.
   const semanticallySatisfied = isBicycleGoal(text)
     ? new Set<PrimitiveKind>(['frame', 'seat', 'steering', 'pedal', 'battery'])
-    : new Set<PrimitiveKind>();
+    : isRoadVehicleGoal(text)
+      // One rear-bench primitive represents multiple real seating positions;
+      // do not bolt a generic fourth seat outside the finished passenger cell.
+      ? new Set<PrimitiveKind>(['frame', 'wheel', 'shaft', 'bearing', 'tube', 'seat', 'steering', 'pedal', 'battery', 'body-shell', 'light'])
+      : new Set<PrimitiveKind>();
   const missing = [...requested.entries()]
     .map(([kind, count]) => [kind, Math.max(0, count - builder.components.filter((item) => item.primitive === kind).length)] as [PrimitiveKind, number])
     .filter(([kind, count]) => count > 0 && !semanticallySatisfied.has(kind));

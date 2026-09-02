@@ -305,10 +305,12 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .component-inspector label { display:block; margin-top:11px; color:#7b8991; font-size:9px; font-weight:650; }
 .component-inspector>p:first-of-type { display:block; color:#66737c; }
 .component-inspector .drag-help { display:flex; align-items:center; gap:5px; margin-top:8px; color:#66dff8; font-size:8px; }
-.axis-control { padding:7px 0 3px; border-top:1px solid rgba(255,255,255,.045); }
+.component-inspector>.axis-control { display:block; padding:7px 0 3px; border-top:1px solid rgba(255,255,255,.045); }
 .axis-control label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:0; }
 .axis-control label code { color:#91a2aa; font-size:8px; white-space:nowrap; }
 .axis-control input[type="range"] { width:100%; margin:7px 0 2px; accent-color:#55dff7; }
+.axis-control .nudge-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; width:100%; }
+.axis-control .nudge-row button { min-width:0; white-space:nowrap; line-height:1; }
 .rotation-editor { display:block!important; margin-top:10px!important; border-top:1px solid rgba(255,255,255,.06); padding-top:8px; }
 .rotation-editor>label { display:flex; align-items:center; justify-content:space-between; margin:0; }
 .rotation-editor select,.rotation-fields input { border:1px solid var(--line); border-radius:6px; background:#0b1116; color:#b9c6cc; font:600 9px var(--font-geist-mono),monospace; }

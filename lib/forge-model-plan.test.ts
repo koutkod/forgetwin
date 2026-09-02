@@ -66,6 +66,30 @@ describe('model-authored world compilation', () => {
     expect(roundTrip.components.filter((item) => item.parameters?.brake_light).every((item) => item.parameters?.facing_axis === '-X')).toBe(true);
   });
 
+  it('preserves the recognizable passenger-car shell and glazing through hosted-AI plan conversion', () => {
+    const prompt = 'Build a road car with a clear windshield, headlights, and tail lights.';
+    const compiled = compileDesignBrief(prompt);
+    const intent: AgentIntent = {
+      normalized_prompt: prompt, design_brief: prompt, machine_name: compiled.goal.machineName,
+      domain: compiled.goal.domain, reasoning_summary: 'Compose a proportioned four-door passenger car around a long wheelbase, enclosed cabin, seating, glazing, steering, road wheels, and lights.',
+      architecture: ['reinforced chassis', 'four-wheel running gear', 'enclosed passenger cabin', 'steering and lighting'],
+      assumptions: ['Concept-scale rigid-body validation'], capabilities: compiled.goal.capabilities,
+      requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 64, unit: '', source: 'inferred' }],
+    };
+
+    const roundTrip = compileAgentPlan(prompt, agentPlanFromCompiled(prompt, intent, compiled));
+    const body = roundTrip.components.find((item) => item.parameters?.passenger_car_body)!;
+    expect(body).toBeDefined();
+    expect(body.parameters).toMatchObject({ automotive_body: true, road_vehicle_body: true, body_style: 'four-door-sedan', front_axis: '+X' });
+    expect(Number(body.parameters?.wheelbase_m)).toBeGreaterThan(2.4);
+    expect(roundTrip.components.find((item) => item.parameters?.driver_seat)).toBeDefined();
+    expect(roundTrip.components.find((item) => item.parameters?.passenger_seat)).toBeDefined();
+    expect(roundTrip.components.find((item) => item.parameters?.rear_bench_seat)).toBeDefined();
+    expect(roundTrip.components.find((item) => item.parameters?.cockpit_windshield)?.parameters).toMatchObject({ transparent_glazing: true, facing_axis: '+X' });
+    expect(roundTrip.components.find((item) => item.parameters?.rear_windshield)?.parameters).toMatchObject({ transparent_glazing: true, facing_axis: '-X' });
+    expect(roundTrip.components.filter((item) => item.parameters?.side_window)).toHaveLength(2);
+  });
+
   it('keeps explicit user targets authoritative when the model marks one as inferred', () => {
     const prompt = 'Build a conveyor that sorts red and blue boxes into separate bins at 20 boxes per minute.';
     const intent: AgentIntent = {

@@ -64,7 +64,23 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   }
   if (tags.has('steering-wheel') || /steering wheel/.test(role)) parameters.road_vehicle_steering_wheel = true;
   if (tags.has('steering-rack') || /steering rack/.test(role)) parameters.road_vehicle_steering_rack = true;
+  if (tags.has('automotive-body')) { parameters.automotive_body = true; parameters.road_vehicle_body = true; }
+  if (tags.has('passenger-car-body')) {
+    parameters.automotive_body = true; parameters.road_vehicle_body = true; parameters.passenger_car_body = true;
+    parameters.body_style = 'four-door-sedan'; parameters.front_axis = '+X';
+    parameters.wheelbase_m = component.dimensions[0] * .675;
+    parameters.wheel_diameter_m = component.dimensions[1] * .756;
+    parameters.wheel_center_y_local = -component.dimensions[1] * .62;
+  }
+  if (tags.has('driver-seat')) { parameters.road_vehicle_seat = true; parameters.driver_seat = true; parameters.seat_form = 'bucket'; }
+  if (tags.has('passenger-seat')) { parameters.road_vehicle_seat = true; parameters.passenger_seat = true; parameters.seat_form = 'bucket'; }
+  if (tags.has('rear-bench-seat')) { parameters.road_vehicle_seat = true; parameters.rear_bench_seat = true; parameters.seat_form = 'bench'; }
   if (tags.has('cockpit-windshield')) { parameters.cockpit_windshield = true; parameters.attached_to_cockpit = true; parameters.facing_axis = '+X'; parameters.windshield_angle_deg = 16; }
+  if (tags.has('rear-windshield')) { parameters.rear_windshield = true; parameters.attached_to_cockpit = true; parameters.facing_axis = '-X'; }
+  if (tags.has('side-window-left') || tags.has('side-window-right')) {
+    parameters.side_window = true; parameters.attached_to_cockpit = true;
+    parameters.glazing_side = tags.has('side-window-left') ? 'left' : 'right';
+  }
   if (tags.has('transparent-glazing')) parameters.transparent_glazing = true;
   if (tags.has('nav-light-left') || tags.has('nav-light-right') || tags.has('nav-light-tail')) {
     const side = tags.has('nav-light-left') ? 'left' : tags.has('nav-light-right') ? 'right' : 'tail';
@@ -229,7 +245,14 @@ function tagsFromParameters(component: ComponentBlueprint) {
   if (parameters.road_vehicle_steering_knuckle === true) tags.add('steering-knuckle');
   if (parameters.road_vehicle_steering_tie_rod === true) tags.add('steering-tie-rod');
   if (parameters.road_vehicle_steering_rack === true) tags.add('steering-rack');
+  if (parameters.automotive_body === true) tags.add('automotive-body');
+  if (parameters.passenger_car_body === true) tags.add('passenger-car-body');
+  if (parameters.driver_seat === true) tags.add('driver-seat');
+  if (parameters.passenger_seat === true) tags.add('passenger-seat');
+  if (parameters.rear_bench_seat === true) tags.add('rear-bench-seat');
   if (parameters.cockpit_windshield === true) tags.add('cockpit-windshield');
+  if (parameters.rear_windshield === true) tags.add('rear-windshield');
+  if (parameters.side_window === true) tags.add(`side-window-${String(parameters.glazing_side ?? 'left')}`);
   if (parameters.transparent_glazing === true) tags.add('transparent-glazing');
   if (parameters.aircraft_navigation_light === true) tags.add(`nav-light-${String(parameters.navigation_side ?? 'tail')}`);
   if (parameters.landing_light === true) tags.add('landing-light');
