@@ -6,6 +6,7 @@ import type {
 } from './forge-types';
 import { finalizeCompiledWorldPlan } from './forge-design-validator';
 import { FORGE_COORDINATE_CONVENTION, normalizeEngineeringIntent } from './forge-intent';
+import { worldPointToLocal } from './forge-motion';
 
 export const DEFAULT_DESIGN_PROMPT = engineeringExamples[1].prompt;
 export const CHALLENGE_EXAMPLES = engineeringExamples;
@@ -438,9 +439,24 @@ class WorldBuilder {
     const bodyB = this.components.find((item) => item.id === b);
     if (!bodyA || !bodyB) throw new Error('Planner attempted to join a missing primitive.');
     const shared = bodyA.position.map((value, index) => (value + bodyB.position[index]) / 2) as Vec3;
-    const anchorA = shared.map((value, index) => value - bodyA.position[index]) as Vec3;
-    const anchorB = shared.map((value, index) => value - bodyB.position[index]) as Vec3;
+    const anchorA = worldPointToLocal(bodyA.position, bodyA.rotation, shared);
+    const anchorB = worldPointToLocal(bodyB.position, bodyB.rotation, shared);
     const value: JointBlueprint = { id: this.next(`${type}-joint`), type, componentA: a, componentB: b, anchorA, anchorB, axis, ...options };
+    this.joints.push(value);
+    return value.id;
+  }
+
+  jointAt(type: JointType, a: string, b: string, worldPoint: Vec3, axis: Vec3 = [0, 1, 0], options: Partial<Omit<JointBlueprint, 'id' | 'type' | 'componentA' | 'componentB' | 'axis'>> = {}) {
+    const bodyA = this.components.find((item) => item.id === a);
+    const bodyB = this.components.find((item) => item.id === b);
+    if (!bodyA || !bodyB) throw new Error('Planner attempted to join a missing primitive.');
+    const placedPoint = worldPoint.map((value, index) => value + this.origin[index]) as Vec3;
+    const value: JointBlueprint = {
+      id: this.next(`${type}-joint`), type, componentA: a, componentB: b,
+      anchorA: worldPointToLocal(bodyA.position, bodyA.rotation, placedPoint),
+      anchorB: worldPointToLocal(bodyB.position, bodyB.rotation, placedPoint),
+      axis, ...options,
+    };
     this.joints.push(value);
     return value.id;
   }
@@ -845,17 +861,17 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
   }
 
   const driverZ = roadCar ? -track * .22 : 0;
-  const seat = builder.component('seat', roadCar ? 'left-side driver seat' : 'single high-back bucket seat', assembly, [roadCar ? -.22 : -.3, 1.02, driverZ], [.62, .72, .58], 'polymer', 'fixed', { road_vehicle_seat: true, driver_seat: roadCar, seat_form: 'bucket' }, 5.2);
+  const seat = builder.component('seat', roadCar ? 'left-side driver seat' : 'single high-back bucket seat', assembly, [roadCar ? -.22 : -.3, roadCar ? .94 : 1.02, driverZ], [.62, roadCar ? .54 : .72, .58], 'polymer', 'fixed', { road_vehicle_seat: true, driver_seat: roadCar, seat_form: 'bucket' }, 5.2);
   if (kart) builder.components.find((item) => item.id === seat)!.color = '#2ab164';
   builder.connect(seat, floor, 'mechanical', 'seat_rails');
   if (roadCar) {
-    const passengerSeat = builder.component('seat', 'front passenger seat', assembly, [-.22, 1.02, track * .22], [.62, .72, .58], 'polymer', 'fixed', { road_vehicle_seat: true, passenger_seat: true, seat_form: 'bucket' }, 5.1);
-    const rearBench = builder.component('seat', 'rear passenger bench seat', assembly, [-.88, 1.04, 0], [.62, .66, track * .62], 'polymer', 'fixed', { road_vehicle_seat: true, rear_bench_seat: true, seat_form: 'bench' }, 8.4);
+    const passengerSeat = builder.component('seat', 'front passenger seat', assembly, [-.22, .94, track * .22], [.62, .54, .58], 'polymer', 'fixed', { road_vehicle_seat: true, passenger_seat: true, seat_form: 'bucket' }, 5.1);
+    const rearBench = builder.component('seat', 'rear passenger bench seat', assembly, [-.88, .92, 0], [.58, .48, track * .62], 'polymer', 'fixed', { road_vehicle_seat: true, rear_bench_seat: true, seat_form: 'bench' }, 8.4);
     builder.connect(passengerSeat, floor, 'mechanical', 'passenger_seat_rails');
     builder.connect(rearBench, floor, 'mechanical', 'rear_bench_mounts');
   }
-  const column = addTube('steering column', [.45, .69, driverZ], [.64, 1.21, driverZ], .045);
-  const steeringWheel = builder.component('steering', 'steering wheel', assembly, [.66, 1.25, driverZ], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true, driver_side: roadCar ? 'left' : 'center', control_form: 'wheel' }, .68);
+  const column = addTube('steering column', [.45, .69, driverZ], [.64, roadCar ? 1.11 : 1.21, driverZ], .045);
+  const steeringWheel = builder.component('steering', 'steering wheel', assembly, [.66, roadCar ? 1.15 : 1.25, driverZ], [.38, .065, .38], 'polymer', 'fixed', { road_vehicle_steering_wheel: true, driver_side: roadCar ? 'left' : 'center', control_form: 'wheel' }, .68);
   if (kart) builder.components.find((item) => item.id === steeringWheel)!.color = '#c94740';
   builder.rotate(steeringWheel, [0, 0, -.36]);
   builder.connect(column, steeringWheel, 'mechanical', 'steering_hub');
@@ -889,18 +905,18 @@ function addLowProfileRoadVehicle(context: ModuleContext): ModuleResult {
     const bodyLength = roadCar ? length * .92 : 2.36;
     const bodyWidth = roadCar ? track * .93 : 1.34;
     const bodyHeight = roadCar ? .9 : .72;
-    const body = builder.component('body-shell', roadCar ? 'four-door passenger car body shell' : 'recognizable off-road vehicle body shell', assembly, [-.03, roadCar ? .98 : 1.0, 0], [bodyLength, bodyHeight, bodyWidth], 'aluminum', 'fixed', { automotive_body: true, road_vehicle_body: true, passenger_car_body: roadCar, body_style: roadCar ? 'four-door-sedan' : 'off-road', front_axis: '+X', wheelbase_m: wheelbase, wheel_diameter_m: wheelDiameter, wheel_center_y_local: wheelY - (roadCar ? .98 : 1) }, roadCar ? 44 : 32);
-    builder.components.find((item) => item.id === body)!.color = roadCar ? '#3478d4' : '#4276a1';
+    const body = builder.component('body-shell', roadCar ? 'futuristic passenger sports car body shell' : 'recognizable off-road vehicle body shell', assembly, [-.03, roadCar ? .94 : 1.0, 0], [bodyLength, bodyHeight, bodyWidth], 'aluminum', 'fixed', { automotive_body: true, road_vehicle_body: true, passenger_car_body: roadCar, body_style: roadCar ? 'four-door-sedan' : 'off-road', design_language: roadCar ? 'low-wide-aerodynamic' : 'off-road', front_axis: '+X', wheelbase_m: wheelbase, wheel_diameter_m: wheelDiameter, wheel_center_y_local: wheelY - (roadCar ? .94 : 1) }, roadCar ? 44 : 32);
+    builder.components.find((item) => item.id === body)!.color = roadCar ? '#d7dde0' : '#4276a1';
     builder.connect(body, floor, 'mechanical', 'body_to_frame_mounts');
-    const windshield = builder.component('plate', 'transparent centered front windshield', assembly, [roadCar ? .68 : .42, roadCar ? 1.47 : 1.46, 0], [.06, roadCar ? .64 : .58, roadCar ? track * .72 : 1.02], 'polymer', 'fixed', { cockpit_windshield: true, transparent_glazing: true, windshield_angle_deg: roadCar ? 22 : 16, facing_axis: '+X', attached_to_cockpit: true }, roadCar ? 3.1 : 2.2);
-    builder.rotate(windshield, [0, 0, roadCar ? -.38 : -.28]);
+    const windshield = builder.component('plate', 'transparent centered front windshield', assembly, [roadCar ? .56 : .42, roadCar ? 1.27 : 1.46, 0], [.045, roadCar ? .46 : .58, roadCar ? track * .68 : 1.02], 'polymer', 'fixed', { cockpit_windshield: true, transparent_glazing: true, windshield_angle_deg: roadCar ? 30 : 16, facing_axis: '+X', attached_to_cockpit: true }, roadCar ? 2.6 : 2.2);
+    builder.rotate(windshield, [0, 0, roadCar ? -.52 : -.28]);
     builder.connect(windshield, body, 'mechanical', 'windshield_frame_bond');
     if (roadCar) {
-      const rearWindow = builder.component('plate', 'transparent rear windshield', assembly, [-.72, 1.45, 0], [.055, .55, track * .68], 'polymer', 'fixed', { rear_windshield: true, transparent_glazing: true, facing_axis: '-X', attached_to_cockpit: true }, 2.7);
-      builder.rotate(rearWindow, [0, 0, .34]);
+      const rearWindow = builder.component('plate', 'transparent rear windshield', assembly, [-.65, 1.27, 0], [.045, .4, track * .63], 'polymer', 'fixed', { rear_windshield: true, transparent_glazing: true, facing_axis: '-X', attached_to_cockpit: true }, 2.3);
+      builder.rotate(rearWindow, [0, 0, .5]);
       builder.connect(rearWindow, body, 'mechanical', 'rear_window_frame_bond');
       for (const side of [-1, 1]) {
-        const sideWindow = builder.component('plate', `${side < 0 ? 'left' : 'right'} transparent side windows`, assembly, [-.03, 1.46, side * track * .425], [1.32, .45, .035], 'polymer', 'fixed', { side_window: true, transparent_glazing: true, glazing_side: side < 0 ? 'left' : 'right', attached_to_cockpit: true }, 2.1);
+        const sideWindow = builder.component('plate', `${side < 0 ? 'left' : 'right'} swept transparent side windows`, assembly, [-.05, 1.26, side * track * .39], [1.18, .3, .025], 'polymer', 'fixed', { side_window: true, transparent_glazing: true, glazing_side: side < 0 ? 'left' : 'right', attached_to_cockpit: true }, 1.6);
         builder.connect(sideWindow, body, 'mechanical', 'side_window_frame_bond');
       }
     }
@@ -1114,36 +1130,50 @@ function addHelicopter(context: ModuleContext): ModuleResult {
 
 function addGeneralRobot(context: ModuleContext): ModuleResult {
   const { builder, rootAssemblyId } = context;
-  const assembly = builder.assembly('articulated service robot', 'Human-readable robot assembled from feet, articulated limbs, torso shell, powered joints, grippers, battery, controller, and vision sensor', rootAssemblyId);
-  const leftFoot = builder.component('support', 'left stabilizing robot foot', assembly, [0, .16, -.32], [.62, .18, .28], 'steel', 'fixed', { robot_foot: true, grounded_structure: true }, 12);
-  const rightFoot = builder.component('support', 'right stabilizing robot foot', assembly, [0, .16, .32], [.62, .18, .28], 'steel', 'fixed', { robot_foot: true, grounded_structure: true }, 12);
-  const pelvis = builder.component('body-shell', 'robot pelvis housing', assembly, [0, 1.12, 0], [.72, .36, .68], 'composite', 'fixed', { robot_body: true }, 14);
+  const assembly = builder.assembly('articulated service robot', 'Human-proportioned humanoid with grounded feet, armored limbs, powered joints, torso, expressive vision head, hands, battery, and controller', rootAssemblyId);
+  const leftFoot = builder.component('support', 'left humanoid foot and ankle', assembly, [.08, .13, -.27], [.52, .18, .25], 'composite', 'fixed', { robot_foot: true, grounded_structure: true }, 8);
+  const rightFoot = builder.component('support', 'right humanoid foot and ankle', assembly, [.08, .13, .27], [.52, .18, .25], 'composite', 'fixed', { robot_foot: true, grounded_structure: true }, 8);
+  const pelvis = builder.component('body-shell', 'humanoid pelvis and waist housing', assembly, [-.02, 1.14, 0], [.62, .4, .58], 'composite', 'fixed', { robot_body: true, robot_pelvis: true }, 12);
   for (const [side, foot] of [[-1, leftFoot], [1, rightFoot]] as const) {
-    const lower = builder.member('linkage', `${side < 0 ? 'left' : 'right'} shin link`, assembly, [0, .32, side * .28], [0, .78, side * .28], .13, 'aluminum', 'kinematic', { robot_limb: true });
-    const upper = builder.member('linkage', `${side < 0 ? 'left' : 'right'} thigh link`, assembly, [0, .78, side * .28], [0, 1.12, side * .24], .15, 'aluminum', 'kinematic', { robot_limb: true });
-    builder.joint('revolute', foot, lower, [0, 0, 1], { limits: [-.3, .3] }); builder.joint('revolute', lower, upper, [0, 0, 1], { limits: [-.8, .25] }); builder.joint('revolute', upper, pelvis, [0, 0, 1], { limits: [-.45, .45] });
+    const ankle: Vec3 = [.02, .28, side * .27];
+    const knee: Vec3 = [.03, .7, side * .27];
+    const hip: Vec3 = [-.02, 1.14, side * .23];
+    const lower = builder.member('linkage', `${side < 0 ? 'left' : 'right'} armored shin`, assembly, ankle, knee, .15, 'aluminum', 'kinematic', { robot_limb: true, robot_leg: true, limb_segment: 'shin' });
+    const upper = builder.member('linkage', `${side < 0 ? 'left' : 'right'} armored thigh`, assembly, knee, hip, .17, 'aluminum', 'kinematic', { robot_limb: true, robot_leg: true, limb_segment: 'thigh' });
+    builder.jointAt('revolute', foot, lower, ankle, [0, 0, 1], { limits: [-.2, .2] });
+    builder.jointAt('revolute', lower, upper, knee, [0, 0, 1], { limits: [-.62, .08] });
+    builder.jointAt('revolute', upper, pelvis, hip, [0, 0, 1], { limits: [-.25, .25] });
+    const kneePod = builder.component('servo', `${side < 0 ? 'left' : 'right'} knee joint pod`, assembly, knee, [.22, .18, .22], 'steel', 'kinematic', { robot_joint: true, robot_knee: true }, 1.4);
+    builder.jointAt('fixed', lower, kneePod, knee);
   }
-  const torso = builder.component('body-shell', 'service robot torso shell', assembly, [0, 1.72, 0], [.82, .95, .68], 'composite', 'fixed', { robot_body: true, robot_torso: true }, 22);
-  builder.connect(torso, pelvis, 'mechanical', 'waist_joint');
-  const head = builder.component('camera', 'stereo vision robot head', assembly, [.08, 2.42, 0], [.42, .34, .42], 'polymer', 'fixed', { robot_head: true }, 3);
-  builder.connect(head, torso, 'mechanical', 'neck_mount');
+  const torso = builder.component('body-shell', 'tapered humanoid chest and torso shell', assembly, [0, 1.7, 0], [.78, .82, .66], 'composite', 'fixed', { robot_body: true, robot_torso: true }, 18);
+  builder.jointAt('fixed', pelvis, torso, [0, 1.34, 0]);
+  const neck = builder.component('shaft', 'humanoid articulated neck', assembly, [.02, 2.16, 0], [.14, .2, .14], 'steel', 'fixed', { robot_neck: true }, 1.1);
+  builder.rotate(neck, [0, 0, Math.PI / 2]);
+  builder.jointAt('fixed', torso, neck, [.02, 2.1, 0]);
+  const head = builder.component('camera', 'expressive humanoid vision head and face', assembly, [.05, 2.38, 0], [.42, .4, .38], 'polymer', 'fixed', { robot_head: true, robot_face: true }, 3);
+  builder.jointAt('fixed', neck, head, [.04, 2.25, 0]);
   const vision = builder.sensor(head, 'camera', 'robot_vision', torso, 8);
   const actuators: string[] = [];
   for (const side of [-1, 1]) {
-    const shoulder = builder.component('servo', `${side < 0 ? 'left' : 'right'} shoulder servo`, assembly, [0, 2.0, side * .52], [.24, .3, .24], 'aluminum', 'kinematic', { robot_joint: true }, 2.8);
-    const upper = builder.member('linkage', `${side < 0 ? 'left' : 'right'} upper arm link`, assembly, [0, 1.98, side * .62], [.12, 1.48, side * .74], .13, 'aluminum', 'kinematic', { robot_limb: true });
-    const forearm = builder.member('linkage', `${side < 0 ? 'left' : 'right'} forearm link`, assembly, [.12, 1.48, side * .74], [.42, 1.12, side * .78], .11, 'aluminum', 'kinematic', { robot_limb: true });
-    const gripper = builder.component('gripper', `${side < 0 ? 'left' : 'right'} adaptive hand gripper`, assembly, [.48, 1.04, side * .78], [.3, .24, .25], 'aluminum', 'kinematic', { robot_hand: true }, 1.4);
-    const shoulderJoint = builder.joint('revolute', torso, upper, [1, 0, 0], { limits: [-1.1, 1.1] });
-    const elbowJoint = builder.joint('revolute', upper, forearm, [0, 0, 1], { limits: [-1.4, 0] });
-    builder.joint('revolute', forearm, gripper, [1, 0, 0], { limits: [-.6, .6] });
+    const shoulderPoint: Vec3 = [0, 1.96, side * .48];
+    const elbowPoint: Vec3 = [.04, 1.52, side * .62];
+    const wristPoint: Vec3 = [.16, 1.16, side * .66];
+    const shoulder = builder.component('servo', `${side < 0 ? 'left' : 'right'} shoulder joint pod`, assembly, shoulderPoint, [.26, .24, .26], 'aluminum', 'fixed', { robot_joint: true, robot_shoulder: true }, 2.6);
+    const upper = builder.member('linkage', `${side < 0 ? 'left' : 'right'} armored upper arm`, assembly, shoulderPoint, elbowPoint, .15, 'aluminum', 'kinematic', { robot_limb: true, robot_arm_limb: true, limb_segment: 'upper-arm' });
+    const forearm = builder.member('linkage', `${side < 0 ? 'left' : 'right'} armored forearm`, assembly, elbowPoint, wristPoint, .135, 'aluminum', 'kinematic', { robot_limb: true, robot_arm_limb: true, limb_segment: 'forearm' });
+    const gripper = builder.component('gripper', `${side < 0 ? 'left' : 'right'} five-finger humanoid hand`, assembly, [.18, 1.05, side * .66], [.28, .25, .2], 'aluminum', 'kinematic', { robot_hand: true }, 1.2);
+    const shoulderJoint = builder.jointAt('revolute', torso, upper, shoulderPoint, [1, 0, 0], { limits: [-.32, .42] });
+    const elbowJoint = builder.jointAt('revolute', upper, forearm, elbowPoint, [0, 0, 1], { limits: [-.78, 0] });
+    builder.jointAt('fixed', forearm, gripper, wristPoint);
     builder.connect(shoulder, torso, 'mechanical', 'shoulder_mount');
-    actuators.push(builder.actuator(shoulder, shoulderJoint, 'servo', 420, 1.2, 2.2));
-    const elbowServo = builder.component('servo', `${side < 0 ? 'left' : 'right'} elbow servo`, assembly, [.12, 1.48, side * .74], [.2, .24, .2], 'aluminum', 'kinematic', { robot_joint: true }, 1.8);
-    actuators.push(builder.actuator(elbowServo, elbowJoint, 'servo', 260, 1.5, 1.4));
+    actuators.push(builder.actuator(shoulder, shoulderJoint, 'servo', 420, .72, .74));
+    const elbowServo = builder.component('servo', `${side < 0 ? 'left' : 'right'} elbow joint pod`, assembly, elbowPoint, [.22, .2, .22], 'aluminum', 'fixed', { robot_joint: true, robot_elbow: true }, 1.8);
+    builder.jointAt('fixed', upper, elbowServo, elbowPoint);
+    actuators.push(builder.actuator(elbowServo, elbowJoint, 'servo', 260, .82, .78));
   }
-  const battery = builder.component('battery', 'removable robot battery', assembly, [-.38, 1.7, 0], [.25, .55, .42], 'polymer', 'fixed', { robot_battery: true }, 11);
-  const controller = builder.component('controller', 'robot motion controller', assembly, [0, 1.68, .36], [.28, .3, .18], 'polymer', 'fixed', { robot_controller: true }, 1.2);
+  const battery = builder.component('battery', 'removable humanoid back battery', assembly, [-.36, 1.7, 0], [.2, .5, .4], 'polymer', 'fixed', { robot_battery: true }, 9);
+  const controller = builder.component('controller', 'humanoid whole-body motion controller', assembly, [-.3, 1.7, .28], [.18, .24, .14], 'polymer', 'fixed', { robot_controller: true }, 1.2);
   builder.connect(battery, controller, 'power', 'robot_power_bus');
   builder.control('whole-body robot motion', 'synchronized', [vision], actuators, 'coordinate both arms and leg joints while maintaining a stable support polygon and preserving human edits', 0);
   return { id: 'articulated-service-robot', mountId: pelvis, editableId: head, handles: ['manipulate', 'stabilize', 'measure'] };
@@ -1382,29 +1412,32 @@ function addRotaryTransmission(context: ModuleContext): ModuleResult {
 
 function addSerialLinkage(context: ModuleContext): ModuleResult {
   const { builder, values, rootAssemblyId } = context;
-  const assembly = builder.assembly('serial linkage', 'Rotary links, joint drives, and a constructed end-effector chain', rootAssemblyId);
-  const base = builder.component('plate', 'linkage base', assembly, [0, .16, 0], [1.8, .25, 1.65], 'steel', 'fixed', { industrial_base: true });
-  const pedestal = builder.component('support', 'rotating pedestal', assembly, [0, .92, 0], [.62, 1.45, .62], 'steel', 'dynamic', { joint_housing: true });
-  builder.joint('revolute', base, pedestal, [0, 1, 0], { limits: [-Math.PI, Math.PI] });
+  const assembly = builder.assembly('serial linkage', 'Industrial robot base, shoulder and elbow housings, tapered structural arm links, wrist, vision sensor, and parallel end effector', rootAssemblyId);
+  const base = builder.component('plate', 'industrial robot anchored base', assembly, [0, .16, 0], [1.55, .25, 1.45], 'steel', 'fixed', { industrial_base: true, robot_arm_base: true });
+  const pedestal = builder.component('support', 'industrial robot rotating pedestal', assembly, [0, .88, 0], [.64, 1.28, .64], 'steel', 'dynamic', { joint_housing: true, robot_arm_pedestal: true });
+  builder.jointAt('revolute', base, pedestal, [0, .28, 0], [0, 1, 0], { limits: [-1.2, 1.2] });
   let parent = pedestal;
   const linkLength = values.reachM / 3;
   const actuators: string[] = [];
-  let jointPoint: Vec3 = [0, 1.55, 0];
-  const linkAngles = [35, 18, -22].map((angle) => angle * Math.PI / 180);
+  let jointPoint: Vec3 = [0, 1.48, 0];
+  const linkAngles = [58, 20, -28].map((angle) => angle * Math.PI / 180);
+  const linkLimits: [number, number][] = [[-.34, .42], [-.62, .18], [-.38, .42]];
   for (let index = 0; index < 3; index += 1) {
     const angle = linkAngles[index];
     const nextPoint: Vec3 = [jointPoint[0] + Math.cos(angle) * linkLength, jointPoint[1] + Math.sin(angle) * linkLength, 0];
-    const link = builder.member('beam', `serial link ${index + 1}`, assembly, jointPoint, nextPoint, .26 - index * .025, 'aluminum', 'dynamic', { link_length: linkLength, hollow_section: true });
-    const joint = builder.joint('revolute', parent, link, [0, 0, 1], { limits: [-1.8, 1.8] });
-    const servo = builder.component('servo', `link servo ${index + 1}`, assembly, [jointPoint[0], jointPoint[1], -.2], [.42 - index * .04, .32, .42 - index * .04], 'steel', 'kinematic', { joint_housing: true });
+    const link = builder.member('beam', `industrial robot arm link ${index + 1}`, assembly, jointPoint, nextPoint, .28 - index * .035, 'aluminum', 'dynamic', { link_length: linkLength, hollow_section: true, robot_arm_link: true, robot_arm_link_index: index + 1 });
+    const joint = builder.jointAt('revolute', parent, link, jointPoint, [0, 0, 1], { limits: linkLimits[index] });
+    const servo = builder.component('servo', `industrial robot joint ${index + 1}`, assembly, [jointPoint[0], jointPoint[1], 0], [.46 - index * .045, .34, .46 - index * .045], 'steel', 'fixed', { joint_housing: true, robot_arm_joint: true, robot_arm_joint_index: index + 1 });
     builder.rotate(servo, [Math.PI / 2, 0, 0]);
-    actuators.push(builder.actuator(servo, joint, 'servo', Math.max(110, values.payloadKg * 9.81 * values.reachM * .62), 1.8, 3.6));
+    builder.jointAt('fixed', parent, servo, jointPoint);
+    actuators.push(builder.actuator(servo, joint, 'servo', Math.max(110, values.payloadKg * 9.81 * values.reachM * .62), .72 + index * .08, linkLimits[index][1] - linkLimits[index][0]));
     builder.connect(servo, link, 'power', 'joint_drive');
     parent = link; jointPoint = nextPoint;
   }
-  const gripper = builder.component('gripper', 'constructed parallel gripper', assembly, [jointPoint[0] + .24, jointPoint[1], 0], [.58, .32, .72], 'steel', 'kinematic', { payload_kg: values.payloadKg });
-  builder.joint('fixed', parent, gripper);
-  const camera = builder.component('camera', 'tool pose camera', assembly, [jointPoint[0] - .05, jointPoint[1] + .3, 0], [.24, .18, .24], 'polymer', 'fixed');
+  const gripper = builder.component('gripper', 'industrial robot parallel gripper', assembly, [jointPoint[0] + .24, jointPoint[1], 0], [.58, .32, .72], 'steel', 'kinematic', { payload_kg: values.payloadKg, robot_arm_gripper: true });
+  builder.jointAt('fixed', parent, gripper, jointPoint);
+  const camera = builder.component('camera', 'industrial robot wrist camera', assembly, [jointPoint[0] + .08, jointPoint[1] + .24, 0], [.24, .18, .24], 'polymer', 'kinematic', { robot_arm_camera: true });
+  builder.jointAt('fixed', gripper, camera, [jointPoint[0] + .08, jointPoint[1] + .16, 0]);
   const vision = builder.sensor(camera, 'camera', 'target_pose', gripper, 4);
   builder.control('cartesian placement', 'pid', [vision], actuators, 'solve link setpoints from target pose and payload', values.placementCm / 100);
   builder.connect(camera, gripper, 'signal', 'target_pose');

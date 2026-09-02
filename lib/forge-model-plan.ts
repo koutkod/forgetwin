@@ -46,6 +46,9 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   };
   for (const tag of tags) parameters[`semantic_${tag.replaceAll('-', '_')}`] = true;
   if (tags.has('human-power-input')) parameters.human_power_input = true;
+  for (const tag of ['robot-foot', 'robot-pelvis', 'robot-torso', 'robot-head', 'robot-face', 'robot-neck', 'robot-limb', 'robot-joint', 'robot-hand', 'robot-arm-base', 'robot-arm-pedestal', 'robot-arm-link', 'robot-arm-joint', 'robot-arm-gripper', 'robot-arm-camera']) {
+    if (tags.has(tag)) parameters[tag.replaceAll('-', '_')] = true;
+  }
 
   const vehicle = /\b(?:car|go-kart|kart|buggy|automobile|road vehicle)\b/.test(machine);
   const bicycle = /\b(?:bicycle|bike)\b/.test(machine);
@@ -67,7 +70,7 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   if (tags.has('automotive-body')) { parameters.automotive_body = true; parameters.road_vehicle_body = true; }
   if (tags.has('passenger-car-body')) {
     parameters.automotive_body = true; parameters.road_vehicle_body = true; parameters.passenger_car_body = true;
-    parameters.body_style = 'four-door-sedan'; parameters.front_axis = '+X';
+    parameters.body_style = 'four-door-sedan'; parameters.design_language = 'low-wide-aerodynamic'; parameters.front_axis = '+X';
     parameters.wheelbase_m = component.dimensions[0] * .675;
     parameters.wheel_diameter_m = component.dimensions[1] * .756;
     parameters.wheel_center_y_local = -component.dimensions[1] * .62;
@@ -75,7 +78,7 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   if (tags.has('driver-seat')) { parameters.road_vehicle_seat = true; parameters.driver_seat = true; parameters.seat_form = 'bucket'; }
   if (tags.has('passenger-seat')) { parameters.road_vehicle_seat = true; parameters.passenger_seat = true; parameters.seat_form = 'bucket'; }
   if (tags.has('rear-bench-seat')) { parameters.road_vehicle_seat = true; parameters.rear_bench_seat = true; parameters.seat_form = 'bench'; }
-  if (tags.has('cockpit-windshield')) { parameters.cockpit_windshield = true; parameters.attached_to_cockpit = true; parameters.facing_axis = '+X'; parameters.windshield_angle_deg = 16; }
+  if (tags.has('cockpit-windshield')) { parameters.cockpit_windshield = true; parameters.attached_to_cockpit = true; parameters.facing_axis = '+X'; parameters.windshield_angle_deg = vehicle ? 30 : 16; }
   if (tags.has('rear-windshield')) { parameters.rear_windshield = true; parameters.attached_to_cockpit = true; parameters.facing_axis = '-X'; }
   if (tags.has('side-window-left') || tags.has('side-window-right')) {
     parameters.side_window = true; parameters.attached_to_cockpit = true;
@@ -143,10 +146,38 @@ export function localAnchorAt(component: Pick<ComponentBlueprint, 'position' | '
 
 function jointsFrom(plan: AgentPlan, components: ComponentBlueprint[]): JointBlueprint[] {
   const byId = new Map(components.map((item) => [item.id, item]));
+  const memberEndpoints = (component: ComponentBlueprint) => {
+    if (!['beam', 'tube', 'linkage', 'cable'].includes(component.primitive)) return null;
+    const orientation = new Quaternion().setFromEuler(new Euler(...component.rotation, 'XYZ'));
+    const half = new Vector3(component.dimensions[0] / 2, 0, 0).applyQuaternion(orientation);
+    const center = new Vector3(...component.position);
+    return [center.clone().sub(half), center.clone().add(half)];
+  };
+  const bestSharedPoint = (a: ComponentBlueprint, b: ComponentBlueprint): Vec3 => {
+    const aEnds = memberEndpoints(a);
+    const bEnds = memberEndpoints(b);
+    const bCenter = new Vector3(...b.position);
+    const aCenter = new Vector3(...a.position);
+    if (aEnds && bEnds) {
+      let best: [Vector3, Vector3] = [aEnds[0], bEnds[0]];
+      for (const aEnd of aEnds) for (const bEnd of bEnds) if (aEnd.distanceToSquared(bEnd) < best[0].distanceToSquared(best[1])) best = [aEnd, bEnd];
+      const shared = best[0].clone().add(best[1]).multiplyScalar(.5);
+      return [shared.x, shared.y, shared.z];
+    }
+    if (aEnds) {
+      const shared = aEnds[0].distanceToSquared(bCenter) < aEnds[1].distanceToSquared(bCenter) ? aEnds[0] : aEnds[1];
+      return [shared.x, shared.y, shared.z];
+    }
+    if (bEnds) {
+      const shared = bEnds[0].distanceToSquared(aCenter) < bEnds[1].distanceToSquared(aCenter) ? bEnds[0] : bEnds[1];
+      return [shared.x, shared.y, shared.z];
+    }
+    return a.position.map((value, index) => (value + b.position[index]) / 2) as Vec3;
+  };
   return plan.joints.map((item) => {
     const a = byId.get(item.component_a)!;
     const b = byId.get(item.component_b)!;
-    const shared = a.position.map((value, index) => (value + b.position[index]) / 2) as Vec3;
+    const shared = bestSharedPoint(a, b);
     const anchorA = localAnchorAt(a, shared);
     const anchorB = localAnchorAt(b, shared);
     return {
@@ -264,6 +295,9 @@ function tagsFromParameters(component: ComponentBlueprint) {
   if (parameters.solar_moving === true) tags.add('solar-moving');
   if (parameters.solar_source === true) tags.add('solar-source');
   if (parameters.industrial_conveyor === true) tags.add('conveyor');
+  for (const key of ['robot_foot', 'robot_pelvis', 'robot_torso', 'robot_head', 'robot_face', 'robot_neck', 'robot_limb', 'robot_joint', 'robot_hand', 'robot_arm_base', 'robot_arm_pedestal', 'robot_arm_link', 'robot_arm_joint', 'robot_arm_gripper', 'robot_arm_camera']) {
+    if (parameters[key] === true) tags.add(key.replaceAll('_', '-'));
+  }
   return [...tags].slice(0, 8);
 }
 

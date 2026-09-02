@@ -174,7 +174,9 @@ function worldAnalysis(state: ForgeState) {
   const gearRatio = gearRelations.reduce((product, item) => product * (item.ratio ?? 1), 1);
   const gears = state.components.filter((item) => item.primitive === 'gear');
   const meshEfficiency = gears.length ? gears.reduce((sum, item) => sum + Number(item.parameters.mesh_efficiency ?? .85), 0) / gears.length : .9;
-  const reach = state.components.filter((item) => /serial link|arm link/.test(item.role)).reduce((sum, item) => sum + Number(item.parameters.link_length ?? item.dimensions[0]), 0);
+  const reach = state.components
+    .filter((item) => item.parameters.robot_arm_link || item.parameters.robot_arm_limb || /serial link|arm link|upper arm|forearm/.test(item.role))
+    .reduce((sum, item) => sum + Number(item.parameters.link_length ?? item.dimensions[0]), 0);
   const spanBodies = state.components.filter((item) => /span deck|hinged span/.test(item.role));
   const span = spanBodies.length ? Math.max(...spanBodies.map((item) => item.position[0] + item.dimensions[0] / 2)) - Math.min(...spanBodies.map((item) => item.position[0] - item.dimensions[0] / 2)) : 0;
   const liftHeight = Math.max(0, ...state.joints.filter((item) => item.type === 'prismatic' || item.type === 'rope').map((item) => item.limits?.[1] ?? 0), ...state.actuators.map((item) => item.travel));

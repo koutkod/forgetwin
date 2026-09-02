@@ -90,6 +90,29 @@ describe('model-authored world compilation', () => {
     expect(roundTrip.components.filter((item) => item.parameters?.side_window)).toHaveLength(2);
   });
 
+  it('preserves humanoid and industrial-arm visual semantics through hosted-AI conversion', () => {
+    for (const prompt of ['Build a humanoid service robot with two hands and stereo vision.', 'Build a three-axis robotic arm with a gripper that reaches 2 meters.']) {
+      const compiled = compileDesignBrief(prompt);
+      const intent: AgentIntent = {
+        normalized_prompt: prompt, design_brief: prompt, machine_name: compiled.goal.machineName, domain: compiled.goal.domain,
+        reasoning_summary: 'Compose a recognizable articulated machine from proportioned body shells, structural links, real joint housings, sensors, actuators, and an end effector.',
+        architecture: compiled.goal.summary.split(' + ').slice(0, 5), assumptions: ['Concept-scale rigid-body validation'], capabilities: compiled.goal.capabilities,
+        requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 64, unit: '', source: 'inferred' }],
+      };
+      const roundTrip = compileAgentPlan(prompt, agentPlanFromCompiled(prompt, intent, compiled));
+      if (/humanoid/.test(prompt)) {
+        expect(roundTrip.components.find((item) => item.parameters?.robot_head)?.parameters).toMatchObject({ robot_face: true });
+        expect(roundTrip.components.filter((item) => item.parameters?.robot_limb)).toHaveLength(8);
+        expect(roundTrip.components.filter((item) => item.parameters?.robot_hand)).toHaveLength(2);
+      } else {
+        expect(roundTrip.components.filter((item) => item.parameters?.robot_arm_link)).toHaveLength(3);
+        expect(roundTrip.components.filter((item) => item.parameters?.robot_arm_joint)).toHaveLength(3);
+        expect(roundTrip.components.some((item) => item.parameters?.robot_arm_camera)).toBe(true);
+        expect(roundTrip.components.some((item) => item.parameters?.robot_arm_gripper)).toBe(true);
+      }
+    }
+  });
+
   it('keeps explicit user targets authoritative when the model marks one as inferred', () => {
     const prompt = 'Build a conveyor that sorts red and blue boxes into separate bins at 20 boxes per minute.';
     const intent: AgentIntent = {

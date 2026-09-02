@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { componentMass, engineeringExamples } from './forge-data';
+import { localPointToWorld } from './forge-motion';
 import { compileDesignBrief } from './forge-prompt';
 import { simulateDesign } from './forge-simulation';
 import { assemblePlan } from './forge-test-utils';
@@ -125,8 +126,8 @@ describe('ForgeTwin world-first brief compiler', () => {
       motorcycle: (plan) => plan.components.filter((item) => item.parameters?.motorcycle_wheel).length === 2 && plan.components.some((item) => item.primitive === 'seat') && plan.components.some((item) => item.parameters?.motorcycle_motor),
       airplane: (plan) => plan.components.some((item) => item.primitive === 'fuselage') && plan.components.some((item) => item.role === 'left main wing') && plan.components.some((item) => item.role === 'right main wing') && plan.components.filter((item) => item.primitive === 'aerofoil').length >= 5 && plan.components.filter((item) => item.primitive === 'landing-gear').length === 3,
       helicopter: (plan) => plan.components.some((item) => item.primitive === 'rotor') && plan.components.some((item) => item.primitive === 'propeller') && plan.components.filter((item) => item.parameters?.helicopter_skid).length === 2,
-      'service-robot': (plan) => plan.components.filter((item) => item.primitive === 'linkage').length >= 8 && plan.components.filter((item) => item.primitive === 'gripper').length === 2 && plan.components.filter((item) => item.primitive === 'servo').length === 4,
-      arm: (plan) => plan.components.some((item) => item.primitive === 'gripper') && plan.components.filter((item) => item.role.startsWith('link servo')).length === 3,
+      'service-robot': (plan) => plan.components.filter((item) => item.parameters?.robot_limb).length >= 8 && plan.components.filter((item) => item.parameters?.robot_hand).length === 2 && plan.components.filter((item) => item.parameters?.robot_joint).length >= 6 && plan.components.some((item) => item.parameters?.robot_head && item.parameters?.robot_face),
+      arm: (plan) => plan.components.some((item) => item.parameters?.robot_arm_gripper) && plan.components.filter((item) => item.parameters?.robot_arm_link).length === 3 && plan.components.filter((item) => item.parameters?.robot_arm_joint).length === 3,
       gearbox: (plan) => plan.components.some((item) => item.parameters?.gearbox_housing) && plan.components.filter((item) => item.primitive === 'gear').length === 2 && plan.components.filter((item) => item.parameters?.gearbox_bearing).length === 2,
       suspension: (plan) => plan.components.filter((item) => item.primitive === 'spring').length === 4 && plan.components.filter((item) => item.parameters?.suspension_wheel).length === 4 && plan.components.some((item) => item.parameters?.automotive_body) && plan.components.filter((item) => item.parameters?.suspension_arm).length === 8 && !plan.components.some((item) => item.parameters?.rover_chassis || item.role === 'mobile payload'),
       solar: (plan) => plan.components.some((item) => item.parameters?.solar_array) && plan.components.some((item) => item.parameters?.solar_source) && plan.components.some((item) => item.parameters?.tracker_foundation && item.parameters?.ground_contact && item.position[1] - item.dimensions[1] / 2 === 0) && plan.components.filter((item) => item.parameters?.tracker_brace).length === 4 && plan.components.some((item) => item.parameters?.tracker_crosshead) && plan.components.filter((item) => item.parameters?.tracker_yoke).length === 2 && plan.joints.some((item) => item.type === 'revolute'),
@@ -452,6 +453,45 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(car.assemblies.map((item) => item.name)).not.toContain('constructed motion stage');
     expect(car.assemblies.map((item) => item.name)).not.toContain('requested primitive extension');
     expect(car.components.length).toBeLessThanOrEqual(64);
+  });
+
+  it('builds a human-proportioned humanoid with a visible face and connected articulated limbs', () => {
+    const robot = compileDesignBrief('Build a humanoid service robot with two hands and stereo vision.');
+    expect(robot.components.filter((item) => item.parameters?.robot_foot)).toHaveLength(2);
+    expect(robot.components.filter((item) => item.parameters?.robot_limb)).toHaveLength(8);
+    expect(robot.components.filter((item) => item.parameters?.robot_hand)).toHaveLength(2);
+    expect(robot.components.filter((item) => item.parameters?.robot_joint).length).toBeGreaterThanOrEqual(6);
+    expect(robot.components.find((item) => item.parameters?.robot_head)?.parameters).toMatchObject({ robot_face: true });
+    expect(robot.components.some((item) => item.parameters?.robot_torso)).toBe(true);
+    expect(robot.components.some((item) => item.parameters?.robot_pelvis)).toBe(true);
+    for (const joint of robot.joints) {
+      const a = robot.components.find((item) => item.id === joint.componentA)!;
+      const b = robot.components.find((item) => item.id === joint.componentB)!;
+      const worldA = localPointToWorld(a.position, a.rotation, joint.anchorA);
+      const worldB = localPointToWorld(b.position, b.rotation, joint.anchorB);
+      expect(Math.hypot(...worldA.map((value, axis) => value - worldB[axis]))).toBeLessThan(.001);
+    }
+  });
+
+  it('anchors an industrial robot arm at real link endpoints and uses stable motion limits', () => {
+    const arm = compileDesignBrief('Build a three-axis robotic arm with a gripper that reaches 2 meters.');
+    const links = arm.components.filter((item) => item.parameters?.robot_arm_link);
+    const housings = arm.components.filter((item) => item.parameters?.robot_arm_joint);
+    expect(links).toHaveLength(3);
+    expect(housings).toHaveLength(3);
+    expect(arm.components.some((item) => item.parameters?.robot_arm_base)).toBe(true);
+    expect(arm.components.some((item) => item.parameters?.robot_arm_pedestal)).toBe(true);
+    expect(arm.components.some((item) => item.parameters?.robot_arm_camera)).toBe(true);
+    expect(arm.components.some((item) => item.parameters?.robot_arm_gripper)).toBe(true);
+    for (const link of links) {
+      const joint = arm.joints.find((item) => item.componentB === link.id && item.type === 'revolute')!;
+      expect(joint.limits && joint.limits[1] - joint.limits[0]).toBeLessThanOrEqual(.8);
+      const parent = arm.components.find((item) => item.id === joint.componentA)!;
+      const worldA = localPointToWorld(parent.position, parent.rotation, joint.anchorA);
+      const worldB = localPointToWorld(link.position, link.rotation, joint.anchorB);
+      expect(Math.hypot(...worldA.map((value, axis) => value - worldB[axis]))).toBeLessThan(.001);
+      expect(Math.abs(joint.anchorB[0])).toBeCloseTo(link.dimensions[0] / 2, 3);
+    }
   });
 
   it('keeps a regular bicycle human-powered unless electrification is requested', () => {

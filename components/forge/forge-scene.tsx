@@ -38,7 +38,8 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   // Road wheels animate internally so steering and tire roll remain independent
   // and must not receive a second body transform.
   const selfAnimatedShape = Boolean(component.parameters.road_vehicle_wheel || component.parameters.road_vehicle_steering_wheel || component.parameters.buffer_gate)
-    || ['servo', 'piston', 'spring', 'gripper', 'conveyor', 'propeller', 'rotor'].includes(component.primitive);
+    || (component.primitive === 'servo' && !component.parameters.robot_joint && !component.parameters.robot_arm_joint)
+    || ['piston', 'spring', 'conveyor', 'propeller', 'rotor'].includes(component.primitive);
   const mechanismPose = !selfAnimatedShape ? context.mechanismMotion?.poseAt(component.id, elapsed) : null;
   const jointPoseApplied = Boolean(mechanismPose?.animated);
   if (jointPoseApplied && mechanismPose) {
@@ -729,6 +730,154 @@ function RecyclingHopper({ component, xray, selected }: { component: MachineComp
   </group>;
 }
 
+function HumanoidFoot({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <group position={[x * .07, 0, 0]}><RoundedBox args={[x, y * .72, z]} radius={Math.min(.07, y * .3)} smoothness={6}><StandardMaterial color="#1a2025" xray={xray} selected={selected} metalness={.28} roughness={.48} /></RoundedBox></group>
+    <group position={[x * .24, y * .18, 0]}><RoundedBox args={[x * .5, y * .54, z * .92]} radius={.055} smoothness={5}><StandardMaterial color="#aeb8bd" xray={xray} selected={selected} metalness={.82} roughness={.2} /></RoundedBox></group>
+    <group position={[-x * .32, y * .35, 0]}><mesh><cylinderGeometry args={[z * .32, z * .32, y * .92, 24]} /><StandardMaterial color="#30383e" xray={xray} selected={selected} metalness={.62} roughness={.3} /></mesh></group>
+  </group>;
+}
+
+function HumanoidLimb({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [length, width] = component.dimensions;
+  const radius = Math.max(.055, width * .45);
+  const armorLength = Math.max(.12, length * .58);
+  const leg = component.parameters.robot_leg === true || /shin|thigh/.test(component.role.toLowerCase());
+  return <group>
+    <mesh rotation={[0, 0, Math.PI / 2]} castShadow><capsuleGeometry args={[radius * .52, Math.max(.04, length - radius * 2), 8, 20]} /><StandardMaterial color="#252d32" xray={xray} selected={selected} metalness={.7} roughness={.28} /></mesh>
+    <group position={[leg ? length * .04 : -length * .02, 0, 0]}><RoundedBox args={[armorLength, width * (leg ? 1.15 : .95), width * (leg ? 1.05 : .9)]} radius={Math.min(.075, width * .34)} smoothness={6}><StandardMaterial color="#b7c0c5" xray={xray} selected={selected} metalness={.84} roughness={.19} /></RoundedBox></group>
+    <group position={[length * .16, width * .38, 0]}><BoxBody size={[armorLength * .56, width * .1, width * .72]} color="#e5eaec" xray={xray} selected={selected} radius={.02} metalness={.72} roughness={.22} /></group>
+    {[-1, 1].map((side) => <mesh key={side} position={[side * length * .46, 0, 0]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius, radius, width * .7, 22]} /><StandardMaterial color="#30383e" xray={xray} selected={selected} metalness={.68} roughness={.3} /></mesh>)}
+  </group>;
+}
+
+function HumanoidJoint({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const radius = Math.max(.08, Math.max(...component.dimensions) * .43);
+  return <group>
+    <mesh><sphereGeometry args={[radius, 28, 20]} /><StandardMaterial color="#aeb8bd" xray={xray} selected={selected} metalness={.88} roughness={.18} /></mesh>
+    <mesh rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[radius * .62, radius * .13, 10, 28]} /><StandardMaterial color="#252c31" xray={xray} selected={selected} metalness={.7} roughness={.3} /></mesh>
+    <mesh position={[0, 0, radius * .7]}><cylinderGeometry args={[radius * .28, radius * .28, radius * .28, 20]} /><StandardMaterial color="#65e5ff" xray={xray} selected={selected} metalness={.2} roughness={.16} /></mesh>
+  </group>;
+}
+
+function HumanoidPelvis({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <mesh scale={[x * .5, y * .52, z * .54]}><sphereGeometry args={[1, 30, 22]} /><StandardMaterial color="#b9c2c7" xray={xray} selected={selected} metalness={.84} roughness={.2} /></mesh>
+    <group position={[0, y * .28, 0]}><BoxBody size={[x * .7, y * .28, z * .72]} color="#242b30" xray={xray} selected={selected} radius={.06} metalness={.64} roughness={.3} /></group>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, -y * .12, side * z * .42]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[y * .28, y * .28, z * .2, 24]} /><StandardMaterial color="#343d43" xray={xray} selected={selected} metalness={.66} roughness={.28} /></mesh>)}
+  </group>;
+}
+
+function HumanoidTorso({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <RoundedBox args={[x * .7, y * .84, z * .78]} radius={Math.min(.12, z * .18)} smoothness={8}><StandardMaterial color="#b9c3c8" xray={xray} selected={selected} metalness={.82} roughness={.19} /></RoundedBox>
+    <group position={[0, y * .29, 0]}><RoundedBox args={[x * .76, y * .22, z * .96]} radius={.085} smoothness={7}><StandardMaterial color="#cbd3d7" xray={xray} selected={selected} metalness={.82} roughness={.19} /></RoundedBox></group>
+    <group position={[x * .36, y * .08, 0]}><RoundedBox args={[x * .12, y * .58, z * .67]} radius={.06} smoothness={6}><StandardMaterial color="#e2e7e9" xray={xray} selected={selected} metalness={.7} roughness={.22} /></RoundedBox></group>
+    <group position={[x * .45, y * .08, 0]}><BoxBody size={[.02, y * .06, z * .38]} color="#62e8ff" xray={xray} selected={selected} radius={.01} metalness={.1} roughness={.12} /></group>
+    <group position={[-x * .32, -.04, 0]}><BoxBody size={[x * .16, y * .62, z * .68]} color="#272f34" xray={xray} selected={selected} radius={.06} metalness={.52} roughness={.34} /></group>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, y * .27, side * z * .51]}><sphereGeometry args={[z * .18, 24, 18]} /><StandardMaterial color="#aeb8bd" xray={xray} selected={selected} metalness={.84} roughness={.2} /></mesh>)}
+  </group>;
+}
+
+function HumanoidHead({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <RoundedBox args={[x * .82, y * .9, z * .88]} radius={Math.min(.13, y * .3)} smoothness={9}><StandardMaterial color="#aeb8bd" xray={xray} selected={selected} metalness={.82} roughness={.2} /></RoundedBox>
+    <mesh position={[-x * .05, y * .34, 0]} scale={[x * .38, y * .18, z * .42]}><sphereGeometry args={[1, 28, 18]} /><StandardMaterial color="#20282d" xray={xray} selected={selected} metalness={.54} roughness={.28} /></mesh>
+    <group position={[x * .38, y * .035, 0]}><RoundedBox args={[x * .14, y * .58, z * .7]} radius={Math.min(.1, y * .24)} smoothness={8}><meshPhysicalMaterial color={selected ? '#65e5ff' : '#111a20'} transparent opacity={xray ? .24 : .95} metalness={.42} roughness={.12} clearcoat={1} clearcoatRoughness={.08} /></RoundedBox></group>
+    <group position={[x * .46, y * .105, 0]}><RoundedBox args={[x * .025, y * .042, z * .47]} radius={.014} smoothness={5}><meshBasicMaterial color="#5eeaff" /></RoundedBox></group>
+    <group position={[x * .455, -y * .17, 0]}><BoxBody size={[x * .025, y * .09, z * .3]} color="#dbe1e4" xray={xray} selected={selected} radius={.028} metalness={.72} roughness={.2} /></group>
+  </group>;
+}
+
+function HumanoidHand({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <group position={[0, y * .08, 0]}><RoundedBox args={[x * .62, y * .62, z * .92]} radius={.045} smoothness={6}><StandardMaterial color="#aeb8bd" xray={xray} selected={selected} metalness={.8} roughness={.2} /></RoundedBox></group>
+    {[-2, -1, 0, 1, 2].map((finger) => <group key={finger} position={[x * .12, -y * .34 - Math.abs(finger) * .008, finger * z * .17]} rotation={[0, 0, finger * -.035]}><RoundedBox args={[x * .16, y * .46, z * .115]} radius={.018} smoothness={4}><StandardMaterial color={finger === 0 ? '#cbd2d5' : '#88949a'} xray={xray} selected={selected} metalness={.76} roughness={.24} /></RoundedBox></group>)}
+    <mesh position={[-x * .28, y * .28, 0]}><sphereGeometry args={[Math.min(y, z) * .22, 20, 14]} /><StandardMaterial color="#293137" xray={xray} selected={selected} metalness={.62} roughness={.3} /></mesh>
+  </group>;
+}
+
+function IndustrialRobotBase({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const radius = Math.min(x, z) * .38;
+  return <group>
+    <mesh><cylinderGeometry args={[radius, radius * 1.12, y * .82, 40]} /><StandardMaterial color="#26333a" xray={xray} selected={selected} metalness={.84} roughness={.22} /></mesh>
+    <mesh position={[0, y * .38, 0]}><cylinderGeometry args={[radius * .82, radius * .82, y * .18, 40]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.8} roughness={.2} /></mesh>
+    {Array.from({ length: 8 }, (_, index) => <mesh key={index} position={[Math.cos(index * Math.PI / 4) * radius * 1.02, y * .42, Math.sin(index * Math.PI / 4) * radius * 1.02]}><cylinderGeometry args={[.035, .035, .05, 14]} /><StandardMaterial color="#c9d0d3" xray={xray} selected={selected} metalness={.9} roughness={.14} /></mesh>)}
+  </group>;
+}
+
+function IndustrialRobotPedestal({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group>
+    <mesh position={[0, -y * .14, 0]}><cylinderGeometry args={[Math.min(x, z) * .42, Math.min(x, z) * .5, y * .72, 36]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.24} /></mesh>
+    <mesh position={[0, y * .27, 0]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[x * .32, x * .32, z * .78, 30]} /><StandardMaterial color="#34434a" xray={xray} selected={selected} metalness={.76} roughness={.24} /></mesh>
+    <group position={[x * .36, -y * .13, 0]}><BoxBody size={[x * .18, y * .48, z * .42]} color="#ed8b2f" xray={xray} selected={selected} radius={.055} metalness={.56} roughness={.3} /></group>
+  </group>;
+}
+
+function IndustrialRobotLink({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
+  const [length, width] = component.dimensions;
+  const radius = Math.max(.065, width * .4);
+  return <group>
+    <mesh rotation={[0, 0, Math.PI / 2]}><capsuleGeometry args={[radius, Math.max(.06, length - radius * 2), 8, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.7} roughness={.23} /></mesh>
+    <group position={[0, width * .18, 0]}><RoundedBox args={[length * .62, width * .48, width * .7]} radius={.06} smoothness={6}><StandardMaterial color="#f4a340" xray={xray} selected={selected} metalness={.55} roughness={.3} /></RoundedBox></group>
+    <group position={[0, -width * .35, 0]}><BoxBody size={[length * .55, width * .12, width * .55]} color="#313c42" xray={xray} selected={selected} radius={.025} metalness={.7} roughness={.28} /></group>
+  </group>;
+}
+
+function IndustrialRobotJoint({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, , z] = component.dimensions;
+  const radius = Math.min(x, z) * .46;
+  return <group>
+    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius, radius, Math.max(.16, radius * .72), 32]} /><StandardMaterial color="#3b484f" xray={xray} selected={selected} metalness={.82} roughness={.2} /></mesh>
+    {[-1, 1].map((side) => <mesh key={side} position={[0, 0, side * radius * .4]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .64, radius * .64, .035, 28]} /><StandardMaterial color="#f29a36" xray={xray} selected={selected} metalness={.6} roughness={.26} /></mesh>)}
+    <mesh position={[0, 0, radius * .45]}><cylinderGeometry args={[radius * .16, radius * .16, .055, 18]} /><StandardMaterial color="#66e6ff" xray={xray} selected={selected} metalness={.16} roughness={.14} /></mesh>
+  </group>;
+}
+
+function IndustrialRobotCamera({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  return <group><RoundedBox args={[x, y, z]} radius={.045} smoothness={6}><StandardMaterial color="#253037" xray={xray} selected={selected} metalness={.46} roughness={.32} /></RoundedBox>{[-1, 1].map((side) => <mesh key={side} position={[x * .5, y * .08, side * z * .2]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[y * .14, y * .14, x * .08, 20]} /><StandardMaterial color="#59e5ff" xray={xray} selected={selected} metalness={.22} roughness={.12} /></mesh>)}</group>;
+}
+
+function IndustrialRobotGripper({ component, xray, selected, operating }: { component: MachineComponent; xray: boolean; selected: boolean; operating: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const operationTime = useContext(OperationTimeContext);
+  const leftJaw = useRef<Group>(null);
+  const rightJaw = useRef<Group>(null);
+  useFrame(() => {
+    if (!operating) return;
+    const gap = z * (.24 + (.5 + .5 * Math.sin(operationTime.current * 1.8)) * .08);
+    if (leftJaw.current) leftJaw.current.position.z = -gap;
+    if (rightJaw.current) rightJaw.current.position.z = gap;
+  });
+  const jaw = (side: -1 | 1, ref: RefObject<Group | null>) => <group ref={ref} position={[x * .19, 0, side * z * .28]}>
+    <RoundedBox args={[x * .58, y * .24, z * .14]} radius={.025} smoothness={5}><StandardMaterial color="#d5dde0" xray={xray} selected={selected} metalness={.84} roughness={.18} /></RoundedBox>
+    <group position={[x * .27, 0, side * -z * .08]}><RoundedBox args={[x * .16, y * .31, z * .22]} radius={.025} smoothness={5}><StandardMaterial color="#343f45" xray={xray} selected={selected} metalness={.64} roughness={.34} /></RoundedBox></group>
+    <group position={[x * .34, 0, side * -z * .19]}><BoxBody size={[x * .11, y * .36, z * .08]} color="#171d21" xray={xray} selected={selected} radius={.012} metalness={.18} roughness={.72} /></group>
+  </group>;
+  return <group>
+    <mesh position={[-x * .4, 0, 0]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[y * .48, y * .48, x * .22, 30]} /><StandardMaterial color="#303b41" xray={xray} selected={selected} metalness={.82} roughness={.2} /></mesh>
+    <group position={[-x * .08, 0, 0]}><RoundedBox args={[x * .34, y * .82, z * .72]} radius={.055} smoothness={6}><StandardMaterial color="#f09a38" xray={xray} selected={selected} metalness={.58} roughness={.28} /></RoundedBox></group>
+    {jaw(-1, leftJaw)}{jaw(1, rightJaw)}
+  </group>;
+}
+
+function VehicleLightBody({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+  const [x, y, z] = component.dimensions;
+  const rear = component.parameters.brake_light || component.parameters.light_direction === 'rear';
+  return <group>
+    <RoundedBox args={[Math.min(.055, x * .28), Math.max(.055, y * .48), z * 1.18]} radius={.025} smoothness={6}><meshPhysicalMaterial color={selected ? '#65e5ff' : rear ? '#ff2944' : '#e7fbff'} emissive={rear ? '#d60023' : '#9eefff'} emissiveIntensity={xray ? .5 : 1.8} metalness={.04} roughness={.12} transparent opacity={xray ? .3 : .94} /></RoundedBox>
+    <group position={[rear ? -.035 : .035, 0, 0]}><BoxBody size={[.015, y * .18, z * .72]} color={rear ? '#ff6676' : '#ffffff'} xray={xray} selected={selected} radius={.008} metalness={.05} roughness={.1} /></group>
+  </group>;
+}
+
 function CarBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
   const [x, y, z] = component.dimensions;
   const sedan = component.parameters.passenger_car_body === true || component.parameters.body_style === 'four-door-sedan';
@@ -740,27 +889,27 @@ function CarBody({ component, color, xray, selected }: { component: MachineCompo
   const wheelX = Math.min(x * .38, Number(component.parameters.wheelbase_m ?? x * .66) / 2);
   const wheelRadius = Number(component.parameters.wheel_diameter_m ?? y * .72) / 2;
   const wheelY = Number(component.parameters.wheel_center_y_local ?? -y * .62);
-  const glass = selected ? '#65e5ff' : '#69b9da';
+  const glass = selected ? '#65e5ff' : '#71858d';
   return <group>
-    <group position={[0, -y * .28, 0]}><BoxBody size={[x, y * .42, z]} color={color} xray={xray} selected={selected} radius={.18} metalness={.66} roughness={.27} /></group>
-    <group position={[x * .34, -y * .06, 0]}><BoxBody size={[x * .31, y * .3, z * .91]} color={color} xray={xray} selected={selected} radius={.13} metalness={.65} roughness={.27} /></group>
-    <group position={[-x * .4, -y * .08, 0]}><BoxBody size={[x * .18, y * .3, z * .9]} color={color} xray={xray} selected={selected} radius={.11} metalness={.65} roughness={.27} /></group>
-    <group position={[-x * .03, y * .4, 0]}><BoxBody size={[x * .43, y * .13, z * .79]} color={color} xray={xray} selected={selected} radius={.08} metalness={.62} roughness={.26} /></group>
+    <group position={[0, -y * .3, 0]}><RoundedBox args={[x * .96, y * .34, z]} radius={.2} smoothness={8}><StandardMaterial color={color} xray={xray} selected={selected} metalness={.74} roughness={.19} /></RoundedBox></group>
+    <mesh position={[x * .27, -y * .09, 0]} scale={[x * .31, y * .25, z * .47]}><sphereGeometry args={[1, 38, 24]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.74} roughness={.18} /></mesh>
+    <mesh position={[-x * .32, -y * .1, 0]} scale={[x * .22, y * .27, z * .48]}><sphereGeometry args={[1, 34, 22]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.72} roughness={.2} /></mesh>
+    <mesh position={[-x * .04, y * .24, 0]} scale={[x * .28, y * .35, z * .4]}><sphereGeometry args={[1, 36, 24]} /><meshPhysicalMaterial color={glass} transparent opacity={xray ? .2 : .56} transmission={xray ? .12 : .38} depthWrite={false} metalness={.08} roughness={.09} clearcoat={1} /></mesh>
+    <group position={[-x * .08, y * .49, 0]}><RoundedBox args={[x * .18, y * .045, z * .52]} radius={.035} smoothness={7}><meshPhysicalMaterial color="#2f4249" transparent opacity={xray ? .2 : .76} transmission={xray ? .1 : .2} depthWrite={false} metalness={.12} roughness={.1} clearcoat={1} /></RoundedBox></group>
     {[-1, 1].map((side) => <group key={`side-${side}`}>
-      <group position={[-x * .03, y * .17, side * z * .43]}><mesh><boxGeometry args={[x * .38, y * .37, .026]} /><meshPhysicalMaterial color={glass} transparent opacity={xray ? .18 : .42} transmission={xray ? .08 : .42} depthWrite={false} roughness={.12} metalness={0} /></mesh></group>
-      <group position={[x * .18, y * .18, side * z * .455]} rotation={[0, 0, -.34]}><BoxBody size={[.085, y * .61, .075]} color={color} xray={xray} selected={selected} radius={.025} metalness={.62} roughness={.27} /></group>
-      <group position={[-x * .25, y * .18, side * z * .455]} rotation={[0, 0, .3]}><BoxBody size={[.085, y * .58, .075]} color={color} xray={xray} selected={selected} radius={.025} metalness={.62} roughness={.27} /></group>
-      <group position={[-x * .035, y * .18, side * z * .46]}><BoxBody size={[.075, y * .48, .07]} color={color} xray={xray} selected={selected} radius={.02} metalness={.62} roughness={.27} /></group>
+      <group position={[x * .19, -y * .13, side * z * .48]}><RoundedBox args={[x * .2, y * .22, z * .08]} radius={.04} smoothness={5}><StandardMaterial color="#1d2a30" xray={xray} selected={selected} metalness={.4} roughness={.35} /></RoundedBox></group>
+      <group position={[-x * .03, y * .22, side * z * .405]}><RoundedBox args={[x * .34, y * .28, .026]} radius={.07} smoothness={6}><meshPhysicalMaterial color={glass} transparent opacity={xray ? .18 : .58} transmission={xray ? .08 : .36} depthWrite={false} roughness={.09} metalness={.06} /></RoundedBox></group>
+      <group position={[x * .19, y * .17, side * z * .43]} rotation={[0, 0, -.5]}><BoxBody size={[.065, y * .52, .06]} color={color} xray={xray} selected={selected} radius={.025} metalness={.72} roughness={.2} /></group>
+      <group position={[-x * .27, y * .14, side * z * .43]} rotation={[0, 0, .48]}><BoxBody size={[.065, y * .46, .06]} color={color} xray={xray} selected={selected} radius={.025} metalness={.72} roughness={.2} /></group>
+      <group position={[-x * .04, y * .18, side * z * .438]}><BoxBody size={[.06, y * .4, .06]} color={color} xray={xray} selected={selected} radius={.02} metalness={.72} roughness={.2} /></group>
       <mesh position={[wheelX, wheelY, side * z * .505]}><torusGeometry args={[wheelRadius * 1.05, Math.max(.025, wheelRadius * .09), 12, 40]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.62} roughness={.28} /></mesh>
       <mesh position={[-wheelX, wheelY, side * z * .505]}><torusGeometry args={[wheelRadius * 1.05, Math.max(.025, wheelRadius * .09), 12, 40]} /><StandardMaterial color={color} xray={xray} selected={selected} metalness={.62} roughness={.28} /></mesh>
-      <group position={[x * .16, y * .15, side * z * .52]}><BoxBody size={[.22, .095, .11]} color={color} xray={xray} selected={selected} radius={.04} metalness={.58} roughness={.3} /></group>
-      {!xray && <><Line points={[[x * .2, -y * .31, side * z * .506], [x * .2, y * .04, side * z * .506], [-x * .03, y * .06, side * z * .506], [-x * .03, -y * .31, side * z * .506]]} color="#18384c" lineWidth={1.2} /><Line points={[[x * -.04, -y * .31, side * z * .506], [x * -.04, y * .05, side * z * .506], [-x * .27, y * .02, side * z * .506], [-x * .27, -y * .31, side * z * .506]]} color="#18384c" lineWidth={1.2} /><group position={[x * .055, -y * .02, side * z * .515]}><BoxBody size={[x * .055, .025, .025]} color="#d8e1e5" xray={false} selected={selected} radius={.01} metalness={.86} roughness={.16} /></group><group position={[-x * .15, -y * .02, side * z * .515]}><BoxBody size={[x * .055, .025, .025]} color="#d8e1e5" xray={false} selected={selected} radius={.01} metalness={.86} roughness={.16} /></group></>}
+      {!xray && <><Line points={[[x * .2, -y * .28, side * z * .505], [x * .12, y * .02, side * z * .505], [-x * .07, y * .03, side * z * .505], [-x * .18, -y * .28, side * z * .505]]} color="#829096" lineWidth={1.1} /><group position={[-x * .03, -y * .04, side * z * .515]}><BoxBody size={[x * .09, .022, .025]} color="#b5c0c4" xray={false} selected={selected} radius={.008} metalness={.88} roughness={.14} /></group></>}
     </group>)}
-    <group position={[x * .505, -y * .25, 0]}><BoxBody size={[.045, y * .21, z * .48]} color="#18252b" xray={xray} selected={selected} radius={.025} metalness={.35} roughness={.5} /></group>
-    {!xray && [-.3, -.15, 0, .15, .3].map((factor) => <group key={`grille-${factor}`} position={[x * .53, -y * .25, z * factor]}><BoxBody size={[.025, y * .16, .018]} color="#91a0a6" xray={false} selected={selected} radius={.006} metalness={.78} roughness={.24} /></group>)}
-    {[-1, 1].map((side) => <group key={`lamp-${side}`}><group position={[x * .505, -y * .08, side * z * .31]}><BoxBody size={[.05, y * .18, z * .18]} color="#e9f5e8" xray={xray} selected={selected} radius={.04} metalness={.08} roughness={.18} /></group><group position={[-x * .505, -y * .08, side * z * .32]}><BoxBody size={[.05, y * .17, z * .17]} color="#e83d4d" xray={xray} selected={selected} radius={.035} metalness={.08} roughness={.2} /></group></group>)}
-    <group position={[x * .515, -y * .37, 0]}><BoxBody size={[.08, y * .13, z * .88]} color="#263238" xray={xray} selected={selected} radius={.04} metalness={.5} roughness={.38} /></group>
-    <group position={[-x * .515, -y * .37, 0]}><BoxBody size={[.08, y * .13, z * .88]} color="#263238" xray={xray} selected={selected} radius={.04} metalness={.5} roughness={.38} /></group>
+    <group position={[x * .5, -y * .24, 0]}><RoundedBox args={[x * .055, y * .18, z * .5]} radius={.05} smoothness={6}><StandardMaterial color="#111a1f" xray={xray} selected={selected} metalness={.32} roughness={.5} /></RoundedBox></group>
+    {[-1, 1].map((side) => <group key={`lamp-${side}`}><group position={[x * .49, -y * .015, side * z * .3]} rotation={[0, side * -.12, 0]}><BoxBody size={[.045, y * .07, z * .22]} color="#e8fbff" xray={xray} selected={selected} radius={.025} metalness={.08} roughness={.12} /></group><group position={[-x * .49, -y * .03, side * z * .31]}><BoxBody size={[.045, y * .06, z * .2]} color="#ff3348" xray={xray} selected={selected} radius={.025} metalness={.08} roughness={.16} /></group></group>)}
+    <group position={[x * .515, -y * .42, 0]}><BoxBody size={[.07, y * .09, z * .91]} color="#222c31" xray={xray} selected={selected} radius={.035} metalness={.58} roughness={.32} /></group>
+    <group position={[-x * .51, -y * .39, 0]}><BoxBody size={[.06, y * .08, z * .82]} color="#222c31" xray={xray} selected={selected} radius={.03} metalness={.58} roughness={.32} /></group>
   </group>;
 }
 
@@ -1106,7 +1255,9 @@ function BodyShellBody({ component, color, xray, selected }: { component: Machin
 }
 
 function TransparentGlazing({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
-  return <mesh castShadow><boxGeometry args={component.dimensions} /><meshPhysicalMaterial color={selected ? '#65e5ff' : '#75cce8'} transparent opacity={xray ? .18 : .42} depthWrite={false} transmission={xray ? .1 : .48} thickness={.04} roughness={.1} metalness={0} /></mesh>;
+  const automotive = component.parameters.cockpit_windshield || component.parameters.rear_windshield || component.parameters.side_window;
+  const radius = Math.min(.055, Math.max(.012, Math.min(...component.dimensions) * .45));
+  return <RoundedBox args={component.dimensions} radius={radius} smoothness={7} castShadow><meshPhysicalMaterial color={selected ? '#65e5ff' : automotive ? '#71858d' : '#75cce8'} transparent opacity={xray ? .18 : automotive ? .56 : .42} depthWrite={false} transmission={xray ? .1 : automotive ? .38 : .48} thickness={.04} roughness={.08} metalness={automotive ? .06 : 0} clearcoat={automotive ? 1 : 0} /></RoundedBox>;
 }
 
 function AerofoilBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -1154,6 +1305,20 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
   if (component.parameters.product_form) return <ProductItem component={component} xray={xray} selected={selected} />;
   if (component.parameters.patient_sling) return <PatientSling component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_foot) return <HumanoidFoot component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_pelvis) return <HumanoidPelvis component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_torso) return <HumanoidTorso component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_head) return <HumanoidHead component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_hand) return <HumanoidHand component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_limb) return <HumanoidLimb component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_joint || component.parameters.robot_neck) return <HumanoidJoint component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_arm_base) return <IndustrialRobotBase component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.robot_arm_pedestal) return <IndustrialRobotPedestal component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.robot_arm_link) return <IndustrialRobotLink component={component} color={color} xray={xray} selected={selected} />;
+  if (component.parameters.robot_arm_joint) return <IndustrialRobotJoint component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_arm_camera) return <IndustrialRobotCamera component={component} xray={xray} selected={selected} />;
+  if (component.parameters.robot_arm_gripper) return <IndustrialRobotGripper component={component} xray={xray} selected={selected} operating={operating} />;
+  if (component.parameters.vehicle_light || component.parameters.headlight || component.parameters.brake_light) return <VehicleLightBody component={component} xray={xray} selected={selected} />;
   if (component.parameters.automotive_body) return <CarBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.parameters.transparent_glazing) return <TransparentGlazing component={component} xray={xray} selected={selected} />;
   if (component.parameters.recycling_hopper) return <RecyclingHopper component={component} xray={xray} selected={selected} />;
