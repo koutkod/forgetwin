@@ -898,7 +898,6 @@ function CarBody({ component, color, xray, selected }: { component: MachineCompo
     <group position={[-x * .08, y * .49, 0]}><RoundedBox args={[x * .18, y * .045, z * .52]} radius={.035} smoothness={7}><meshPhysicalMaterial color="#2f4249" transparent opacity={xray ? .2 : .76} transmission={xray ? .1 : .2} depthWrite={false} metalness={.12} roughness={.1} clearcoat={1} /></RoundedBox></group>
     {[-1, 1].map((side) => <group key={`side-${side}`}>
       <group position={[x * .19, -y * .13, side * z * .48]}><RoundedBox args={[x * .2, y * .22, z * .08]} radius={.04} smoothness={5}><StandardMaterial color="#1d2a30" xray={xray} selected={selected} metalness={.4} roughness={.35} /></RoundedBox></group>
-      <group position={[-x * .03, y * .22, side * z * .405]}><RoundedBox args={[x * .34, y * .28, .026]} radius={.07} smoothness={6}><meshPhysicalMaterial color={glass} transparent opacity={xray ? .18 : .58} transmission={xray ? .08 : .36} depthWrite={false} roughness={.09} metalness={.06} /></RoundedBox></group>
       <group position={[x * .19, y * .17, side * z * .43]} rotation={[0, 0, -.5]}><BoxBody size={[.065, y * .52, .06]} color={color} xray={xray} selected={selected} radius={.025} metalness={.72} roughness={.2} /></group>
       <group position={[-x * .27, y * .14, side * z * .43]} rotation={[0, 0, .48]}><BoxBody size={[.065, y * .46, .06]} color={color} xray={xray} selected={selected} radius={.025} metalness={.72} roughness={.2} /></group>
       <group position={[-x * .04, y * .18, side * z * .438]}><BoxBody size={[.06, y * .4, .06]} color={color} xray={xray} selected={selected} radius={.02} metalness={.72} roughness={.2} /></group>
@@ -1257,7 +1256,9 @@ function BodyShellBody({ component, color, xray, selected }: { component: Machin
 function TransparentGlazing({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
   const automotive = component.parameters.cockpit_windshield || component.parameters.rear_windshield || component.parameters.side_window;
   const radius = Math.min(.055, Math.max(.012, Math.min(...component.dimensions) * .45));
-  return <RoundedBox args={component.dimensions} radius={radius} smoothness={7} castShadow><meshPhysicalMaterial color={selected ? '#65e5ff' : automotive ? '#71858d' : '#75cce8'} transparent opacity={xray ? .18 : automotive ? .56 : .42} depthWrite={false} transmission={xray ? .1 : automotive ? .38 : .48} thickness={.04} roughness={.08} metalness={automotive ? .06 : 0} clearcoat={automotive ? 1 : 0} /></RoundedBox>;
+  const material = <meshPhysicalMaterial color={selected ? '#65e5ff' : automotive ? '#71858d' : '#75cce8'} transparent opacity={xray ? .18 : automotive ? .56 : .42} depthWrite={false} transmission={xray ? .1 : automotive ? .38 : .48} thickness={.04} roughness={.08} metalness={automotive ? .06 : 0} clearcoat={automotive ? 1 : 0} />;
+  if (automotive) return <mesh scale={component.dimensions.map((value) => value / 2) as Vec3} castShadow><sphereGeometry args={[1, 30, 20]} />{material}</mesh>;
+  return <RoundedBox args={component.dimensions} radius={radius} smoothness={7} castShadow>{material}</RoundedBox>;
 }
 
 function AerofoilBody({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
