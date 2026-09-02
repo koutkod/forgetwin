@@ -689,7 +689,17 @@ function addAutomotiveSuspension(context: ModuleContext): ModuleResult {
   const wheelbase = 2.45;
   const wheelY = .53;
   const chassis = builder.component('frame', 'car suspension chassis', assembly, [0, .86, 0], [3.35, .24, 1.35], 'steel', 'fixed', { automotive_suspension_frame: true }, 52);
-  const body = builder.component('plate', 'recognizable passenger car body', assembly, [0, 1.23, 0], [3.5, .72, 1.58], 'aluminum', 'fixed', { automotive_body: true, payload_kg: values.payloadKg }, Math.max(70, values.payloadKg));
+  const body = builder.component('plate', 'recognizable passenger car body', assembly, [0, 1.23, 0], [3.5, .72, 1.58], 'aluminum', 'fixed', {
+    automotive_body: true,
+    passenger_car_body: true,
+    body_style: 'four-door-sedan',
+    design_language: 'low-wide-aerodynamic',
+    front_axis: '+X',
+    wheelbase_m: 2.62,
+    wheel_diameter_m: .84,
+    wheel_center_y_local: -.61,
+    payload_kg: values.payloadKg,
+  }, Math.max(70, values.payloadKg));
   builder.joint('fixed', chassis, body);
 
   const wheelPositions: Vec3[] = [
@@ -968,12 +978,20 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   const wheelDiameter = /dirt|off[- ]road/.test(text) ? 1.12 : 1.02;
   const frameIds: string[] = [];
   const tube = (role: string, start: Vec3, end: Vec3, section = .065) => {
-    const id = builder.member('tube', role, assembly, start, end, section, 'aluminum', 'fixed', { motorcycle_frame: true, round_tube: true });
+    const isFork = /fork/.test(role);
+    const id = builder.member('tube', role, assembly, start, end, section, 'aluminum', 'fixed', {
+      motorcycle_frame: !isFork,
+      motorcycle_fork: isFork,
+      motorcycle_steering_member: isFork,
+      round_tube: true,
+    });
+    const body = builder.components.find((item) => item.id === id);
+    if (body) body.color = isFork ? '#c8d2d6' : '#53656f';
     frameIds.push(id);
     return id;
   };
-  const rearDropout = builder.component('bearing', 'rear wheel bearing and swingarm pivot', assembly, rear, [.2, .18, .2], 'steel', 'fixed', { motorcycle_bearing: true }, .7);
-  const frontDropout = builder.component('bearing', 'front steering axle bearing', assembly, front, [.2, .18, .2], 'steel', 'fixed', { motorcycle_bearing: true }, .7);
+  const rearDropout = builder.component('bearing', 'rear wheel bearing and swingarm pivot', assembly, rear, [.25, .2, .25], 'steel', 'fixed', { motorcycle_bearing: true, motorcycle_rear_hub: true }, .9);
+  const frontDropout = builder.component('bearing', 'front steering axle bearing', assembly, front, [.25, .2, .25], 'steel', 'fixed', { motorcycle_bearing: true, motorcycle_front_hub: true, motorcycle_steering_member: true }, .9);
   tube('lower cradle tube', [-.85, .78, 0], [.65, .8, 0], .08);
   tube('upper backbone tube', [-.62, 1.32, 0], [.58, 1.46, 0], .09);
   tube('rear frame stay', rear, [-.62, 1.32, 0], .065);
@@ -982,11 +1000,16 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
     tube(`${side < 0 ? 'left' : 'right'} rear swingarm`, rear.map((value, index) => index === 2 ? side * .11 : value) as Vec3, [-.42, .82, side * .11], .065);
     tube(`${side < 0 ? 'left' : 'right'} telescopic fork`, [front[0], front[1], side * .11], [.72, 1.58, side * .11], .07);
   }
+  const forkCrown = builder.component('support', 'motorcycle fork crown and steering head', assembly, [.72, 1.55, 0], [.22, .16, .42], 'steel', 'fixed', { motorcycle_fork_crown: true, motorcycle_steering_member: true }, 1.6);
+  const rearShock = builder.component('spring', 'rear monoshock suspension', assembly, [-.58, 1.02, 0], [.095, .5, .095], 'steel', 'fixed', { motorcycle_rear_shock: true, stiffness: 28000, damping: 2200 }, 2.2);
+  builder.rotate(rearShock, [0, 0, -.42]);
   frameIds.forEach((id, index) => builder.connect(index ? frameIds[index - 1] : rearDropout, id, 'mechanical', 'welded_motorcycle_frame'));
   builder.connect(frameIds.at(-1)!, frontDropout, 'mechanical', 'front_fork_axle');
+  builder.connect(forkCrown, frameIds[1], 'mechanical', 'steering_head_bearing');
+  builder.connect(rearShock, frameIds[4], 'mechanical', 'rear_suspension_mount');
 
   const centeredWheel = (support: string, role: string, position: Vec3, frontSteering: boolean) => {
-    const wheel = builder.component('wheel', role, assembly, position, [wheelDiameter, .16, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, road_vehicle_front_steering: frontSteering, steering_side: 'center', motorcycle_wheel: true, friction: 1.08 }, 4.6);
+    const wheel = builder.component('wheel', role, assembly, position, [wheelDiameter, .18, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, road_vehicle_front_steering: frontSteering, steering_side: 'center', motorcycle_wheel: true, motorcycle_front_wheel: frontSteering, axle_axis: 'Z', friction: 1.08 }, 4.8);
     const joint = builder.joint('revolute', support, wheel, [0, 0, 1]);
     const supportBody = builder.components.find((item) => item.id === support)!;
     const hinge = builder.joints.find((item) => item.id === joint)!;
@@ -997,15 +1020,20 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   };
   const rearWheel = centeredWheel(rearDropout, 'rear driven motorcycle wheel', rear, false);
   centeredWheel(frontDropout, 'front steering motorcycle wheel', front, true);
-  const seat = builder.component('seat', 'contoured rider saddle', assembly, [-.36, 1.48, 0], [.72, .16, .38], 'polymer', 'fixed', { seat_form: 'saddle', motorcycle_seat: true }, 1.4);
-  const steering = builder.component('steering', 'motorcycle handlebar control', assembly, [.7, 1.72, 0], [.22, .12, .82], 'steel', 'fixed', { control_form: 'handlebar', motorcycle_handlebar: true }, 1.1);
-  const power = builder.component(electric ? 'battery' : 'body-shell', electric ? 'traction battery pack' : 'compact engine and fuel system', assembly, [-.05, 1.02, 0], [.64, .52, .42], electric ? 'polymer' : 'aluminum', 'fixed', { motorcycle_power_unit: true }, electric ? 12 : 18);
-  const motor = builder.component('motor', electric ? 'electric motorcycle drive motor' : 'motorcycle engine output drive', assembly, [-.45, .83, .12], [.38, .22, .38], 'aluminum', 'kinematic', { motorcycle_motor: true }, 6.5);
+  const seat = builder.component('seat', 'stepped rider and pillion saddle', assembly, [-.38, 1.49, 0], [.92, .18, .42], 'polymer', 'fixed', { seat_form: 'saddle', motorcycle_seat: true }, 1.8);
+  const steering = builder.component('steering', 'motorcycle handlebar control', assembly, [.72, 1.78, 0], [.28, .12, .92], 'steel', 'fixed', { control_form: 'handlebar', motorcycle_handlebar: true, motorcycle_steering_member: true }, 1.3);
+  const power = builder.component(electric ? 'battery' : 'body-shell', electric ? 'traction battery and controller pack' : 'compact engine and fuel system', assembly, [-.1, 1.04, 0], [.72, .56, .48], electric ? 'polymer' : 'aluminum', 'fixed', { motorcycle_power_unit: true, motorcycle_battery: electric }, electric ? 12 : 18);
+  const tank = builder.component('body-shell', electric ? 'sculpted upper battery cover and tank fairing' : 'sculpted fuel tank', assembly, [.28, 1.42, 0], [.92, .54, .56], 'composite', 'fixed', { motorcycle_bodywork: true, motorcycle_tank: true }, 4.2);
+  const motor = builder.component('motor', electric ? 'electric motorcycle drive motor' : 'motorcycle engine output drive', assembly, [-.45, .85, .12], [.42, .24, .42], 'aluminum', 'kinematic', { motorcycle_motor: true }, 6.5);
   const chain = builder.component('belt', 'rear wheel chain drive', assembly, [-.77, .73, .12], [.95, .035, .25], 'steel', 'kinematic', { bicycle_chain: true, motorcycle_chain: true }, .9);
+  const frontFender = builder.component('body-shell', 'front wheel mudguard', assembly, [1.18, 1.01, 0], [.7, .11, .3], 'composite', 'fixed', { motorcycle_fender: true, motorcycle_front_fender: true, motorcycle_steering_member: true }, .8);
+  const rearFender = builder.component('body-shell', 'rear wheel mudguard and tail cowl', assembly, [-1.02, 1.03, 0], [.72, .12, .34], 'composite', 'fixed', { motorcycle_fender: true, motorcycle_rear_fender: true }, .9);
+  const footPegs = builder.component('shaft', 'rider foot pegs', assembly, [-.1, .78, 0], [.08, .64, .08], 'steel', 'fixed', { motorcycle_foot_pegs: true }, .8);
+  builder.rotate(footPegs, [Math.PI / 2, 0, 0]);
   const drive = builder.motor(motor, rearWheel.joint, Math.max(95, values.torqueNm * 1.5), 520, -1);
   builder.joint('belt', motor, rearWheel.wheel, [0, 0, 1], { ratio: 3.1 });
-  for (const id of [seat, steering, power, motor, chain]) builder.connect(id, frameIds[0], id === motor || id === chain ? 'mechanical' : 'mechanical', 'motorcycle_mount');
-  const headlight = builder.component('light', 'round LED motorcycle headlight', assembly, [.88, 1.45, 0], [.27, .2, .27], 'aluminum', 'fixed', { headlight: true, beam_range: 5 }, .42);
+  for (const id of [seat, steering, power, tank, motor, chain, frontFender, rearFender, footPegs]) builder.connect(id, frameIds[0], 'mechanical', 'motorcycle_mount');
+  const headlight = builder.component('light', 'round LED motorcycle headlight', assembly, [.93, 1.5, 0], [.3, .24, .3], 'aluminum', 'fixed', { headlight: true, vehicle_light: true, motorcycle_headlight: true, motorcycle_steering_member: true, light_direction: 'front', facing_x: 1, facing_axis: '+X', beam_range: 5 }, .48);
   const imuBody = builder.component('sensor', 'lean and wheel-speed sensor', assembly, [-.05, 1.36, .18], [.14, .11, .1], 'polymer', 'fixed', { motorcycle_imu: true }, .08);
   const imu = builder.sensor(imuBody, 'imu', 'motorcycle_lean', frameIds[0], 4);
   builder.connect(headlight, power, 'power', 'lighting_bus');

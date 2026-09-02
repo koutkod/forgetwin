@@ -66,6 +66,26 @@ describe('model-authored world compilation', () => {
     expect(roundTrip.components.filter((item) => item.parameters?.brake_light).every((item) => item.parameters?.facing_axis === '-X')).toBe(true);
   });
 
+  it('preserves the motorcycle silhouette and forward lighting through hosted-AI planning', () => {
+    const prompt = 'Build an electric motorcycle with a headlight and rear wheel drive.';
+    const compiled = compileDesignBrief(prompt);
+    const intent: AgentIntent = {
+      normalized_prompt: prompt, design_brief: prompt, machine_name: compiled.goal.machineName,
+      domain: compiled.goal.domain, reasoning_summary: 'Compose two aligned wheels, a welded frame, steering fork, suspension, saddle, protected power unit, chain drive, and forward headlight.',
+      architecture: ['two-wheel running gear', 'welded frame and fork', 'saddle and bodywork', 'rear drive and lighting'],
+      assumptions: ['Concept-scale rigid-body validation'], capabilities: compiled.goal.capabilities,
+      requirements: [{ metric: 'component_count', label: 'Physical bodies', operator: 'max', target: 40, unit: '', source: 'inferred' }],
+    };
+
+    const roundTrip = compileAgentPlan(prompt, agentPlanFromCompiled(prompt, intent, compiled));
+    expect(roundTrip.components.filter((item) => item.parameters?.motorcycle_wheel)).toHaveLength(2);
+    expect(roundTrip.components.some((item) => item.parameters?.motorcycle_frame)).toBe(true);
+    expect(roundTrip.components.some((item) => item.parameters?.motorcycle_fork)).toBe(true);
+    expect(roundTrip.components.some((item) => item.parameters?.motorcycle_bodywork)).toBe(true);
+    expect(roundTrip.components.some((item) => item.parameters?.motorcycle_seat)).toBe(true);
+    expect(roundTrip.components.some((item) => item.parameters?.motorcycle_headlight && item.parameters?.facing_axis === '+X')).toBe(true);
+  });
+
   it('preserves the recognizable passenger-car shell and glazing through hosted-AI plan conversion', () => {
     const prompt = 'Build a road car with a clear windshield, headlights, and tail lights.';
     const compiled = compileDesignBrief(prompt);
