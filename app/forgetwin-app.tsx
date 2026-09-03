@@ -13,7 +13,7 @@ import {
   type AgentEditAction, type AgentPlan, type AgentRuntimeMode, type AgentTraceItem,
 } from '../lib/forge-agent';
 import { catalogFor, engineeringExamples, materials, primitiveCatalog } from '../lib/forge-data';
-import { contextualMechanicalEdits, conveyorSpeedEdits, pendingClarification, resolvedEditPrompt, type ChatMessage } from '../lib/forge-chat';
+import { contextualMechanicalEdits, directMotorSpeedEdits, pendingClarification, resolvedEditPrompt, type ChatMessage } from '../lib/forge-chat';
 import { compileAgentPlan, localAnchorAt, semanticParametersForEdit } from '../lib/forge-model-plan';
 import { translateInForgeCoordinates } from '../lib/forge-motion';
 import { CHALLENGE_EXAMPLES, compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../lib/forge-prompt';
@@ -615,7 +615,7 @@ export function ForgeTwinApp() {
       let preserveComponentIds: string[] = [];
       const current = getSnapshot();
       const directMechanical = contextualMechanicalEdits(current, effectivePrompt);
-      const directSpeedEdits = conveyorSpeedEdits(current, effectivePrompt);
+      const directSpeedEdits = directMotorSpeedEdits(current, effectivePrompt);
       if (directMechanical.length) {
         commands = directMechanical;
         summary = `Resolved the mechanical edit from the current shared world: ${directMechanical.map((edit) => edit.label).join(' · ')}.`;
@@ -627,7 +627,7 @@ export function ForgeTwinApp() {
           label: `Retune ${edit.motorId} from ${edit.previousRpm} to ${edit.maxRpm} rpm`,
         }));
         const increasing = directSpeedEdits[0].maxRpm > directSpeedEdits[0].previousRpm;
-        summary = `${increasing ? 'Increased' : 'Reduced'} ${directSpeedEdits.length === 1 ? 'the conveyor drive' : `all ${directSpeedEdits.length} conveyor drives`} to ${directSpeedEdits.map((edit) => `${edit.maxRpm} rpm`).join(', ')} without changing the machine geometry.`;
+        summary = `${increasing ? 'Increased' : 'Reduced'} ${directSpeedEdits.length === 1 ? 'the selected drive' : `all ${directSpeedEdits.length} matching drives`} to ${directSpeedEdits.map((edit) => `${edit.maxRpm} rpm`).join(', ')} without changing the machine geometry.`;
         addTrace('reasoning', 'Resolved conveyor speed edit directly', summary);
       } else if (actor === 'ModelAgent') {
         addTrace('action', 'Model is editing the current world', modelPrompt);

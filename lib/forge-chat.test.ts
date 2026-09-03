@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conveyorSpeedEdits, pendingClarification, resolvedEditPrompt } from './forge-chat';
+import { conveyorSpeedEdits, directMotorSpeedEdits, pendingClarification, resolvedEditPrompt } from './forge-chat';
 import type { ForgeState } from './forge-types';
 
 function conveyorState(): ForgeState {
@@ -58,5 +58,20 @@ describe('bounded conveyor speed edits', () => {
 
   it('does not hijack unrelated speed requests', () => {
     expect(conveyorSpeedEdits(conveyorState(), 'Make the rover wheels faster')).toEqual([]);
+  });
+});
+
+describe('explicit motor speed edits', () => {
+  it('retunes a non-conveyor vehicle drive to the requested rpm', () => {
+    const state = conveyorState();
+    state.components = [{ id: 'traction-drive', primitive: 'motor', parameters: {}, role: 'electric motorcycle drive motor' }] as ForgeState['components'];
+    state.motors = [{ id: 'motor-drive', componentId: 'traction-drive', maxRpm: 520, direction: -1 }] as ForgeState['motors'];
+    expect(directMotorSpeedEdits(state, 'Reduce the drive motor speed to 580 rpm')).toEqual([
+      { motorId: 'motor-drive', previousRpm: 520, maxRpm: 580, direction: -1 },
+    ]);
+  });
+
+  it('retains the deterministic conveyor percentage behavior', () => {
+    expect(directMotorSpeedEdits(conveyorState(), 'Make the conveyor belt faster').map((edit) => edit.maxRpm)).toEqual([120, 96]);
   });
 });

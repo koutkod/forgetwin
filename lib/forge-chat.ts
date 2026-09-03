@@ -162,3 +162,27 @@ export function conveyorSpeedEdits(state: ForgeState, instruction: string): Conv
     direction: motor.direction,
   }));
 }
+
+/** Resolve an explicit motor/drive RPM request without relying on the model.
+ * This keeps common chat edits deterministic for vehicles, machines, and
+ * conveyors when the hosted planner is temporarily unavailable. */
+export function directMotorSpeedEdits(state: ForgeState, instruction: string): ConveyorSpeedEdit[] {
+  const text = instruction.toLowerCase();
+  const requestedRpm = Number(text.match(/(?:to|at|=)?\s*(\d+(?:\.\d+)?)\s*rpm\b/)?.[1] ?? 0);
+  if (requestedRpm > 0 && /\b(?:motor|drive|rpm)\b/.test(text)) {
+    const qualifiers = ['front', 'rear', 'left', 'right', 'input', 'output'].filter((item) => new RegExp(`\\b${item}\\b`).test(text));
+    const qualified = state.motors.filter((motor) => {
+      const component = state.components.find((item) => item.id === motor.componentId);
+      const description = `${motor.id} ${component?.role ?? ''}`.toLowerCase();
+      return qualifiers.length === 0 || qualifiers.every((item) => description.includes(item));
+    });
+    const motors = qualified.length ? qualified : state.motors.length === 1 ? state.motors : [];
+    return motors.map((motor) => ({
+      motorId: motor.id,
+      previousRpm: motor.maxRpm,
+      maxRpm: Number(Math.max(1, Math.min(100_000, requestedRpm)).toFixed(2)),
+      direction: motor.direction,
+    }));
+  }
+  return conveyorSpeedEdits(state, instruction);
+}
