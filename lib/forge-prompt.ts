@@ -8,7 +8,9 @@ import { finalizeCompiledWorldPlan } from './forge-design-validator';
 import { FORGE_COORDINATE_CONVENTION, normalizeEngineeringIntent } from './forge-intent';
 import { worldPointToLocal } from './forge-motion';
 
-export const DEFAULT_DESIGN_PROMPT = engineeringExamples[1].prompt;
+const defaultDesign = engineeringExamples.find((example) => example.id === 'motorcycle') ?? engineeringExamples[0];
+
+export const DEFAULT_DESIGN_PROMPT = defaultDesign.prompt;
 export const CHALLENGE_EXAMPLES = engineeringExamples;
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/[\u2010-\u2015]/g, '-').replace(/\s+/g, ' ').trim();

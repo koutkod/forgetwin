@@ -1856,7 +1856,7 @@ function Machine({ state, preview, operating = false, frame, replayMode, evaluat
     () => state.components.length ? state.joints : preview ? previewData.joints : [],
     [preview, previewData.joints, state.components.length, state.joints],
   );
-  const machine = `${state.goal?.machineName ?? (preview ? 'counterbalanced tower crane' : '')} ${state.goal?.brief ?? ''}`.toLowerCase();
+  const machine = `${state.goal?.machineName ?? (preview ? 'electric motorcycle' : '')} ${state.goal?.brief ?? ''}`.toLowerCase();
   const modelAuthored = /GPT-5\.6 design graph/i.test(state.goal?.simulationModel ?? '');
   const mechanismMotion = useMemo(
     () => (modelAuthored || /robotic arm|three-axis/.test(machine))
