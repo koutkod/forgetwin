@@ -136,9 +136,9 @@ function recordSchemaRepair(state: ForgeState, name: ForgeToolName, actor: Actor
 const descriptions: Record<ForgeToolName, string> = {
   inspect_workspace: 'Read the complete shared physical world: assemblies, bodies, dimensions, materials, masses, joints, devices, controls, revisions, and human locks.',
   inspect_primitive_catalog: 'Inspect reusable low-level primitives and material properties. Complete machines are not catalog entries.',
-  set_design_goal: 'Create a free-form engineering goal with typed constraints and composable capabilities; no profile or machine template is selected.',
+  set_design_goal: 'Create a free-form engineering goal with typed constraints and composable capabilities; no profile or machine template is selected. Use mobile when the machine itself travels. Reserve transport for loose-material or workpiece flow through conveyors, chutes, rollers, and processing lines.',
   create_assembly: 'Create an empty mechanical subsystem that can contain arbitrary physical bodies.',
-  create_component: 'Create one physical body from a reusable primitive with explicit geometry, transform, material, mass, and rigid-body mode.',
+  create_component: 'Create one requested or mechanically required physical body from a reusable primitive with explicit geometry, transform, material, mass, and rigid-body mode. Do not add visible calibration boxes or temporary test payloads; run_simulation supplies non-design measurement probes when appropriate.',
   set_dimensions: 'Resize one body and recalculate mass from material density unless mass is human-locked.',
   set_material: 'Change one body material and its friction, strength proxy, color, and density-derived mass.',
   set_mass: 'Set an explicit body mass for payloads, counterweights, or calibrated mechanisms.',

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { commitSimulation } from './forge-engine';
 import { engineeringExamples } from './forge-data';
 import { compileDesignBrief } from './forge-prompt';
-import { simulateDesign } from './forge-simulation';
+import { needsLooseMaterialProbe, simulateDesign } from './forge-simulation';
 import { assemblePlan, testCommand } from './forge-test-utils';
 
 const cases = [
@@ -41,6 +41,32 @@ async function failOptimizePass(prompt: string) {
 }
 
 describe('ForgeTwin generic multi-body physics and optimizer', () => {
+  it('does not inject a random test box when a WebMCP agent labels a mobile vehicle as transport', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a cool-looking electric motorcycle for one person.'));
+    if (!state.goal!.capabilities.includes('transport')) state.goal!.capabilities.push('transport');
+
+    expect(needsLooseMaterialProbe(state)).toBe(false);
+    const run = await simulateDesign(state);
+    expect(run.replay.flatMap((frame) => frame.items).some((item) => item.id === 'test-payload')).toBe(false);
+  }, 30_000);
+
+  it('keeps a visible payload probe only for a plain material-handling conveyor', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a powered conveyor that moves 20 parts per minute.'));
+
+    expect(needsLooseMaterialProbe(state)).toBe(true);
+    const run = await simulateDesign(state);
+    expect(run.replay.some((frame) => frame.items.some((item) => item.id === 'test-payload'))).toBe(true);
+  }, 30_000);
+
+  it('uses routed products without an extra generic probe for a sorting line', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.'));
+
+    expect(needsLooseMaterialProbe(state)).toBe(false);
+    const run = await simulateDesign(state);
+    expect(run.replay.some((frame) => frame.items.some((item) => item.id.startsWith('sort-package-')))).toBe(true);
+    expect(run.replay.flatMap((frame) => frame.items).some((item) => item.id === 'test-payload')).toBe(false);
+  }, 30_000);
+
   it.each(cases)('runs an evidence-driven failure and redesign for %s', async (name, prompt) => {
     const { failed, passed } = await failOptimizePass(prompt);
     expect(failed.physics.engine).toBe('Rapier');

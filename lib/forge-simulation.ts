@@ -795,6 +795,32 @@ function sortingPackages(state: ForgeState, progress: number, controlQuality: nu
   });
 }
 
+/**
+ * A transport capability means loose material flow, while mobile means that
+ * the machine itself travels. External WebMCP agents may still describe a
+ * vehicle as both. Never turn that harmless vocabulary overlap into a random
+ * blue box beside a car, bicycle, motorcycle, rover, or aircraft.
+ *
+ * The reduced-order payload probe is only useful when the authored world has
+ * a recognizable material-handling surface and does not already provide its
+ * own routed products. It remains part of the physics evidence for a plain
+ * conveyor, but it cannot leak into unrelated mobile-machine animations.
+ */
+export function needsLooseMaterialProbe(state: ForgeState) {
+  if (!state.goal?.capabilities.includes('transport')) return false;
+  if (state.goal.capabilities.includes('mobile') || state.goal.capabilities.includes('classify')) return false;
+  const hasMaterialHandlingSurface = state.components.some((item) =>
+    ['conveyor', 'ramp', 'roller'].includes(item.primitive)
+    || Boolean(item.parameters.industrial_conveyor || item.parameters.accumulation_zone || item.parameters.recycling_drum),
+  );
+  const hasAuthoredProduct = state.components.some((item) =>
+    typeof item.parameters.product_form === 'string'
+    || item.parameters.semantic_payload === true
+    || item.parameters.shipping_carton === true,
+  );
+  return hasMaterialHandlingSurface && !hasAuthoredProduct;
+}
+
 export async function simulateDesign(state: ForgeState): Promise<SimulationRun> {
   assertRunnableDesign(state);
   const RAPIER = await loadRapier();
@@ -908,7 +934,7 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
 
   let testBody: ReturnType<typeof world.createRigidBody> | null = null;
   let testColliderHandle: number | null = null;
-  if (state.goal!.capabilities.includes('transport')) {
+  if (needsLooseMaterialProbe(state)) {
     testBody = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicVelocityBased().setTranslation(-3.8, .95, 0));
     const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(.28, .28, .28).setMass(2).setFriction(.62).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS), testBody);
     testColliderHandle = collider.handle; colliderOwner.set(collider.handle, 'test-payload');
