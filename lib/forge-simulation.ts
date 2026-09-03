@@ -877,6 +877,25 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   const pairKey = (a: string, b: string) => [a, b].sort().join('|');
   state.joints.forEach((item) => declaredPairs.add(pairKey(item.componentA, item.componentB)));
   state.connections.filter((item) => item.type === 'mechanical').forEach((item) => declaredInterfaces.add(pairKey(item.sourceId, item.targetId)));
+  const jointNeighbors = new Map<string, Set<string>>();
+  for (const joint of state.joints) {
+    if (!jointNeighbors.has(joint.componentA)) jointNeighbors.set(joint.componentA, new Set());
+    if (!jointNeighbors.has(joint.componentB)) jointNeighbors.set(joint.componentB, new Set());
+    jointNeighbors.get(joint.componentA)!.add(joint.componentB);
+    jointNeighbors.get(joint.componentB)!.add(joint.componentA);
+  }
+  const closeJointNeighborhood = (start: string, target: string) => {
+    let frontier = new Set([start]); const visited = new Set([start]);
+    for (let depth = 0; depth < 3; depth += 1) {
+      const next = new Set<string>();
+      for (const id of frontier) for (const neighbor of jointNeighbors.get(id) ?? []) {
+        if (neighbor === target) return true;
+        if (!visited.has(neighbor)) { visited.add(neighbor); next.add(neighbor); }
+      }
+      frontier = next;
+    }
+    return false;
+  };
   const telemetry: TelemetrySample[] = [];
   const replay: ReplayFrame[] = [];
   const collisions: CollisionEvent[] = [];
@@ -1033,6 +1052,12 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       )));
       const connectedContact = declaredPairs.has(pair);
       const declaredInterface = declaredInterfaces.has(pair);
+      // Parametric tubes, crowns, hubs, and brackets often overlap slightly at
+      // their shared joint volume because the reduced-order collider is an
+      // envelope rather than the final machined solid. Ignore that overlap only
+      // during initialization and only inside a short physical-joint
+      // neighborhood; the same contact after motion remains self-interference.
+      const initialJointNeighborhood = sameAssemblyContact && time <= DT * 2 && closeJointNeighborhood(bodyA, bodyB);
       const roles = `${itemA?.role ?? ''} ${itemB?.role ?? ''}`.toLowerCase();
       const reducedOrderInterface = sameAssemblyContact && (
         (/bearing|housing/.test(roles) && /shaft|gear/.test(roles))
@@ -1045,7 +1070,7 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       const classification = supportContact ? 'ground-contact' as const
         : expectedTransport ? 'expected-contact' as const
           : reducedOrderInterface ? 'connected-component-contact' as const
-          : connectedContact || declaredInterface ? 'connected-component-contact' as const
+          : connectedContact || declaredInterface || initialJointNeighborhood ? 'connected-component-contact' as const
             : sameAssemblyContact ? 'self-interference' as const
               : impulse > 6 ? 'harmful-impact' as const : 'clearance-violation' as const;
       const harmful = classification === 'self-interference' ? impulse > 8 : classification === 'harmful-impact' || classification === 'clearance-violation' && impulse > 3;
@@ -1054,6 +1079,7 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
           : reducedOrderInterface ? 'Expected close interface in a reduced-order bearing, housing, gear, or brake representation.'
           : connectedContact ? 'Contact between bodies joined by a physical joint.'
             : declaredInterface ? 'Contact at an explicitly declared mechanical interface.'
+              : initialJointNeighborhood ? 'Initial overlap inside a reduced-order joint neighborhood; later recontact remains a clearance failure.'
               : sameAssemblyContact ? 'Unexpected contact between unjoined bodies in the same assembly.'
               : 'Unexpected contact between independent bodies.';
       collisions.push({ id: `collision-${collisions.length + 1}`, time: round(time, 3), bodyA, bodyB, impulse, point: [round(p.x, 3), round(p.y, 3), round(p.z, 3)], replayFrame: replay.length, harmful, classification, reason });
@@ -1128,12 +1154,16 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   const evaluated = evaluate(state, replay, collisions);
   const failed = evaluated.measures.filter((item) => item.status === 'fail');
   const score = round(evaluated.measures.filter((item) => item.status === 'pass').length / evaluated.measures.length * 100, 1);
-  const runObjective = round(objective(evaluated.measures) + (physicsHealthy ? 0 : 1), 4);
   const firstHarmful = collisions.find((item) => item.harmful);
+  const runObjective = round(objective(evaluated.measures) + (firstHarmful ? 1 : 0) + (physicsHealthy ? 0 : 1), 4);
   const failureFrame = firstHarmful?.replayFrame ?? Math.max(0, Math.min(replay.length - 1, Math.round(replay.length * .62)));
   const primary = failed[0];
   const failureComponents = primary ? (['stability_margin', 'platform_tilt'].includes(primary.metric) ? state.components.filter((item) => ['counterweight', 'spring', 'frame'].includes(item.primitive)).map((item) => item.id) : ['output_torque', 'payload_capacity', 'joint_margin', 'traction_margin'].includes(primary.metric) ? [...state.motors.map((item) => item.componentId), ...state.actuators.map((item) => item.componentId)] : ['deflection', 'safety_factor', 'load_capacity'].includes(primary.metric) ? state.components.filter((item) => ['beam', 'plate', 'support'].includes(item.primitive)).map((item) => item.id) : state.components.filter((item) => ['sensor', 'camera', 'controller', 'motor', 'servo', 'piston'].includes(item.primitive)).map((item) => item.id)) : [];
-  const failures: FailureEvent[] = primary ? [{ id: 'failure-1', type: `constraint-${primary.metric}`, time: replay[failureFrame]?.time ?? round(state.world.duration * .62, 2), title: `${primary.label} is outside the goal envelope`, detail: `${primary.value}${primary.unit} measured against ${primary.operator} ${primary.target}${primary.unit}. Source: ${primary.provenance}.`, componentIds: [...new Set(failureComponents)].slice(0, 4), replayFrame: failureFrame, evidenceChannels: [primary.metric, 'peak_speed_mps', 'harmful_contacts'] }] : physicsHealthy ? [] : [{ id: 'failure-physics-health', type: 'physics-health', time: replay[failureFrame]?.time ?? 0, title: 'The physical world became numerically unstable', detail: 'A dynamic body left the bounded engineering world or produced a non-finite transform.', componentIds: state.components.filter((item) => item.bodyType === 'dynamic').map((item) => item.id).slice(0, 4), replayFrame: failureFrame, evidenceChannels: ['peak_speed_mps', 'active_bodies'] }];
+  const failures: FailureEvent[] = primary
+    ? [{ id: 'failure-1', type: `constraint-${primary.metric}`, time: replay[failureFrame]?.time ?? round(state.world.duration * .62, 2), title: `${primary.label} is outside the goal envelope`, detail: `${primary.value}${primary.unit} measured against ${primary.operator} ${primary.target}${primary.unit}. Source: ${primary.provenance}.`, componentIds: [...new Set(failureComponents)].slice(0, 4), replayFrame: failureFrame, evidenceChannels: [primary.metric, 'peak_speed_mps', 'harmful_contacts'] }]
+    : firstHarmful
+      ? [{ id: 'failure-harmful-contact', type: 'harmful-contact', time: firstHarmful.time, title: 'Unexpected mechanical interference', detail: `${firstHarmful.bodyA} contacted ${firstHarmful.bodyB} at ${firstHarmful.impulse} N·s (${firstHarmful.classification}).`, componentIds: [firstHarmful.bodyA, firstHarmful.bodyB].filter((id) => id !== 'world-floor'), replayFrame: firstHarmful.replayFrame, evidenceChannels: ['harmful_contacts', firstHarmful.classification] }]
+      : physicsHealthy ? [] : [{ id: 'failure-physics-health', type: 'physics-health', time: replay[failureFrame]?.time ?? 0, title: 'The physical world became numerically unstable', detail: 'A dynamic body left the bounded engineering world or produced a non-finite transform.', componentIds: state.components.filter((item) => item.bodyType === 'dynamic').map((item) => item.id).slice(0, 4), replayFrame: failureFrame, evidenceChannels: ['peak_speed_mps', 'active_bodies'] }];
   const suggested = recommendations(state, failed);
   const metrics = { score, componentCount: state.components.length, jointCount: state.joints.length, totalMass: round(evaluated.analysis.totalMass, 1), energy: round((evaluated.analysis.motorTorque * evaluated.analysis.motorRpm * Math.PI / 30 + evaluated.analysis.actuatorForce * evaluated.analysis.actuatorSpeed) * state.world.duration / 3600, 2), collisions: collisions.filter((item) => item.harmful).length, measures: evaluated.measures };
   const editable = state.components.find((item) => item.id === state.goal!.editableComponentId) ?? state.components[0];
