@@ -19,6 +19,7 @@ function usesReducedOrderCollider(item: MachineComponent) {
     || item.parameters.planetary_carrier || item.parameters.planetary_carrier_pad || item.parameters.planetary_sun || item.parameters.planetary_ring || item.parameters.planetary_planet
     || item.parameters.hydraulic_barrel || item.parameters.hydraulic_ram || item.parameters.press_load_cell
     || item.parameters.reduced_order_cable || item.parameters.product_form
+    || item.parameters.winch_drum_flange
     || item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel || item.parameters.rover_wheel
     || item.parameters.bicycle_tube || item.parameters.bicycle_steerer || item.parameters.bicycle_fork_crown || item.parameters.bicycle_fork_blade || item.parameters.bicycle_stem || item.parameters.bicycle_handlebar || item.parameters.bicycle_dropout || item.parameters.bicycle_hub || item.parameters.bicycle_brake_rotor || item.parameters.bicycle_brake_caliper || item.parameters.bicycle_pedal
     || item.parameters.road_vehicle_wheel_hub || item.parameters.road_vehicle_spindle || item.parameters.road_vehicle_steering_knuckle || item.parameters.road_vehicle_kingpin || item.parameters.road_vehicle_brake || item.parameters.road_vehicle_steering_rack || item.parameters.road_vehicle_steering_tie_rod

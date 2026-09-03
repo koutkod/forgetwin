@@ -202,6 +202,13 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.metrics.measures.find((item) => item.metric === 'line_speed')).toMatchObject({ value: .05, status: 'pass' });
   }, 30_000);
 
+  it('keeps a compact long-running winch drum clear of its skid', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a compact electric winch that lifts 100 kg by 2 meters at 0.1 m/s.'));
+    const run = await simulateDesign(state);
+    expect(run.collisions.filter((item) => item.harmful), JSON.stringify(run.collisions.filter((item) => item.harmful), null, 2)).toHaveLength(0);
+    expect(run.status).not.toBe('failed');
+  }, 30_000);
+
   it('causally resizes a weak press ram and retunes platen parallelism', async () => {
     let state = assemblePlan(compileDesignBrief('Build a hydraulic shop press that applies 50,000 N through a guided ram over a 300 mm stroke.'));
     const ram = state.components.find((item) => item.parameters.hydraulic_ram)!;
@@ -302,6 +309,23 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     const disconnected = { ...connected, motors: connected.motors.map((motor) => ({ ...motor, jointId: undefined })) };
     const disconnectedRun = await simulateDesign(disconnected);
     expect(disconnectedRun.metrics.measures.find((item) => item.metric === 'angular_travel')?.value).toBe(0);
+  }, 30_000);
+
+  it('causally retunes a slow rotary assembly from measured angular travel', async () => {
+    let state = assemblePlan(compileDesignBrief('Build an aluminum six-blade impeller and animate it at 120 rpm.'));
+    state.goal!.constraints = state.goal!.constraints.filter((item) => ['angular_travel', 'assembly_integrity'].includes(item.metric));
+    state.motors[0].maxRpm = 1;
+
+    const failed = await simulateDesign(state);
+    expect(failed.metrics.measures.find((item) => item.metric === 'angular_travel')).toMatchObject({ status: 'fail' });
+    const startingRpm = state.motors[0].maxRpm;
+    state = commitSimulation(state, failed, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'reach the required measured angular travel' });
+    expect(state.motors[0].maxRpm).toBeGreaterThan(startingRpm);
+
+    const passed = await simulateDesign(state);
+    expect(passed.metrics.measures.find((item) => item.metric === 'angular_travel')).toMatchObject({ status: 'pass' });
+    expect(passed.status).toBe('passed');
   }, 30_000);
 
   it('keeps the solar e-bike together while animating its centered wheel drive', async () => {

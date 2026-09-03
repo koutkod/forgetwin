@@ -342,6 +342,16 @@ function optimizationActions(state: ForgeState, run: SimulationRun) {
     if (motor.maxRpm !== before) actions.push({ targetId: motor.id, field: 'maxRpm', before, after: motor.maxRpm, reason: 'Increase cycle speed from measured throughput or travel time.' });
   }
 
+  const angularTravelReading = failed.find((reading) => reading.metric === 'angular_travel');
+  if (angularTravelReading) for (const motor of state.motors) {
+    const before = motor.maxRpm;
+    const requestedTravel = Math.max(.001, satisfyingValue(angularTravelReading));
+    const measuredTravel = Math.max(Math.abs(angularTravelReading.value), .001);
+    const travelScale = requestedTravel / measuredTravel;
+    motor.maxRpm = Number(Math.min(2400, Math.max(.1, motor.maxRpm * travelScale)).toFixed(3));
+    if (motor.maxRpm !== before) actions.push({ targetId: motor.id, field: 'maxRpm', before, after: motor.maxRpm, reason: 'Retune shaft speed from the measured angular travel over the simulation window.' });
+  }
+
   if (metrics.has('peak_acceleration')) for (const actuator of state.actuators) {
     const before = actuator.maxSpeed;
     actuator.maxSpeed = Number(Math.max(.08, actuator.maxSpeed / factorFor('peak_acceleration')).toFixed(3));
