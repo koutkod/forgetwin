@@ -483,6 +483,10 @@ export function ForgeTwinApp() {
   const localEditCommands = (instruction: string): EditCommand[] => {
     const world = getSnapshot();
     const text = instruction.toLowerCase();
+    // Direction words after preservation clauses describe constraints, not
+    // another translation. For example, “move the headlight higher, keep it
+    // facing forward” must not also push the light along +X.
+    const movementInstruction = text.split(/\b(?:keep|preserve|without|don['’]?t|do not|leave)\b/, 1)[0].trim();
     const headlightRequest = /\b(headlights?|head lamps?|lamps?|bike lights?|work lights?)\b/.test(text);
     const addingComponent = /\b(add|create|attach)\b/.test(text);
     const aliases: Record<string, string[]> = {
@@ -564,13 +568,13 @@ export function ForgeTwinApp() {
     if (material) return editTargets.map((item) => ({ tool: 'set_material', input: { component_id: item.id, material_id: material.id }, label: `Use ${material.name} for ${item.role}` }));
     if (/\b(heavier|increase mass|more mass)\b/.test(text)) return editTargets.map((item) => ({ tool: 'set_mass', input: { component_id: item.id, mass: Number((item.mass * 1.25).toFixed(3)) }, label: `Increase ${item.role} mass` }));
     if (/\b(lighter|reduce mass|less mass)\b/.test(text)) return editTargets.map((item) => ({ tool: 'set_mass', input: { component_id: item.id, mass: Number((item.mass * .8).toFixed(3)) }, label: `Reduce ${item.role} mass` }));
-    const distanceMatch = text.match(/(\d+(?:\.\d+)?)\s*(mm|millimeters?|cm|centimeters?|m|meters?)\b/);
-    const rawDistance = Number(distanceMatch?.[1] ?? .5);
+    const distanceMatch = movementInstruction.match(/(\d+(?:\.\d+)?)\s*(mm|millimeters?|cm|centimeters?|m|meters?)\b/);
+    const rawDistance = Number(distanceMatch?.[1] ?? (/\b(?:a little|slightly|small amount)\b/.test(movementInstruction) ? .1 : .5));
     const distance = distanceMatch?.[2]?.startsWith('mm') ? rawDistance / 1000 : distanceMatch?.[2]?.startsWith('c') ? rawDistance / 100 : rawDistance;
-    const movementContext = namedMatch?.index === undefined ? text : text.slice(namedMatch.index + namedMatch[0].length);
-    const movementRequested = /\b(?:left|right|up|higher|raise|down|lower|forward|back|backward)\b/.test(text);
+    const movementContext = namedMatch?.index === undefined ? movementInstruction : movementInstruction.slice(namedMatch.index + namedMatch[0].length);
+    const movementRequested = /\b(?:left|right|up|higher|raise|down|lower|forward|back|backward)\b/.test(movementInstruction);
     if (movementRequested) return editTargets.map((item) => {
-      const moved = translateInForgeCoordinates(item.position, text, movementContext, distance);
+      const moved = translateInForgeCoordinates(item.position, movementInstruction, movementContext, distance);
       return { tool: 'move_component', input: { component_id: item.id, position: moved }, label: `Move ${item.role}` };
     });
     if (/\brotate|angle|tilt\b/.test(text)) {
