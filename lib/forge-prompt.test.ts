@@ -168,22 +168,46 @@ describe('ForgeTwin world-first brief compiler', () => {
     const motorcycle = compileDesignBrief(engineeringExamples.find((item) => item.id === 'motorcycle')!.prompt);
     const steeringMembers = motorcycle.components.filter((item) => item.parameters?.motorcycle_steering_member || item.parameters?.motorcycle_front_wheel);
     expect(steeringMembers.length).toBeGreaterThanOrEqual(7);
-    expect(steeringMembers.every((item) => item.parameters?.motorcycle_steering_pivot_x === .72 && item.parameters?.motorcycle_steering_pivot_y === 1.55)).toBe(true);
+    expect(steeringMembers.every((item) => item.parameters?.motorcycle_steering_pivot_x === .72 && item.parameters?.motorcycle_steering_pivot_y === 1.55 && item.parameters?.motorcycle_steering_pivot_z === 0)).toBe(true);
+    const steeringAxes = steeringMembers.map((item) => [
+      Number(item.parameters?.motorcycle_steering_axis_x),
+      Number(item.parameters?.motorcycle_steering_axis_y),
+      Number(item.parameters?.motorcycle_steering_axis_z),
+    ]);
+    expect(new Set(steeringAxes.map((axis) => axis.join(',')))).toHaveLength(1);
+    expect(steeringAxes.every((axis) => Math.hypot(...axis) === 1 && axis[0] < 0 && axis[1] > 0 && axis[2] === 0)).toBe(true);
+    expect(steeringMembers.every((item) => item.parameters?.motorcycle_steering_axis === 'raked-up-rearward' && Number(item.parameters?.motorcycle_steering_rake_deg) > 20)).toBe(true);
 
     const airplane = compileDesignBrief(engineeringExamples.find((item) => item.id === 'airplane')!.prompt);
     const propeller = airplane.components.find((item) => item.primitive === 'propeller')!;
     const propellerJoint = airplane.joints.find((item) => item.type === 'revolute' && item.componentB === propeller.id)!;
     expect(propeller.parameters).toMatchObject({ rotor_axis: 'forward', powered_propulsor: true });
     expect(propellerJoint.axis).toEqual([1, 0, 0]);
+    expect(propeller.rotation).toEqual([0, Math.PI / 2, 0]);
     expect(airplane.motors.some((motor) => motor.jointId === propellerJoint.id)).toBe(true);
     expect(airplane.components.filter((item) => item.parameters?.aircraft_control_surface).every((item) => Number.isFinite(item.parameters?.motion_pivot_x))).toBe(true);
 
     const helicopter = compileDesignBrief(engineeringExamples.find((item) => item.id === 'helicopter')!.prompt);
     const mainRotor = helicopter.components.find((item) => item.parameters?.main_rotor)!;
     const tailRotor = helicopter.components.find((item) => item.parameters?.tail_rotor)!;
+    const tailMotor = helicopter.components.find((item) => item.parameters?.helicopter_tail_motor)!;
+    const tailBearing = helicopter.components.find((item) => item.parameters?.helicopter_tail_bearing)!;
+    const tailShaft = helicopter.components.find((item) => item.parameters?.helicopter_tail_shaft)!;
     expect(helicopter.components.filter((item) => item.assemblyId === mainRotor.assemblyId).every((item) => item.parameters?.rotorcraft_hover_member)).toBe(true);
     expect(helicopter.joints.find((item) => item.componentB === mainRotor.id)?.axis).toEqual([0, 1, 0]);
-    expect(helicopter.joints.find((item) => item.componentB === tailRotor.id)?.axis).toEqual([1, 0, 0]);
+    expect(mainRotor.rotation).toEqual([0, 0, 0]);
+    const tailRotorJoint = helicopter.joints.find((item) => item.type === 'revolute' && item.componentB === tailRotor.id)!;
+    expect(tailRotorJoint.componentA).toBe(tailBearing.id);
+    expect(tailRotorJoint.axis).toEqual([0, 0, 1]);
+    expect(tailRotor.rotation).toEqual([0, 0, 0]);
+    expect(tailRotor.position[2]).toBeGreaterThan(.1);
+    expect(tailBearing.position[2]).toBeGreaterThan(tailMotor.position[2]);
+    expect(tailShaft.position[2]).toBeGreaterThan(tailBearing.position[2]);
+    expect(tailShaft.position[2]).toBeLessThan(tailRotor.position[2]);
+    expect(tailShaft.rotation).toEqual([Math.PI / 2, 0, 0]);
+    expect(helicopter.joints.some((item) => item.type === 'fixed' && item.componentA === tailMotor.id && item.componentB === tailBearing.id)).toBe(true);
+    expect(helicopter.joints.some((item) => item.type === 'fixed' && item.componentA === tailMotor.id && item.componentB === tailShaft.id)).toBe(true);
+    expect(helicopter.motors.some((motor) => motor.componentId === tailMotor.id && motor.jointId === tailRotorJoint.id)).toBe(true);
   });
 
   it('does not confuse engineering measurements with primitive quantities', () => {

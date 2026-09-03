@@ -15,6 +15,21 @@ const cases = [
   ['sorter', 'Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.'],
 ] as const;
 
+function accumulatedAngularTravel(run: Awaited<ReturnType<typeof simulateDesign>>, componentId: string) {
+  const samples = run.replay.flatMap((frame) => frame.items.filter((item) => item.id === componentId).map((item) => item.rotation));
+  return samples.slice(1).reduce((sum, rotation, index) => {
+    const previous = samples[index];
+    const dot = Math.abs(rotation[0] * previous[0] + rotation[1] * previous[1] + rotation[2] * previous[2] + rotation[3] * previous[3]);
+    return sum + 2 * Math.acos(Math.min(1, Math.max(-1, dot)));
+  }, 0);
+}
+
+function maximumCenterDrift(run: Awaited<ReturnType<typeof simulateDesign>>, componentId: string, origin: readonly number[]) {
+  return Math.max(...run.replay.flatMap((frame) => frame.items.filter((item) => item.id === componentId).map((item) => Math.hypot(
+    item.position[0] - origin[0], item.position[1] - origin[1], item.position[2] - origin[2],
+  ))));
+}
+
 async function failOptimizePass(prompt: string) {
   let state = assemblePlan(compileDesignBrief(prompt));
   const failed = await simulateDesign(state);
@@ -71,6 +86,28 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.physics.joints).toBeGreaterThanOrEqual(1);
     expect(middle.rotation).not.toEqual(first.rotation);
     expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
+  }, 30_000);
+
+  it('keeps aircraft propulsors on their mounted shafts while physics drives every rotor', async () => {
+    const airplane = assemblePlan(compileDesignBrief('Build an electric fixed-wing aircraft with a propeller and landing gear.'));
+    const airplanePropeller = airplane.components.find((item) => item.parameters.powered_propulsor)!;
+    const airplaneRun = await simulateDesign(airplane);
+    expect(airplane.joints.find((item) => item.componentB === airplanePropeller.id)?.axis).toEqual([1, 0, 0]);
+    expect(accumulatedAngularTravel(airplaneRun, airplanePropeller.id)).toBeGreaterThan(20);
+    expect(maximumCenterDrift(airplaneRun, airplanePropeller.id, airplanePropeller.position)).toBeLessThan(.04);
+    expect(airplaneRun.collisions.filter((item) => item.harmful && (item.bodyA === airplanePropeller.id || item.bodyB === airplanePropeller.id))).toHaveLength(0);
+
+    const helicopter = assemblePlan(compileDesignBrief('Build a utility helicopter with a main rotor and tail rotor.'));
+    const mainRotor = helicopter.components.find((item) => item.parameters.main_rotor)!;
+    const tailRotor = helicopter.components.find((item) => item.parameters.tail_rotor)!;
+    const helicopterRun = await simulateDesign(helicopter);
+    expect(helicopter.joints.find((item) => item.componentB === mainRotor.id)?.axis).toEqual([0, 1, 0]);
+    expect(helicopter.joints.find((item) => item.componentB === tailRotor.id)?.axis).toEqual([0, 0, 1]);
+    expect(accumulatedAngularTravel(helicopterRun, mainRotor.id)).toBeGreaterThan(20);
+    expect(accumulatedAngularTravel(helicopterRun, tailRotor.id)).toBeGreaterThan(20);
+    expect(maximumCenterDrift(helicopterRun, mainRotor.id, mainRotor.position)).toBeLessThan(.04);
+    expect(maximumCenterDrift(helicopterRun, tailRotor.id, tailRotor.position)).toBeLessThan(.04);
+    expect(helicopterRun.collisions.filter((item) => item.harmful && [mainRotor.id, tailRotor.id].some((id) => item.bodyA === id || item.bodyB === id))).toHaveLength(0);
   }, 30_000);
 
   it('measures centrifugal flow from the driven impeller and complete hydraulic path', async () => {

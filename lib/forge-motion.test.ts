@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { accumulationZoneActivity, ackermannSteeringAngles, aircraftControlSurfaceAngle, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, motorcycleSteeringAngle, productOperationPoseAtProgress, propulsorVisualMotion, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, rollingWheelAngle, rotatePoseAroundPivot, rotorcraftHoverOffset, sampleClearancePath, terrainWheelTravel, translateInForgeCoordinates } from './forge-motion';
+import { accumulationZoneActivity, accumulationZoneRollerAngle, ackermannSteeringAngles, aircraftControlSurfaceAngle, animatedCableEndpoints, componentOwnsLocalMotion, createMechanismMotionGraph, drawbridgeLiftAngle, motorcycleSteeringAngle, productOperationPoseAtProgress, propulsorVisualMotion, propulsorWorldAxis, recyclingBeltSurfaceOffset, recyclingBlowerAngle, resolveScenePlayback, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, rollingWheelAngle, rotatePoseAroundPivot, rotorcraftHoverOffset, roverSpringMotion, sampleClearancePath, terrainWheelTravel, tomatoRollingAngle, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -39,6 +39,30 @@ describe('collision-safe material-flow animation', () => {
       expect(collected[1]).toBeGreaterThan(.3);
       expect(collected[1]).toBeLessThan(.87);
     }
+  });
+
+  it('rolls tomatoes by traveled distance and stops adding spin during the vertical bin drop', () => {
+    const tomato = product('tomato', [.43, .43, .43], { grade: 'ripe' });
+    const early = tomatoRollingAngle(tomato, .2);
+    const routed = tomatoRollingAngle(tomato, .8);
+    const dropStart = tomatoRollingAngle(tomato, .84);
+    const collected = tomatoRollingAngle(tomato, .99);
+    expect(early).toBeLessThan(0);
+    expect(routed).toBeLessThan(early);
+    expect(collected).toBeCloseTo(dropStart, 8);
+    expect(productOperationPoseAtProgress(tomato, .8)?.rotation[2]).toBeCloseTo(routed, 8);
+    expect(Math.abs(tomatoRollingAngle(product('tomato', [.3, .3, .3], { grade: 'ripe' }), .8))).toBeGreaterThan(Math.abs(routed));
+    expect(tomatoRollingAngle(product('package-red', [.43, .43, .43]), .8)).toBe(0);
+  });
+
+  it('samples the same tomato roll after arbitrary scrubs and returns to its rest pose on restart', () => {
+    const tomato = product('tomato', [.43, .43, .43], { grade: 'damaged' });
+    const expected = tomatoRollingAngle(tomato, .67);
+    tomatoRollingAngle(tomato, .93);
+    tomatoRollingAngle(tomato, .12);
+    expect(tomatoRollingAngle(tomato, .67)).toBe(expected);
+    expect(tomatoRollingAngle(tomato, 0)).toBe(0);
+    expect(tomatoRollingAngle(tomato, Number.NaN)).toBe(0);
   });
 
   it('keeps sorter cartons outside the diverter and drops them inside—not through—the bin walls', () => {
@@ -128,6 +152,33 @@ describe('road vehicle operation motion', () => {
     expect(terrainWheelTravel(0, 0)).toBeCloseTo(0, 8);
   });
 
+  it('compresses each flagged rover spring while keeping its chassis end fixed', () => {
+    const spring: MachineComponent = {
+      ...body('rover spring', [0, .82, 0]),
+      primitive: 'spring',
+      dimensions: [.12, .55, .12],
+      parameters: { rover_suspension_spring: true, operation_index: 2 },
+    };
+    const motion = roverSpringMotion(spring, 1.2);
+    const halfLength = spring.dimensions[1] / 2;
+    const upperEnd = motion.centerTravel + halfLength * motion.scaleY;
+    const lowerEnd = motion.centerTravel - halfLength * motion.scaleY;
+    expect(motion.wheelTravel).toBeCloseTo(terrainWheelTravel(1.2, 2), 8);
+    expect(motion.compression).toBe(motion.wheelTravel);
+    expect(upperEnd).toBeCloseTo(halfLength, 8);
+    expect(lowerEnd).toBeCloseTo(-halfLength + motion.wheelTravel, 8);
+  });
+
+  it('samples rover spring travel deterministically by operation index and resets safely', () => {
+    const spring = { ...body('rover spring', [0, 0, 0]), primitive: 'spring' as const, dimensions: [.12, .55, .12] as [number, number, number], parameters: { rover_suspension_spring: true, operation_index: 1 } };
+    const expected = roverSpringMotion(spring, 2.3);
+    roverSpringMotion(spring, 8);
+    roverSpringMotion(spring, .1);
+    expect(roverSpringMotion(spring, 2.3)).toEqual(expected);
+    expect(roverSpringMotion({ ...spring, parameters: {} }, 2.3)).toEqual({ wheelTravel: 0, centerTravel: 0, compression: 0, scaleY: 1 });
+    expect(roverSpringMotion(spring, Number.NaN).wheelTravel).toBeCloseTo(terrainWheelTravel(0, 1), 8);
+  });
+
   it('steers a motorcycle fork and front wheel around one shared head pivot', () => {
     const pivot: [number, number, number] = [.72, 1.55, 0];
     const angle = motorcycleSteeringAngle(1.8);
@@ -137,6 +188,71 @@ describe('road vehicle operation motion', () => {
     const movedDistance = Math.hypot(...fork.position.map((value, axis) => value - wheel.position[axis]));
     expect(movedDistance).toBeCloseTo(initialDistance, 6);
     expect(fork.rotation[1]).toBeCloseTo(wheel.rotation[1], 6);
+  });
+});
+
+describe('scene playback and local motion ownership', () => {
+  it('keeps an idle scene at its authored rest pose', () => {
+    expect(resolveScenePlayback({ previewPlaying: false, previewElapsed: 8.5 })).toEqual({
+      mode: 'idle', elapsed: 0, active: false, frameDriven: false,
+      replayMode: null, evaluationLevel: null, authoritativeBodyTransforms: false,
+    });
+  });
+
+  it('advances a kinematic preview from its deterministic preview clock', () => {
+    expect(resolveScenePlayback({ previewPlaying: true, previewElapsed: 1.25 })).toEqual({
+      mode: 'preview', elapsed: 1.25, active: true, frameDriven: false,
+      replayMode: null, evaluationLevel: 'kinematic-preview', authoritativeBodyTransforms: false,
+    });
+  });
+
+  it('uses a normal replay frame even though the preview toggle is off', () => {
+    const playback = resolveScenePlayback({
+      previewPlaying: false, previewElapsed: 9, frameTime: .42,
+      replayMode: 'normal', evaluationLevel: 'reduced-order',
+    });
+    expect(playback).toMatchObject({ mode: 'replay', elapsed: .42, active: true, frameDriven: true, replayMode: 'normal', evaluationLevel: 'reduced-order', authoritativeBodyTransforms: false });
+  });
+
+  it('makes a physics failure replay authoritative over a running preview', () => {
+    const playback = resolveScenePlayback({
+      previewPlaying: true, previewElapsed: 7, frameTime: 1.8,
+      replayMode: 'failure', evaluationLevel: 'physics-replay',
+    });
+    expect(playback).toMatchObject({ mode: 'replay', elapsed: 1.8, active: true, frameDriven: true, replayMode: 'failure', authoritativeBodyTransforms: true });
+  });
+
+  it('treats an exact zero-time replay frame as active and rejects invalid clocks', () => {
+    expect(resolveScenePlayback({ previewPlaying: false, previewElapsed: 0, frameTime: 0, replayMode: 'normal', evaluationLevel: 'concept-only' })).toMatchObject({ mode: 'replay', elapsed: 0, active: true, frameDriven: true });
+    expect(resolveScenePlayback({ previewPlaying: true, previewElapsed: Number.NaN, frameTime: Number.NaN })).toMatchObject({ mode: 'preview', elapsed: 0, active: true, frameDriven: false });
+  });
+
+  it('enumerates locally rendered DOFs so an outer pose cannot apply them twice', () => {
+    const frontWheel = { ...body('front road wheel', [0, 0, 0]), primitive: 'wheel' as const, parameters: { road_vehicle_wheel: true, road_vehicle_front_steering: true } };
+    const brake = { ...body('front brake disc', [0, 0, 0]), primitive: 'gear' as const, parameters: { road_vehicle_brake: true } };
+    const motorcycleWheel = { ...body('motorcycle wheel', [0, 0, 0]), primitive: 'wheel' as const, parameters: { motorcycle_wheel: true } };
+    const bicycleWheel = { ...body('bicycle wheel', [0, 0, 0]), primitive: 'wheel' as const, parameters: { bicycle_wheel: true } };
+    expect(componentOwnsLocalMotion(frontWheel)).toEqual(['wheel-roll', 'wheel-steer']);
+    expect(componentOwnsLocalMotion(brake)).toEqual(['wheel-roll']);
+    expect(componentOwnsLocalMotion(motorcycleWheel)).toEqual(['wheel-roll']);
+    expect(componentOwnsLocalMotion(bicycleWheel)).toEqual(['wheel-roll']);
+
+    const propeller = { ...body('propeller', [0, 0, 0]), primitive: 'propeller' as const };
+    const rotor = { ...body('rotor', [0, 0, 0]), primitive: 'rotor' as const };
+    const roller = { ...body('roller', [0, 0, 0]), primitive: 'roller' as const };
+    const shaft = { ...body('shaft', [0, 0, 0]), primitive: 'shaft' as const, parameters: { operation_spin: 2 } };
+    expect(componentOwnsLocalMotion(propeller)).toEqual(['propulsor-spin']);
+    expect(componentOwnsLocalMotion(rotor)).toEqual(['propulsor-spin']);
+    expect(componentOwnsLocalMotion(roller)).toEqual(['roller-spin']);
+    expect(componentOwnsLocalMotion(shaft)).toEqual(['shaft-spin']);
+    expect(componentOwnsLocalMotion({ ...body('gear', [0, 0, 0]), primitive: 'gear' as const })).toEqual([]);
+  });
+
+  it('leaves robot articulation servos to their joint graph while owning ordinary servo horns', () => {
+    const ordinary = { ...body('servo', [0, 0, 0]), primitive: 'servo' as const };
+    const robot = { ...body('robot joint servo', [0, 0, 0]), primitive: 'servo' as const, parameters: { robot_arm_joint: true } };
+    expect(componentOwnsLocalMotion(ordinary)).toEqual(['servo-horn']);
+    expect(componentOwnsLocalMotion(robot)).toEqual([]);
   });
 });
 
@@ -155,12 +271,30 @@ describe('aircraft and rotorcraft operation motion', () => {
   });
 
   it('uses one correct spin axis for airplane, main-rotor, and tail-rotor blades', () => {
-    const airplane = { ...body('aircraft propeller', [0, 0, 0]), primitive: 'propeller' as const, role: 'three-blade aircraft propeller', parameters: { rotor_axis: 'forward' } };
+    const airplane = { ...body('aircraft propeller', [0, 0, 0]), primitive: 'propeller' as const, role: 'three-blade aircraft propeller', rotation: [0, Math.PI / 2, 0] as [number, number, number], parameters: { rotor_axis: 'forward' } };
     const main = { ...body('main rotor', [0, 0, 0]), primitive: 'rotor' as const, role: 'four-blade main lift rotor', parameters: { rotor_axis: 'vertical', main_rotor: true } };
     const tail = { ...body('tail rotor', [0, 0, 0]), primitive: 'propeller' as const, role: 'anti-torque tail rotor', parameters: { rotor_axis: 'tail', tail_rotor: true } };
     expect(propulsorVisualMotion(airplane, 1, 1)).toMatchObject({ axis: 'z', angle: 7.4 });
     expect(propulsorVisualMotion(main, 1, 1)).toMatchObject({ axis: 'y', angle: 4.8 });
     expect(propulsorVisualMotion(tail, 1, 1)).toMatchObject({ axis: 'z', angle: -8.6 });
+
+    expect(new Vector3(...propulsorWorldAxis(airplane)).dot(new Vector3(1, 0, 0))).toBeCloseTo(1, 8);
+    expect(new Vector3(...propulsorWorldAxis(main)).dot(new Vector3(0, 1, 0))).toBeCloseTo(1, 8);
+    expect(new Vector3(...propulsorWorldAxis(tail)).dot(new Vector3(0, 0, 1))).toBeCloseTo(1, 8);
+  });
+
+  it('moves every marked propulsor between adjacent 60 Hz render frames', () => {
+    const propulsors: MachineComponent[] = [
+      { ...body('aircraft propeller', [0, 0, 0]), primitive: 'propeller' as const, role: 'three-blade aircraft propeller', parameters: { rotor_axis: 'forward' } },
+      { ...body('main rotor', [0, 0, 0]), primitive: 'rotor' as const, role: 'four-blade main lift rotor', parameters: { rotor_axis: 'vertical', main_rotor: true } },
+      { ...body('tail rotor', [0, 0, 0]), primitive: 'propeller' as const, role: 'anti-torque tail rotor', parameters: { rotor_axis: 'tail', tail_rotor: true } },
+    ];
+    for (const propulsor of propulsors) {
+      const first = propulsorVisualMotion(propulsor, 0, 3).angle;
+      const second = propulsorVisualMotion(propulsor, 1 / 60, 3).angle;
+      expect(Math.abs(second - first)).toBeGreaterThan(.1);
+      expect(Math.abs(second - first)).toBeLessThan(.5);
+    }
   });
 });
 
@@ -194,12 +328,68 @@ describe('zero-pressure accumulation motion', () => {
       expect(commands.filter((command) => command > .01)).toHaveLength(1);
     });
   });
+
+  it('integrates each zone into an absolute roller angle that holds while stopped', () => {
+    const activeEnd = 1.45 * .82;
+    expect(accumulationZoneRollerAngle(0, 0)).toBe(0);
+    expect(accumulationZoneRollerAngle(.58, 0)).toBeLessThan(0);
+    expect(accumulationZoneRollerAngle(activeEnd, 0)).toBeCloseTo(accumulationZoneRollerAngle(1.4, 0), 8);
+    expect(accumulationZoneRollerAngle(1.4, 1)).toBe(0);
+    expect(accumulationZoneRollerAngle(2.03, 1)).toBeLessThan(0);
+    expect(accumulationZoneRollerAngle(5.9, 0)).toBeLessThan(accumulationZoneRollerAngle(1.4, 0));
+  });
+
+  it('reconstructs accumulation roller pose after backward scrubs and restart', () => {
+    const expected = accumulationZoneRollerAngle(3.27, 1, 1.4);
+    accumulationZoneRollerAngle(9.5, 1, 1.4);
+    accumulationZoneRollerAngle(.2, 1, 1.4);
+    expect(accumulationZoneRollerAngle(3.27, 1, 1.4)).toBe(expected);
+    expect(accumulationZoneRollerAngle(0, 1, 1.4)).toBe(0);
+    expect(Number.isFinite(accumulationZoneRollerAngle(Number.NaN, Number.NaN, Number.NaN))).toBe(true);
+  });
+});
+
+describe('recycling local operation motion', () => {
+  const belt = { parameters: { magnetic_belt: true } };
+  const blower = { parameters: { classifier_blower: true } };
+
+  it('returns a wrapped absolute belt phase only for the magnetic takeaway belt', () => {
+    const expected = recyclingBeltSurfaceOffset(belt, 2.37, 1.2);
+    recyclingBeltSurfaceOffset(belt, 8.8, 1.2);
+    recyclingBeltSurfaceOffset(belt, .1, 1.2);
+    expect(recyclingBeltSurfaceOffset(belt, 2.37, 1.2)).toBe(expected);
+    expect(expected).toBeGreaterThanOrEqual(0);
+    expect(expected).toBeLessThan(1);
+    expect(recyclingBeltSurfaceOffset({ parameters: {} }, 2.37)).toBe(0);
+    expect(recyclingBeltSurfaceOffset(belt, 0)).toBe(0);
+  });
+
+  it('returns an absolute impeller angle only for the classifier blower', () => {
+    const first = recyclingBlowerAngle(blower, .5);
+    const second = recyclingBlowerAngle(blower, 1);
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeCloseTo(first * 2, 8);
+    recyclingBlowerAngle(blower, 7);
+    expect(recyclingBlowerAngle(blower, .5)).toBe(first);
+    expect(recyclingBlowerAngle({ parameters: {} }, 1)).toBe(0);
+    expect(recyclingBlowerAngle(blower, Number.NaN)).toBe(0);
+  });
 });
 
 describe('joint-authored operation motion', () => {
   it('rotates a continuous driven joint around its anchor without separating it', () => {
     const components = [body('base', [0, 0, 0], 'fixed'), body('arm', [1, 0, 0])];
     const joints: Joint[] = [{ id: 'pivot', type: 'revolute', componentA: 'base', componentB: 'arm', anchorA: [0, 0, 0], anchorB: [-1, 0, 0], axis: [0, 0, 1] }];
+    const pose = createMechanismMotionGraph(components, joints, [motor('pivot')], []).poseAt('arm', .5)!;
+    const anchor = new Vector3(-1, 0, 0).applyQuaternion(new Quaternion().setFromEuler(new Euler(...pose.rotation, 'XYZ'))).add(new Vector3(...pose.position));
+    expect(pose.animated).toBe(true);
+    expect(anchor.length()).toBeLessThan(1e-6);
+    expect(Math.abs(pose.rotation[2])).toBeGreaterThan(.1);
+  });
+
+  it('keeps the same driven-body motion when a model authors joint endpoints in reverse order', () => {
+    const components = [body('base', [0, 0, 0], 'fixed'), body('arm', [1, 0, 0])];
+    const joints: Joint[] = [{ id: 'pivot', type: 'revolute', componentA: 'arm', componentB: 'base', anchorA: [-1, 0, 0], anchorB: [0, 0, 0], axis: [0, 0, 1] }];
     const pose = createMechanismMotionGraph(components, joints, [motor('pivot')], []).poseAt('arm', .5)!;
     const anchor = new Vector3(-1, 0, 0).applyQuaternion(new Quaternion().setFromEuler(new Euler(...pose.rotation, 'XYZ'))).add(new Vector3(...pose.position));
     expect(pose.animated).toBe(true);

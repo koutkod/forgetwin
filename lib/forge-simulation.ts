@@ -1,4 +1,5 @@
 import { materialFor, primitiveCatalog } from './forge-data';
+import { resolveDrivenJointEndpoint } from './forge-joint-drive';
 import { SUPPORTED_METRICS } from './forge-metrics';
 import { roadVehicleDriveDirection } from './forge-motion';
 import type {
@@ -27,6 +28,7 @@ function usesReducedOrderCollider(item: MachineComponent) {
     || item.parameters.parallel_lift_platform || item.parameters.parallel_lift_payload || item.parameters.parallel_lift_cylinder
     || item.parameters.vise_moving || item.parameters.vise_screw
     || item.parameters.wind_yaw_moving || item.parameters.wind_rotor_shaft || item.parameters.wind_rotor_hub || item.parameters.wind_rotor_blade
+    || item.parameters.helicopter_tail_boom
     || item.parameters.drill_press_moving || item.parameters.drill_press_feed_handle
     || item.parameters.steering_rack || item.parameters.steering_pinion || item.parameters.steering_column || item.parameters.steering_input_wheel || item.parameters.steering_tie_rod || item.parameters.steering_knuckle || item.parameters.steering_road_wheel
     || item.parameters.bicycle_brake_axle || item.parameters.bicycle_brake_wheel || item.parameters.bicycle_brake_pad || item.parameters.bicycle_brake_piston || item.parameters.bicycle_brake_lever
@@ -102,7 +104,8 @@ export function assertRunnableDesign(state: ForgeState) {
   const validDrivenJoint = (jointId: string | undefined) => {
     if (!jointId) return false;
     const drivenJoint = state.joints.find((item) => item.id === jointId);
-    return Boolean(drivenJoint && drivenJoint.type !== 'fixed' && componentById.get(drivenJoint.componentB)?.bodyType !== 'fixed');
+    const endpoint = drivenJoint ? resolveDrivenJointEndpoint(drivenJoint, state.components) : null;
+    return Boolean(drivenJoint && drivenJoint.type !== 'fixed' && endpoint?.driven.bodyType !== 'fixed');
   };
   const hasUnboundMotorOutput = (componentId: string) => state.connections.some((item) => ['mechanical', 'power'].includes(item.type)
     && (item.sourceId === componentId || item.targetId === componentId));
@@ -140,6 +143,24 @@ function eulerQuaternion(rotation: Vec3) {
 }
 
 type QuaternionLike = { x: number; y: number; z: number; w: number };
+
+function isPropulsorComponent(item: MachineComponent) {
+  return item.primitive === 'propeller' || item.primitive === 'rotor';
+}
+
+/** Rapier cylinders are authored on local Y. Propulsor bodies intentionally
+ * start at identity so a revolute joint's declared axis is also its physical
+ * world shaft axis. This quaternion turns the small hub collider from Y onto
+ * that shaft without rotating the body (and therefore without invalidating the
+ * joint's child-local axis). */
+function cylinderFromYAxis(axis: Vec3): QuaternionLike {
+  const length = Math.hypot(...axis) || 1;
+  const x = axis[0] / length, y = axis[1] / length, z = axis[2] / length;
+  if (y < -.999999) return { x: 1, y: 0, z: 0, w: 0 };
+  const q = { x: z, y: 0, z: -x, w: 1 + y };
+  const qLength = Math.hypot(q.x, q.y, q.z, q.w) || 1;
+  return { x: q.x / qLength, y: 0, z: q.z / qLength, w: q.w / qLength };
+}
 
 function multiplyQuaternion(a: QuaternionLike, b: QuaternionLike): QuaternionLike {
   return {
@@ -256,7 +277,7 @@ function worldAnalysis(state: ForgeState) {
   const bore = Number(piston?.parameters.bore_m ?? 0);
   const stroke = Number(piston?.parameters.stroke_m ?? 0);
   const crankShaft = state.components.find((item) => /crank shaft/.test(item.role));
-  const crankJoint = crankShaft ? state.joints.find((item) => item.type === 'revolute' && item.componentB === crankShaft.id) : undefined;
+  const crankJoint = crankShaft ? state.joints.find((item) => item.type === 'revolute' && resolveDrivenJointEndpoint(item, state.components)?.driven.id === crankShaft.id) : undefined;
   const pistonMotor = crankJoint ? state.motors.find((item) => item.jointId === crankJoint.id) : undefined;
   const pistonRpm = pistonMotor?.maxRpm ?? 0;
   const pistonEfficiency = clamp(Number(piston?.parameters.volumetric_efficiency ?? .82), .2, 1);
@@ -542,11 +563,13 @@ function buildRequirementCoverage(state: ForgeState, measures: MetricReading[], 
   const drivenIds = new Set<string>();
   for (const motor of state.motors) {
     const joint = state.joints.find((item) => item.id === motor.jointId);
-    if (joint) drivenIds.add(joint.componentB);
+    const endpoint = joint ? resolveDrivenJointEndpoint(joint, state.components) : null;
+    if (endpoint) drivenIds.add(endpoint.driven.id);
   }
   for (const actuator of state.actuators) {
     const joint = state.joints.find((item) => item.id === actuator.jointId);
-    if (joint) drivenIds.add(joint.componentB);
+    const endpoint = joint ? resolveDrivenJointEndpoint(joint, state.components) : null;
+    if (endpoint) drivenIds.add(endpoint.driven.id);
   }
   const stationary = [...drivenIds].filter((id) => movementFor(replay, id) < .004);
   const motionRequired = state.goal!.capabilities.some((capability) => ['transport', 'lift', 'mobile', 'manipulate', 'transmit', 'track', 'rotate'].includes(capability));
@@ -688,7 +711,8 @@ function commandedRpmAt(state: ForgeState, targetId: string) {
   }
   for (const motor of state.motors) {
     const drivenJoint = state.joints.find((item) => item.id === motor.jointId);
-    const queue: Array<{ id: string; rpm: number }> = [{ id: drivenJoint?.componentB ?? motor.componentId, rpm: motor.maxRpm * motor.direction }];
+    const endpoint = drivenJoint ? resolveDrivenJointEndpoint(drivenJoint, state.components) : null;
+    const queue: Array<{ id: string; rpm: number }> = [{ id: endpoint?.driven.id ?? motor.componentId, rpm: motor.maxRpm * motor.direction }];
     const visited = new Set<string>();
     while (queue.length) {
       const current = queue.shift()!;
@@ -799,19 +823,36 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       : item.bodyType === 'kinematic'
         ? positionDriven ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.kinematicVelocityBased()
         : RAPIER.RigidBodyDesc.dynamic();
-    descriptor.setTranslation(item.position[0], item.position[1], item.position[2]).setRotation(eulerQuaternion(item.rotation)).setLinearDamping(.28).setAngularDamping(.38);
-    if (item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel || item.parameters.bicycle_sprocket) descriptor.setAdditionalSolverIterations(10);
+    const propulsor = isPropulsorComponent(item);
+    // A propulsor's component rotation describes how its rendered blade disc
+    // is mounted, not a second physical shaft frame. Starting its rigid body at
+    // identity makes the revolute axis unambiguous: airplane X, lift-rotor Y,
+    // and tail-rotor Z. The authored render rotation is restored in replay.
+    descriptor.setTranslation(item.position[0], item.position[1], item.position[2]).setRotation(propulsor ? { x: 0, y: 0, z: 0, w: 1 } : eulerQuaternion(item.rotation)).setLinearDamping(.28).setAngularDamping(.38);
+    if (propulsor) descriptor.setAdditionalSolverIterations(20).setCcdEnabled(true);
+    else if (item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel || item.parameters.bicycle_sprocket) descriptor.setAdditionalSolverIterations(10);
     const body = world.createRigidBody(descriptor);
     const half = item.dimensions.map((value) => Math.max(.01, value / 2)) as Vec3;
     // Bicycle wheels use an open spoked visual. Their reduced-order physics
     // body is the rotating hub, not a solid disc that would incorrectly strike
     // every fork and frame tube passing through the wheel plane.
-    const colliderDescriptor = item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel
+    const propulsorJoint = propulsor ? state.joints.find((joint) => joint.type === 'revolute' && (joint.componentA === item.id || joint.componentB === item.id)) : undefined;
+    const propulsorAxis = propulsorJoint?.axis ?? (item.parameters.rotor_axis === 'vertical' ? [0, 1, 0] as Vec3 : item.parameters.rotor_axis === 'tail' ? [0, 0, 1] as Vec3 : [1, 0, 0] as Vec3);
+    // Blades are a visual envelope; their bearing hub is the collision body.
+    // A full-disc collider intersects the mast/motor and friction-locks a rotor
+    // that is supposed to spin. The compact, zero-friction hub preserves mass,
+    // shaft reactions, collision ownership, and stable clearance at supports.
+    const propulsorRadius = Math.max(.045, Math.min(half[0], half[2]) * .13);
+    const propulsorHalfLength = Math.max(.018, Math.min(half[1] * .42, .055));
+    const colliderDescriptor = propulsor
+      ? RAPIER.ColliderDesc.cylinder(propulsorHalfLength, propulsorRadius)
+      : item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel
       ? RAPIER.ColliderDesc.cylinder(half[1], half[0])
       : item.shape === 'sphere' ? RAPIER.ColliderDesc.ball(half[0]) : item.shape === 'cylinder' ? RAPIER.ColliderDesc.cylinder(half[1], half[0]) : item.shape === 'capsule' ? RAPIER.ColliderDesc.capsule(Math.max(.02, half[1] - half[0]), half[0]) : RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]);
     const material = materialFor(item.materialId);
-    colliderDescriptor.setFriction(material.friction).setRestitution(material.restitution).setMass(item.mass).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-    if (item.parameters.cad_form === 'rotor_hub' || item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel) colliderDescriptor.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
+    colliderDescriptor.setFriction(propulsor ? 0 : material.friction).setRestitution(material.restitution).setMass(item.mass).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+    if (propulsor) colliderDescriptor.setRotation(cylinderFromYAxis(propulsorAxis));
+    else if (item.parameters.cad_form === 'rotor_hub' || item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel) colliderDescriptor.setRotation({ x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 });
     // The duct shroud is represented by a torus in the editor. A solid box
     // collider would incorrectly fill its opening and jam the rotor.
     const reducedOrderVisual = usesReducedOrderCollider(item);
@@ -908,7 +949,10 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   const analysis = worldAnalysis(state);
   const rollingVehicleWheels = state.components.filter((item) => item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel);
   const drivenVehicleWheel = rollingVehicleWheels.find((item) => /rear/i.test(item.role)) ?? rollingVehicleWheels[0];
-  const drivenRoadBodyId = state.motors.map((motor) => state.joints.find((joint) => joint.id === motor.jointId)?.componentB)
+  const drivenRoadBodyId = state.motors.map((motor) => {
+    const joint = state.joints.find((candidate) => candidate.id === motor.jointId);
+    return joint ? resolveDrivenJointEndpoint(joint, state.components)?.driven.id : undefined;
+  })
     .find((id) => {
       const drivenComponent = state.components.find((item) => item.id === id);
       return drivenComponent?.parameters.road_vehicle_wheel_hub || drivenComponent?.parameters.road_vehicle_wheel;
@@ -919,11 +963,12 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     const progress = clamp(time / state.world.duration, 0, 1);
     for (const motor of state.motors) {
       const targetJoint = motor.jointId ? state.joints.find((item) => item.id === motor.jointId) : null;
-      const driven = targetJoint ? bodyById.get(targetJoint.componentB) : bodyById.get(motor.componentId);
+      const endpoint = targetJoint ? resolveDrivenJointEndpoint(targetJoint, state.components) : null;
+      const driven = endpoint ? bodyById.get(endpoint.driven.id) : bodyById.get(motor.componentId);
       if (!driven || (!driven.isDynamic() && !driven.isKinematic())) continue;
       const axis = targetJoint?.axis ?? [0, 1, 0];
       const norm = Math.hypot(...axis) || 1;
-      const drivenComponentId = targetJoint?.componentB ?? motor.componentId;
+      const drivenComponentId = endpoint?.driven.id ?? motor.componentId;
       const drivenComponent = state.components.find((item) => item.id === drivenComponentId);
       // Normalize legacy persisted go-karts created before the forward-drive
       // sign fix. A stopped motor stays stopped; any road-wheel drive command
@@ -941,7 +986,10 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
       // motor bound directly to the output axle (for example a motorcycle
       // chain drive). Do not let the idle visual motor housing overwrite that
       // explicitly commanded axle speed.
-      if (state.motors.some((motor) => state.joints.find((item) => item.id === motor.jointId)?.componentB === relation.componentB)) continue;
+      if (state.motors.some((motor) => {
+        const motorJoint = state.joints.find((item) => item.id === motor.jointId);
+        return motorJoint && resolveDrivenJointEndpoint(motorJoint, state.components)?.driven.id === relation.componentB;
+      })) continue;
       const input = bodyById.get(relation.componentA), output = bodyById.get(relation.componentB);
       if (!input || !output?.isDynamic()) continue;
       const axis = relation.axis; const norm = Math.hypot(...axis) || 1;
@@ -967,8 +1015,9 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     }
     for (const actuator of state.actuators) {
       const targetJoint = state.joints.find((item) => item.id === actuator.jointId);
-      const driven = targetJoint ? bodyById.get(targetJoint.componentB) : null;
-      const drivenComponent = targetJoint ? state.components.find((item) => item.id === targetJoint.componentB) : undefined;
+      const endpoint = targetJoint ? resolveDrivenJointEndpoint(targetJoint, state.components) : null;
+      const driven = endpoint ? bodyById.get(endpoint.driven.id) : null;
+      const drivenComponent = endpoint?.driven;
       const operationCycle = progress < .5 ? progress * 2 : (1 - progress) * 2;
       // Reduced-order press, winch, and scissor-lift outputs are commanded as kinematic load
       // carriers inside the same Rapier world. Their attached tooling/payload
@@ -1100,6 +1149,10 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
         let replayPosition: Vec3 = [p.x, p.y, p.z];
         let replayRotation: QuaternionLike = q;
         let replayVelocity: Vec3 = [v.x, v.y, v.z];
+        // Physics uses an identity-mounted propulsor body so both joint-local
+        // axes agree. Reapply the authored blade-disc mounting transform only
+        // to visual replay (not to the collider or the joint frame).
+        if (isPropulsorComponent(item)) replayRotation = multiplyQuaternion(q, eulerQuaternion(item.rotation));
         if (rotorHub && rotorBladeIds.has(item.id)) {
           const localOffset = item.position.map((value, index) => value - rotorHub.position[index]) as Vec3;
           const offset = rotateVectorByQuaternion(localOffset, q);
@@ -1126,7 +1179,10 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
         // that command for the captured pose instead of exposing solver drift
         // from several tiny fixed accessory bodies.
         if (item.parameters.bicycle_sprocket) {
-          const crankMotor = state.motors.find((motor) => state.joints.find((joint) => joint.id === motor.jointId)?.componentB === item.id);
+          const crankMotor = state.motors.find((motor) => {
+            const joint = state.joints.find((candidate) => candidate.id === motor.jointId);
+            return joint && resolveDrivenJointEndpoint(joint, state.components)?.driven.id === item.id;
+          });
           if (crankMotor) {
             const angle = crankMotor.maxRpm * Math.PI / 30 * crankMotor.direction * time;
             replayRotation = multiplyQuaternion(eulerQuaternion(item.rotation), { x: 0, y: 0, z: Math.sin(angle / 2), w: Math.cos(angle / 2) });

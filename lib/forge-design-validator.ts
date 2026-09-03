@@ -1,4 +1,6 @@
 import { buildEngineeringPlan, normalizeEngineeringIntent } from './forge-intent';
+import { resolveDrivenJointEndpoint } from './forge-joint-drive';
+import { propulsorWorldAxis } from './forge-motion';
 import type { CompiledWorldPlan, ComponentBlueprint } from './forge-types';
 
 export type DesignIssueSeverity = 'error' | 'warning' | 'repair';
@@ -121,8 +123,13 @@ function validateAnimationTopology(plan: CompiledWorldPlan, issues: DesignIssue[
       issues.push({ code: 'ANIMATION_PROPULSOR_JOINT', severity: 'error', message: `${propulsor.role} needs a revolute shaft joint before it can animate.`, componentIds: [propulsor.id] });
       continue;
     }
-    const declared = String(propulsor.parameters?.rotor_axis ?? '').toLowerCase();
-    const correctAxis = declared === 'vertical' || declared === 'up' ? Math.abs(rotary.axis[1]) >= .9 : Math.abs(rotary.axis[0]) >= .9;
+    const resolved = resolveDrivenJointEndpoint(rotary, plan.components);
+    if (!resolved || resolved.driven.id !== propulsor.id || resolved.driven.bodyType === 'fixed') {
+      issues.push({ code: 'ANIMATION_PROPULSOR_ENDPOINT', severity: 'error', message: `${propulsor.role} must be the movable output of its shaft joint.`, componentIds: [propulsor.id, rotary.id] });
+    }
+    const renderedAxis = propulsorWorldAxis({ ...propulsor, parameters: propulsor.parameters ?? {} });
+    const jointAxisLength = Math.hypot(...rotary.axis) || 1;
+    const correctAxis = Math.abs(renderedAxis.reduce((sum, value, index) => sum + value * rotary.axis[index] / jointAxisLength, 0)) >= .99;
     if (!correctAxis) issues.push({ code: 'ANIMATION_PROPULSOR_AXIS', severity: 'error', message: `${propulsor.role} has a shaft axis that does not match its rotor plane.`, componentIds: [propulsor.id, rotary.id] });
     if (!plan.motors.some((motor) => motor.jointId === rotary.id)) issues.push({ code: 'ANIMATION_PROPULSOR_DRIVE', severity: 'error', message: `${propulsor.role} needs a motor bound to its revolute shaft joint.`, componentIds: [propulsor.id, rotary.id] });
   }

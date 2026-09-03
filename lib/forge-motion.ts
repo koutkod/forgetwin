@@ -1,9 +1,14 @@
 import { Euler, Quaternion, Vector3 } from 'three';
-import type { Actuator, Joint, MachineComponent, Motor, Vec3 } from './forge-types';
+import { resolveDrivenJointEndpoint } from './forge-joint-drive';
+import type { Actuator, Joint, MachineComponent, Motor, SimulationRun, Vec3 } from './forge-types';
 
 const STEERING_RATE = 0.82;
 const ACCUMULATION_ZONE_SECONDS = 1.45;
 const ACCUMULATION_ZONE_COUNT = 4;
+const ACCUMULATION_ACTIVE_PHASE = .82;
+const ACCUMULATION_ROLLER_RADIANS_PER_SECOND = 5.2;
+const RECYCLING_BELT_CYCLES_PER_SECOND = .72;
+const RECYCLING_BLOWER_RADIANS_PER_SECOND = 9.2;
 
 export type MechanismOperationPose = { position: Vec3; rotation: Vec3; animated: boolean };
 
@@ -16,7 +21,97 @@ export type MechanismMotionGraph = {
   poseAt(componentId: string, elapsed: number): MechanismOperationPose | null;
 };
 
+export type ScenePlaybackInput = {
+  previewPlaying: boolean;
+  previewElapsed: number;
+  frameTime?: number | null;
+  replayMode?: 'normal' | 'failure' | null;
+  evaluationLevel?: SimulationRun['evaluationLevel'] | null;
+};
+
+export type ScenePlayback = {
+  mode: 'idle' | 'preview' | 'replay';
+  elapsed: number;
+  active: boolean;
+  frameDriven: boolean;
+  replayMode: 'normal' | 'failure' | null;
+  evaluationLevel: SimulationRun['evaluationLevel'] | null;
+  authoritativeBodyTransforms: boolean;
+};
+
+/** Resolve one deterministic scene clock for rest, kinematic preview, and
+ * recorded simulation playback. A replay frame is authoritative over the
+ * preview toggle: local visual DOFs such as rotors must still be sampled when
+ * the UI turns previewPlaying off to show a normal or failure replay. */
+export function resolveScenePlayback(input: ScenePlaybackInput): ScenePlayback {
+  const hasFrame = typeof input.frameTime === 'number' && Number.isFinite(input.frameTime);
+  const evaluationLevel = input.evaluationLevel ?? null;
+  if (hasFrame) {
+    return {
+      mode: 'replay',
+      elapsed: Math.max(0, input.frameTime as number),
+      active: true,
+      frameDriven: true,
+      replayMode: input.replayMode === 'failure' ? 'failure' : 'normal',
+      evaluationLevel,
+      authoritativeBodyTransforms: evaluationLevel === 'physics-replay',
+    };
+  }
+  if (input.previewPlaying) {
+    return {
+      mode: 'preview',
+      elapsed: Number.isFinite(input.previewElapsed) ? Math.max(0, input.previewElapsed) : 0,
+      active: true,
+      frameDriven: false,
+      replayMode: null,
+      evaluationLevel: 'kinematic-preview',
+      authoritativeBodyTransforms: false,
+    };
+  }
+  return {
+    mode: 'idle', elapsed: 0, active: false, frameDriven: false,
+    replayMode: null, evaluationLevel: null, authoritativeBodyTransforms: false,
+  };
+}
+
+export type LocalMotionDof =
+  | 'wheel-roll' | 'wheel-steer' | 'steering-control' | 'buffer-gate'
+  | 'servo-horn' | 'linear-extension' | 'spring-compression'
+  | 'conveyor-surface' | 'roller-spin' | 'shaft-spin' | 'propulsor-spin';
+
+/** Describes motion rendered inside a component's local shape. The outer
+ * mechanism graph must not apply the same DOF a second time. Components may
+ * still receive a distinct assembly transform (for example, a rolling wheel
+ * can inherit a suspension or shared steering-pivot transform). */
+export function componentOwnsLocalMotion(component: Pick<MachineComponent, 'primitive' | 'bodyType' | 'parameters'>): LocalMotionDof[] {
+  const parameters = component.parameters ?? {};
+  const dofs: LocalMotionDof[] = [];
+  if (parameters.road_vehicle_wheel || parameters.road_vehicle_brake || parameters.motorcycle_wheel || parameters.bicycle_wheel) dofs.push('wheel-roll');
+  if (parameters.road_vehicle_wheel && parameters.road_vehicle_front_steering) dofs.push('wheel-steer');
+  if (parameters.road_vehicle_steering_wheel) dofs.push('steering-control');
+  if (parameters.buffer_gate) dofs.push('buffer-gate');
+  if (component.primitive === 'servo' && !parameters.robot_joint && !parameters.robot_arm_joint) dofs.push('servo-horn');
+  if (component.primitive === 'piston') dofs.push('linear-extension');
+  if (component.primitive === 'spring') dofs.push('spring-compression');
+  if (component.primitive === 'conveyor') dofs.push('conveyor-surface');
+  if (component.primitive === 'roller') dofs.push('roller-spin');
+  if (component.primitive === 'shaft' && (parameters.operation_spin || (component.bodyType === 'dynamic' && !parameters.solar_pivot_axle))) dofs.push('shaft-spin');
+  if (component.primitive === 'propeller' || component.primitive === 'rotor') dofs.push('propulsor-spin');
+  return dofs;
+}
+
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+const finiteTime = (elapsed: number) => Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+
+const finiteSpeedScale = (speedScale: number) => Number.isFinite(speedScale)
+  ? Math.min(3, Math.max(0, Math.abs(speedScale)))
+  : 1;
+
+const wrappedProgress = (progress: number) => {
+  if (!Number.isFinite(progress)) return 0;
+  return ((progress % 1) + 1) % 1;
+};
 
 const smoothstep = (value: number) => {
   const t = clamp01(value);
@@ -51,11 +146,59 @@ export function sampleClearancePath(progress: number, points: Vec3[], weights?: 
   return [...points[points.length - 1]] as Vec3;
 }
 
+function clearancePathPlanarDistance(progress: number, points: Vec3[], weights?: number[]) {
+  if (points.length < 2) return 0;
+  const segments = points.length - 1;
+  const normalizedWeights = weights?.length === segments && weights.every((weight) => weight > 0)
+    ? weights
+    : Array.from({ length: segments }, () => 1);
+  const total = normalizedWeights.reduce((sum, weight) => sum + weight, 0);
+  let cursor = clamp01(progress) * total;
+  let distance = 0;
+  for (let index = 0; index < segments; index += 1) {
+    const weight = normalizedWeights[index];
+    const segmentDistance = Math.hypot(points[index + 1][0] - points[index][0], points[index + 1][2] - points[index][2]);
+    if (cursor <= weight || index === segments - 1) {
+      distance += segmentDistance * smoothstep(cursor / weight);
+      break;
+    }
+    distance += segmentDistance;
+    cursor -= weight;
+  }
+  return distance;
+}
+
+const tomatoRoute = (lane: number): { points: Vec3[]; weights: number[] } => ({
+  points: [
+    [-3.25, 1.23, 0],
+    [.12, 1.23, 0],
+    [.12, 1.28, lane * .42],
+    [1.35, 1.31, lane * .46],
+    [2.18, 1.18, lane * .88],
+    [3.18, 1.12, lane * 1.45],
+    [3.18, .66, lane * 1.45],
+    [3.18, .66, lane * 1.45],
+  ],
+  weights: [.34, .07, .13, .16, .13, .1, .07],
+});
+
+/** Absolute, radius-aware tomato roll sampled from its authored route. The
+ * final vertical drop contributes no artificial spin because only distance in
+ * the conveyor plane is accumulated. Non-tomato components remain still. */
+export function tomatoRollingAngle(component: Pick<MachineComponent, 'dimensions' | 'parameters'>, progress: number) {
+  if (component.parameters.product_form !== 'tomato') return 0;
+  const lane = component.parameters.grade === 'ripe' ? -1 : 1;
+  const route = tomatoRoute(lane);
+  const radius = Math.max(.08, Math.max(component.dimensions[0], component.dimensions[2]) / 2);
+  const distance = clearancePathPlanarDistance(wrappedProgress(progress), route.points, route.weights);
+  return distance === 0 ? 0 : -distance / radius;
+}
+
 export function productOperationPoseAtProgress(component: MachineComponent, progress: number): ProductOperationPose | null {
   const form = String(component.parameters.product_form ?? '');
   if (!form) return null;
   const rotation = [...component.rotation] as Vec3;
-  const p = ((progress % 1) + 1) % 1;
+  const p = wrappedProgress(progress);
 
   if (form.startsWith('package-')) {
     const lane = form.endsWith('red') ? -1 : 1;
@@ -81,17 +224,10 @@ export function productOperationPoseAtProgress(component: MachineComponent, prog
 
   if (form === 'tomato') {
     const lane = component.parameters.grade === 'ripe' ? -1 : 1;
+    const route = tomatoRoute(lane);
+    rotation[2] += tomatoRollingAngle(component, p);
     return {
-      position: sampleClearancePath(p, [
-        [-3.25, 1.23, 0],
-        [.12, 1.23, 0],
-        [.12, 1.28, lane * .42],
-        [1.35, 1.31, lane * .46],
-        [2.18, 1.18, lane * .88],
-        [3.18, 1.12, lane * 1.45],
-        [3.18, .66, lane * 1.45],
-        [3.18, .66, lane * 1.45],
-      ], [.34, .07, .13, .16, .13, .1, .07]),
+      position: sampleClearancePath(p, route.points, route.weights),
       rotation,
     };
   }
@@ -192,13 +328,21 @@ function excursion(elapsed: number, limits: [number, number], rate: number, dire
 export function createMechanismMotionGraph(components: MachineComponent[], joints: Joint[], motors: Motor[], actuators: Actuator[]): MechanismMotionGraph {
   const byId = new Map(components.map((component) => [component.id, component]));
   const initialRotation = new Map(components.map((component) => [component.id, new Quaternion().setFromEuler(new Euler(...component.rotation, 'XYZ'))]));
-  const parentJoint = new Map<string, Joint>();
+  type OrientedJoint = { joint: Joint; parentId: string; parentAnchor: Vec3; childAnchor: Vec3 };
+  const parentJoint = new Map<string, OrientedJoint>();
   for (const joint of joints) {
-    if (!byId.has(joint.componentA) || !byId.has(joint.componentB) || parentJoint.has(joint.componentB)) continue;
+    const endpoint = resolveDrivenJointEndpoint(joint, components);
+    if (!endpoint || parentJoint.has(endpoint.driven.id)) continue;
     // Gear/belt constraints couple two rotating bodies; treating either as a
     // rigid child would make the second shaft orbit around the first.
     if (joint.type === 'gear' || joint.type === 'belt') continue;
-    parentJoint.set(joint.componentB, joint);
+    const drivenIsB = endpoint.drivenEndpoint === 'B';
+    parentJoint.set(endpoint.driven.id, {
+      joint,
+      parentId: endpoint.support.id,
+      parentAnchor: drivenIsB ? joint.anchorA : joint.anchorB,
+      childAnchor: drivenIsB ? joint.anchorB : joint.anchorA,
+    });
   }
 
   const drivers = new Map<string, Driver>();
@@ -230,12 +374,13 @@ export function createMechanismMotionGraph(components: MachineComponent[], joint
     const initial = initialRotation.get(componentId);
     if (!component || !initial) return null;
     const resting: Transform = { position: new Vector3(...component.position), rotation: initial.clone(), animated: false };
-    const joint = parentJoint.get(componentId);
-    if (!joint || visiting.has(componentId)) { cache.set(componentId, resting); return resting; }
+    const oriented = parentJoint.get(componentId);
+    if (!oriented || visiting.has(componentId)) { cache.set(componentId, resting); return resting; }
+    const { joint } = oriented;
     visiting.add(componentId);
-    const parent = byId.get(joint.componentA);
-    const parentInitialRotation = initialRotation.get(joint.componentA);
-    const parentPose = solve(joint.componentA, elapsed);
+    const parent = byId.get(oriented.parentId);
+    const parentInitialRotation = initialRotation.get(oriented.parentId);
+    const parentPose = solve(oriented.parentId, elapsed);
     if (!parent || !parentInitialRotation || !parentPose) { visiting.delete(componentId); cache.set(componentId, resting); return resting; }
 
     // Rebuild the authored child orientation from the parent's current pose,
@@ -243,8 +388,8 @@ export function createMechanismMotionGraph(components: MachineComponent[], joint
     // placement prevents visual gaps even when a generated body's center is
     // offset from its hinge or slider.
     const rotation = parentPose.rotation.clone().multiply(parentInitialRotation.clone().invert()).multiply(initial);
-    const pivot = new Vector3(...joint.anchorA).applyQuaternion(parentPose.rotation).add(parentPose.position.clone());
-    const position = pivot.clone().sub(new Vector3(...joint.anchorB).applyQuaternion(rotation));
+    const pivot = new Vector3(...oriented.parentAnchor).applyQuaternion(parentPose.rotation).add(parentPose.position.clone());
+    const position = pivot.clone().sub(new Vector3(...oriented.childAnchor).applyQuaternion(rotation));
     let animated = parentPose.animated;
     const driver = drivers.get(joint.id);
 
@@ -326,6 +471,32 @@ export function terrainWheelTravel(elapsed: number, index: number, amplitude = .
   return Math.sin(elapsed * 1.18 + phase) * amplitude;
 }
 
+export type RoverSpringMotion = {
+  wheelTravel: number;
+  centerTravel: number;
+  compression: number;
+  scaleY: number;
+};
+
+/** Couples a rover spring to the terrain input at its existing operation
+ * index. Translating its center by half the wheel travel while scaling about
+ * that center keeps the chassis end fixed and the upright end attached. */
+export function roverSpringMotion(component: Pick<MachineComponent, 'dimensions' | 'parameters'>, elapsed: number): RoverSpringMotion {
+  if (!component.parameters.rover_suspension_spring) return { wheelTravel: 0, centerTravel: 0, compression: 0, scaleY: 1 };
+  const rawIndex = Number(component.parameters.operation_index ?? 0);
+  const index = Number.isFinite(rawIndex) ? Math.floor(rawIndex) : 0;
+  const rawAmplitude = Number(component.parameters.operation_travel_m ?? .075);
+  const amplitude = Number.isFinite(rawAmplitude) ? Math.min(.18, Math.max(0, Math.abs(rawAmplitude))) : .075;
+  const wheelTravel = terrainWheelTravel(finiteTime(elapsed), index, amplitude);
+  const springLength = Math.max(.2, Math.abs(component.dimensions[1]));
+  return {
+    wheelTravel,
+    centerTravel: wheelTravel * .5,
+    compression: wheelTravel,
+    scaleY: Math.min(1.28, Math.max(.72, 1 - wheelTravel / springLength)),
+  };
+}
+
 export function motorcycleSteeringAngle(elapsed: number) {
   return Math.sin(elapsed * .72) * .19;
 }
@@ -369,6 +540,18 @@ export function propulsorVisualMotion(component: Pick<MachineComponent, 'primiti
   return { axis: vertical ? 'y' : 'z', angle: elapsed * radiansPerSecond * direction, radiansPerSecond };
 }
 
+/** Convert the local blade-spin axis used by PropulsorBody into the authored
+ * world frame. This makes render orientation directly comparable with the
+ * revolute-joint axis and catches a propeller that looks correct in metadata
+ * but spins across the wrong visual plane after component rotation. */
+export function propulsorWorldAxis(component: Pick<MachineComponent, 'primitive' | 'role' | 'parameters' | 'rotation'>): Vec3 {
+  const localAxis = propulsorVisualMotion(component, 0).axis === 'y'
+    ? new Vector3(0, 1, 0)
+    : new Vector3(0, 0, 1);
+  localAxis.applyQuaternion(new Quaternion().setFromEuler(new Euler(...component.rotation, 'XYZ'))).normalize();
+  return [localAxis.x, localAxis.y, localAxis.z];
+}
+
 export function roadVehicleDriveDirection(direction: number) {
   return direction === 0 ? 0 : -Math.abs(direction);
 }
@@ -395,6 +578,49 @@ export function accumulationZoneActivity(elapsed: number, zoneIndex: number) {
   const normalizedIndex = Math.max(0, Math.min(ACCUMULATION_ZONE_COUNT - 1, Math.floor(zoneIndex)));
   const phase = ((elapsed / ACCUMULATION_ZONE_SECONDS) % ACCUMULATION_ZONE_COUNT + ACCUMULATION_ZONE_COUNT) % ACCUMULATION_ZONE_COUNT;
   const local = (phase - normalizedIndex + ACCUMULATION_ZONE_COUNT) % ACCUMULATION_ZONE_COUNT;
-  if (local >= .82) return 0;
-  return Math.sin(Math.PI * local / .82) ** 2;
+  if (local >= ACCUMULATION_ACTIVE_PHASE) return 0;
+  return Math.sin(Math.PI * local / ACCUMULATION_ACTIVE_PHASE) ** 2;
+}
+
+/** Absolute roller angle for a zero-pressure accumulation zone. This is the
+ * analytic integral of `accumulationZoneActivity`, so a paused zone holds its
+ * last angle and replay scrubbing never depends on previously rendered frames. */
+export function accumulationZoneRollerAngle(elapsed: number, zoneIndex: number, speedScale = 1) {
+  const time = finiteTime(elapsed);
+  const normalizedIndex = Number.isFinite(zoneIndex)
+    ? Math.max(0, Math.min(ACCUMULATION_ZONE_COUNT - 1, Math.floor(zoneIndex)))
+    : 0;
+  const firstStart = normalizedIndex * ACCUMULATION_ZONE_SECONDS;
+  if (time <= firstStart) return 0;
+  const period = ACCUMULATION_ZONE_SECONDS * ACCUMULATION_ZONE_COUNT;
+  const activeDuration = ACCUMULATION_ZONE_SECONDS * ACCUMULATION_ACTIVE_PHASE;
+  const shifted = time - firstStart;
+  const fullCycles = Math.floor(shifted / period);
+  const remainder = shifted - fullCycles * period;
+  const activeTime = Math.min(remainder, activeDuration);
+  const partialIntegral = activeTime <= 0
+    ? 0
+    : activeTime / 2 - activeDuration / (4 * Math.PI) * Math.sin(2 * Math.PI * activeTime / activeDuration);
+  const activityIntegral = fullCycles * activeDuration / 2 + partialIntegral;
+  if (activityIntegral === 0) return 0;
+  return -activityIntegral * ACCUMULATION_ROLLER_RADIANS_PER_SECOND * finiteSpeedScale(speedScale);
+}
+
+/** Normalized surface travel for the flagged magnetic takeaway belt. The
+ * renderer can wrap each marker with this 0..1 phase at any replay timestamp. */
+export function recyclingBeltSurfaceOffset(component: Pick<MachineComponent, 'parameters'>, elapsed: number, speedScale = 1) {
+  if (!component.parameters.magnetic_belt) return 0;
+  const rawRate = Number(component.parameters.belt_cycles_per_second ?? RECYCLING_BELT_CYCLES_PER_SECOND);
+  const rate = Number.isFinite(rawRate) ? Math.max(0, Math.abs(rawRate)) : RECYCLING_BELT_CYCLES_PER_SECOND;
+  const cycles = finiteTime(elapsed) * rate * finiteSpeedScale(speedScale);
+  return cycles - Math.floor(cycles);
+}
+
+/** Absolute local impeller angle for the flagged recycling air classifier.
+ * The motor housing remains fixed; only its internal rotor should use this. */
+export function recyclingBlowerAngle(component: Pick<MachineComponent, 'parameters'>, elapsed: number, speedScale = 1) {
+  if (!component.parameters.classifier_blower) return 0;
+  const rawRate = Number(component.parameters.operation_spin ?? RECYCLING_BLOWER_RADIANS_PER_SECOND);
+  const rate = Number.isFinite(rawRate) ? Math.abs(rawRate) : RECYCLING_BLOWER_RADIANS_PER_SECOND;
+  return finiteTime(elapsed) * rate * finiteSpeedScale(speedScale);
 }

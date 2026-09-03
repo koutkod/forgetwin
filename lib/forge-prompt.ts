@@ -984,7 +984,27 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   const rear: Vec3 = [-1.12, .62, 0];
   const front: Vec3 = [1.18, .62, 0];
   const steeringPivot: Vec3 = [.72, 1.55, 0];
-  const steeringMotion = { motorcycle_steering_pivot_x: steeringPivot[0], motorcycle_steering_pivot_y: steeringPivot[1], motorcycle_steering_pivot_z: steeringPivot[2] };
+  // A motorcycle does not steer around world-up. Its fork, crown, handlebar,
+  // front hub, wheel, fender, and headlight all pivot about the same steering-
+  // head line, raked rearward as it rises from the front axle. Store the unit
+  // axis explicitly on every moving member so renderers and WebMCP clients can
+  // reproduce one rigid front assembly without guessing from part names.
+  const steeringAxisLength = Math.hypot(steeringPivot[0] - front[0], steeringPivot[1] - front[1]);
+  const steeringAxis: Vec3 = [
+    (steeringPivot[0] - front[0]) / steeringAxisLength,
+    (steeringPivot[1] - front[1]) / steeringAxisLength,
+    0,
+  ];
+  const steeringMotion = {
+    motorcycle_steering_pivot_x: steeringPivot[0],
+    motorcycle_steering_pivot_y: steeringPivot[1],
+    motorcycle_steering_pivot_z: steeringPivot[2],
+    motorcycle_steering_axis_x: steeringAxis[0],
+    motorcycle_steering_axis_y: steeringAxis[1],
+    motorcycle_steering_axis_z: steeringAxis[2],
+    motorcycle_steering_axis: 'raked-up-rearward',
+    motorcycle_steering_rake_deg: Math.atan2(Math.abs(steeringAxis[0]), steeringAxis[1]) * 180 / Math.PI,
+  };
   const wheelDiameter = /dirt|off[- ]road/.test(text) ? 1.12 : 1.02;
   const frameIds: string[] = [];
   const tube = (role: string, start: Vec3, end: Vec3, section = .065) => {
@@ -1143,15 +1163,25 @@ function addHelicopter(context: ModuleContext): ModuleResult {
   const mainMotor = builder.component('motor', 'main rotor electric motor', assembly, [.05, 2.03, 0], [.44, .38, .44], 'aluminum', 'fixed', { helicopter_motor: true }, 28);
   const mainDrive = builder.motor(mainMotor, mainJoint, Math.max(260, values.torqueNm * 3.5), 520);
   const tailMotor = builder.component('motor', 'tail rotor motor', assembly, [-2.42, 1.62, 0], [.25, .28, .25], 'aluminum', 'fixed', { helicopter_tail_motor: true }, 5);
-  const tailRotor = builder.component('propeller', 'anti-torque tail rotor', assembly, [-2.54, 1.62, 0], [1.02, .1, 1.02], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'tail', operation_spin: true, tail_rotor: true }, 2.1);
-  builder.rotate(tailRotor, [0, Math.PI / 2, 0]);
-  const tailJoint = builder.joint('revolute', tailMotor, tailRotor, [1, 0, 0]);
-  const tailMotorBody = builder.components.find((item) => item.id === tailMotor)!;
+  const tailBearing = builder.component('bearing', 'tail rotor outboard support bearing', assembly, [-2.42, 1.62, .125], [.2, .09, .2], 'steel', 'fixed', { helicopter_tail_bearing: true, tail_rotor_axis: 'Z' }, .7);
+  // The shaft bridges the visible motor-to-hub gap without penetrating the
+  // rotor's compact physics hub (its +Z tip stops just inboard of that hub).
+  const tailShaft = builder.component('shaft', 'short tail rotor drive shaft', assembly, [-2.42, 1.62, .19], [.055, .12, .055], 'steel', 'fixed', { helicopter_tail_shaft: true, tail_rotor_axis: 'Z', operation_spin: 8.6 }, .55);
+  builder.rotate(tailShaft, [Math.PI / 2, 0, 0]);
+  // +X is forward and +Z is the aircraft's right side. Mount the anti-torque
+  // rotor outboard of the tail boom, with its shaft on world Z. Keeping its
+  // authored rotation at identity also keeps PropulsorBody's XY blade disc in
+  // the correct vertical plane instead of turning it into a forward propeller.
+  const tailRotor = builder.component('propeller', 'right-side anti-torque tail rotor', assembly, [-2.42, 1.62, .3], [1.02, .1, 1.02], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'tail', operation_spin: true, tail_rotor: true, tail_rotor_side: 'right' }, 2.1);
+  const tailJoint = builder.joint('revolute', tailBearing, tailRotor, [0, 0, 1]);
+  builder.joint('fixed', tailMotor, tailBearing);
+  builder.joint('fixed', tailMotor, tailShaft);
+  const tailBearingBody = builder.components.find((item) => item.id === tailBearing)!;
   const tailRotorBody = builder.components.find((item) => item.id === tailRotor)!;
   const tailHinge = builder.joints.find((item) => item.id === tailJoint)!;
-  tailHinge.anchorA = tailRotorBody.position.map((value, index) => value - tailMotorBody.position[index]) as Vec3; tailHinge.anchorB = [0, 0, 0]; tailHinge.limits = undefined;
+  tailHinge.anchorA = tailRotorBody.position.map((value, index) => value - tailBearingBody.position[index]) as Vec3; tailHinge.anchorB = [0, 0, 0]; tailHinge.limits = undefined;
   builder.motor(tailMotor, tailJoint, 55, 1600);
-  builder.connect(mast, fuselage, 'mechanical', 'rotor_transmission_mount'); builder.connect(mainMotor, mast, 'power', 'main_rotor_drive'); builder.connect(tailMotor, tailBoom, 'mechanical', 'tail_motor_mount');
+  builder.connect(mast, fuselage, 'mechanical', 'rotor_transmission_mount'); builder.connect(mainMotor, mast, 'power', 'main_rotor_drive'); builder.connect(tailMotor, tailBoom, 'mechanical', 'tail_motor_mount'); builder.connect(tailMotor, tailBearing, 'mechanical', 'tail_bearing_mount'); builder.connect(tailShaft, tailRotor, 'power', 'tail_rotor_drive');
   for (const side of [-1, 1]) {
     const skid = builder.member('tube', `${side < 0 ? 'left' : 'right'} landing skid`, assembly, [-.78, .5, side * .62], [1.05, .5, side * .62], .08, 'steel', 'fixed', { helicopter_skid: true, grounded_structure: true });
     const frontStrut = builder.member('tube', `${side < 0 ? 'left' : 'right'} front skid strut`, assembly, [.65, .52, side * .62], [.55, 1.08, side * .45], .055, 'steel', 'fixed');
