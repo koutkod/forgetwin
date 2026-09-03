@@ -452,6 +452,18 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state = addActivity(state, name, `Compared revision ${a.revision} with ${b.revision}.`, actor, 'read');
     return { state, result: success(state, 'Designs compared.', { from: a, to: b, changes: { component_delta: b.components.length - a.components.length, joint_delta: b.joints.length - a.joints.length, mass_delta: Number((b.components.reduce((sum, item) => sum + item.mass, 0) - a.components.reduce((sum, item) => sum + item.mass, 0)).toFixed(2)), optimization_delta: b.optimizationLevel - a.optimizationLevel } }) };
   }
+  if (name === 'export_design') {
+    const formats = Array.isArray(input.formats) ? input.formats.map(String) : [];
+    if (!formats.length) throw new Error('INVALID_INPUT: choose at least one export format.');
+    state = addActivity(state, name, `Exported revision ${state.revision} as ${formats.map((item) => item.toUpperCase()).join(', ')}.`, actor);
+    return { state, result: success(state, 'Design exports downloaded.', {
+      revision: state.revision,
+      formats,
+      body_count: state.components.length,
+      joint_count: state.joints.length,
+      verification_status: state.runs.at(-1)?.status ?? 'not-run',
+    }) };
+  }
 
   if (name === 'set_design_goal') {
     state.goal = asGoal(input);

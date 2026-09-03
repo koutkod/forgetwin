@@ -27,7 +27,8 @@ export type ForgeToolName =
   | 'set_motor_speed' | 'set_sensor_range' | 'set_actuator_timing'
   | 'set_control_logic' | 'update_control_logic' | 'run_simulation' | 'inspect_telemetry'
   | 'inspect_failure' | 'measure_constraint' | 'optimize_design'
-  | 'remove_component' | 'remove_joint' | 'compare_designs' | 'restore_revision';
+  | 'remove_component' | 'remove_joint' | 'compare_designs' | 'restore_revision'
+  | 'export_design';
 
 export type ConstraintOperator = 'min' | 'max' | 'exact';
 

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createInitialForgeState } from './forge-data';
 import { applyForgeTool, commitSimulation, createCheckpoint, markSimulationRunning, toggleUi } from './forge-engine';
 import { simulateDesign } from './forge-simulation';
+import { exportForgeDesign, type ForgeExportFormat } from './forge-export';
 import type { Actor, CollisionClassification, CompiledWorldPlan, ForgeState, ForgeToolName, MetricReading, RequirementCoverage, SimulationRun, ToolResult, Vec3 } from './forge-types';
 
 export const STORAGE_KEY = 'forgetwin-workspace-v3';
@@ -48,6 +49,7 @@ export const schemas = {
   remove_joint: z.object({ joint_id: id, ...guard }).strict(),
   compare_designs: z.object({ revision_a: revision, revision_b: revision }).strict(),
   restore_revision: z.object({ revision, ...guard }).strict(),
+  export_design: z.object({ formats: z.array(z.enum(['png', 'pdf', 'stl', 'json'])).min(1).max(4), ...guard }).strict(),
 } satisfies Record<ForgeToolName, z.ZodType<Record<string, unknown>>>;
 
 export const FORGE_TOOL_COUNT = Object.keys(schemas).length;
@@ -161,6 +163,7 @@ const descriptions: Record<ForgeToolName, string> = {
   remove_joint: 'Remove one joint and dependent drives for topology redesign.',
   compare_designs: 'Compare two immutable world revisions by topology, physical mass, measurements, and optimization level.',
   restore_revision: 'Create a new head revision from an earlier world while preserving current human-locked fields.',
+  export_design: 'Download the current verified revision as a presentation PNG, engineering PDF, CAD-ready binary STL, and/or structured JSON world without opening the export menu.',
 };
 
 const persistedState = z.object({ schemaVersion: z.literal(3), workspaceId: z.string(), workspaceNonce: nonce, revision, designRevision: revision, assemblies: z.array(z.unknown()), components: z.array(z.unknown()), joints: z.array(z.unknown()), runs: z.array(z.unknown()), revisions: z.array(z.unknown()), activity: z.array(z.unknown()) }).passthrough();
@@ -396,6 +399,7 @@ function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
     remove_joint: { properties: { joint_id: identifier, ...common }, required: ['joint_id', ...requiredCommon] },
     compare_designs: { properties: { revision_a: rev, revision_b: rev }, required: ['revision_a', 'revision_b'] },
     restore_revision: { properties: { revision: rev, ...common }, required: ['revision', ...requiredCommon] },
+    export_design: { properties: { formats: { type: 'array', minItems: 1, maxItems: 4, uniqueItems: true, items: { enum: ['png', 'pdf', 'stl', 'json'] } }, ...common }, required: ['formats', ...requiredCommon] },
   };
   return { type: 'object', properties: definitions[name].properties, required: definitions[name].required, additionalProperties: false };
 }
@@ -438,7 +442,15 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
           const input = prepared.input;
           const before = snapshotRef.current();
           if (guardedTools.has(name) && (input.expected_revision !== before.revision || input.expected_workspace_nonce !== before.workspaceNonce)) throw new Error(`STALE_REVISION: inspect revision ${before.revision} before retrying.`);
-          return name === 'run_simulation' ? await runRef.current('WebMCP', input) : commandRef.current(name, raw, 'WebMCP');
+          if (name === 'run_simulation') return await runRef.current('WebMCP', input);
+          if (name === 'export_design') {
+            const formats = input.formats as ForgeExportFormat[];
+            for (const format of formats) {
+              signal?.throwIfAborted();
+              await exportForgeDesign(before, format);
+            }
+          }
+          return commandRef.current(name, raw, 'WebMCP');
         } catch (error) { return failure(snapshotRef.current(), error); }
       } }, { signal: lifecycle.signal }));
       const results = await Promise.allSettled(registrations);

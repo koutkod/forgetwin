@@ -83,6 +83,7 @@ ForgeTwin exposes small, state-aware engineering operations instead of one opaqu
 | `optimize_design` | Apply a bounded redesign to evidence-linked physical or control fields. |
 | `remove_component`, `remove_joint` | Change topology safely with referential cleanup. |
 | `compare_designs`, `restore_revision` | Compare and restore versioned worlds. |
+| `export_design` | Let an external agent download PNG, PDF, binary STL, and structured JSON from the verified revision. |
 
 Every mutating call is Zod-validated and guarded by the current workspace nonce and revision. ForgeTwin safely repairs representation-only mistakes such as empty optional fields, then logs the repair; broken references, unsafe topology, invalid geometry, or stale state still fail. Generation inspects the workspace after the goal, body-placement, topology/device, and simulation stages so every call uses current IDs and revisions. A stale agent cannot overwrite newer human work. Resetting the sandbox rotates the nonce, so an old agent context cannot mutate the new world. WebMCP registration waits for local state hydration, keeps watching for a refreshed host, and re-registers against a newly attached context.
 
