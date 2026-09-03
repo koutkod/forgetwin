@@ -4,10 +4,34 @@ import { contextualMechanicalEdits } from './forge-chat';
 import { normalizeEngineeringIntent } from './forge-intent';
 import { agentPlanFromCompiled, compileAgentPlan } from './forge-model-plan';
 import { compileDesignBrief } from './forge-prompt';
+import { simulateDesign } from './forge-simulation';
 import { assemblePlan, testCommand } from './forge-test-utils';
 import { preflightCompiledWorldPlan, prepareForgeToolArguments } from './use-forge';
 
 describe('judge prompt acceptance matrix', () => {
+  it('builds and exercises the complete one-person electric motorcycle request', async () => {
+    const prompt = 'Build me a cool-looking electric motorcycle for one person. Give it working wheels, steering, suspension, brakes, a battery, an electric motor, a headlight, a rear brake light and turn signals. Test everything, fix any problems and export the finished design.';
+    const plan = compileDesignBrief(prompt);
+    expect(plan.engineeringPlan).toMatchObject({ machineType: 'motorcycle', validation: { status: 'ready' } });
+    expect(plan.components.filter((item) => item.parameters?.motorcycle_wheel)).toHaveLength(2);
+    expect(plan.components.some((item) => item.parameters?.motorcycle_front_suspension)).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.motorcycle_rear_shock)).toBe(true);
+    expect(plan.components.filter((item) => item.parameters?.motorcycle_brake)).toHaveLength(2);
+    expect(plan.actuators.filter((item) => item.type === 'brake')).toHaveLength(2);
+    expect(plan.components.some((item) => item.parameters?.motorcycle_battery)).toBe(true);
+    expect(plan.components.some((item) => item.parameters?.motorcycle_motor)).toBe(true);
+    expect(plan.components.find((item) => item.parameters?.motorcycle_headlight)?.parameters?.facing_axis).toBe('+X');
+    expect(plan.components.find((item) => item.parameters?.motorcycle_brake_light)?.parameters?.facing_axis).toBe('-X');
+    expect(plan.components.filter((item) => item.parameters?.motorcycle_turn_signal)).toHaveLength(4);
+    expect(new Set(plan.components.filter((item) => item.parameters?.motorcycle_turn_signal).map((item) => `${item.parameters?.signal_end}-${item.parameters?.signal_side}`))).toEqual(new Set(['front-left', 'front-right', 'rear-left', 'rear-right']));
+    expect(plan.components.find((item) => item.parameters?.motorcycle_solo_seat)?.parameters?.rider_capacity).toBe(1);
+
+    const run = await simulateDesign(assemblePlan(plan));
+    expect(run.physics).toMatchObject({ engine: 'Rapier', timestepHz: 60 });
+    expect(run.replay.length).toBeGreaterThan(100);
+    expect(run.collisions.filter((item) => item.harmful && /motorcycle wheel|disc brake|turn signal|brake light/i.test(`${item.bodyA} ${item.bodyB}`))).toHaveLength(0);
+  }, 30_000);
+
   it('normalizes domain misspellings without changing the requested machine family', () => {
     expect(normalizeEngineeringIntent('Build a byclicle with a break light.').normalizedRequest).toBe('Build a bicycle with a brake light.');
     expect(normalizeEngineeringIntent('Build an airplnae with landing gear.').normalizedRequest).toBe('Build an airplane with landing gear.');

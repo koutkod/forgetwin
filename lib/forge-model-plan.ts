@@ -53,7 +53,7 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   const vehicle = /\b(?:car|go-kart|kart|buggy|automobile|road vehicle)\b/.test(machine);
   const bicycle = /\b(?:bicycle|bike)\b/.test(machine);
   const motorcycle = /\b(?:motorcycle|motorbike|dirt bike|scooter)\b/.test(machine);
-  for (const tag of ['motorcycle-wheel', 'motorcycle-front-wheel', 'motorcycle-frame', 'motorcycle-fork', 'motorcycle-seat', 'motorcycle-handlebar', 'motorcycle-power-unit', 'motorcycle-bodywork', 'motorcycle-fender', 'motorcycle-motor', 'motorcycle-fork-crown', 'motorcycle-rear-shock', 'motorcycle-headlight', 'motorcycle-steering-member']) {
+  for (const tag of ['motorcycle-wheel', 'motorcycle-front-wheel', 'motorcycle-frame', 'motorcycle-fork', 'motorcycle-seat', 'motorcycle-solo-seat', 'motorcycle-handlebar', 'motorcycle-power-unit', 'motorcycle-bodywork', 'motorcycle-fender', 'motorcycle-motor', 'motorcycle-fork-crown', 'motorcycle-rear-shock', 'motorcycle-front-suspension', 'motorcycle-brake', 'motorcycle-brake-light', 'motorcycle-turn-signal', 'motorcycle-headlight', 'motorcycle-steering-member']) {
     if (tags.has(tag)) parameters[tag.replaceAll('-', '_')] = true;
   }
   if (motorcycle) {
@@ -72,12 +72,28 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
     }
     if (component.primitive === 'seat') parameters.motorcycle_seat = true;
     if (component.primitive === 'steering' || /handlebar/.test(role)) { parameters.motorcycle_handlebar = true; parameters.motorcycle_steering_member = true; }
-    if ((component.primitive === 'battery' || component.primitive === 'body-shell') && /battery|power unit/.test(role)) parameters.motorcycle_power_unit = true;
+    if ((component.primitive === 'battery' || component.primitive === 'body-shell') && /battery|power unit/.test(role)) {
+      parameters.motorcycle_power_unit = true;
+      if (component.primitive === 'battery') parameters.motorcycle_battery = true;
+    }
     if (component.primitive === 'body-shell' && /tank|fairing|bodywork/.test(role)) parameters.motorcycle_bodywork = true;
     if (component.primitive === 'body-shell' && /fender|mudguard/.test(role)) parameters.motorcycle_fender = true;
     if (component.primitive === 'motor') parameters.motorcycle_motor = true;
     if (component.primitive === 'support' && /fork crown|steering head/.test(role)) { parameters.motorcycle_fork_crown = true; parameters.motorcycle_steering_member = true; }
-    if (component.primitive === 'spring' && /shock|suspension/.test(role)) parameters.motorcycle_rear_shock = true;
+    if (component.primitive === 'spring' && /rear.*(?:shock|suspension)|monoshock/.test(role)) parameters.motorcycle_rear_shock = true;
+    if (/telescopic fork|front suspension/.test(role)) parameters.motorcycle_front_suspension = true;
+    if (/solo rider saddle/.test(role)) { parameters.motorcycle_solo_seat = true; parameters.rider_capacity = 1; }
+    if (/hydraulic disc brake|brake rotor|brake caliper/.test(role)) {
+      parameters.motorcycle_brake = true; parameters.road_vehicle_brake = true;
+      parameters.motorcycle_brake_axle = /front/.test(role) ? 'front' : 'rear'; parameters.axle_axis = 'Z';
+    }
+    if (component.primitive === 'light' && /motorcycle brake light/.test(role)) parameters.motorcycle_brake_light = true;
+    if (component.primitive === 'light' && /turn signal|indicator/.test(role)) {
+      const rear = /rear/.test(role); const left = /left/.test(role);
+      parameters.motorcycle_turn_signal = true; parameters.turn_signal = true; parameters.vehicle_light = true; parameters.marker_light = true;
+      parameters.signal_end = rear ? 'rear' : 'front'; parameters.signal_side = left ? 'left' : 'right';
+      parameters.light_direction = rear ? 'rear' : 'front'; parameters.facing_axis = rear ? '-X' : '+X'; parameters.facing_x = rear ? -1 : 1;
+    }
     if (component.primitive === 'light' && /headlight/.test(role)) { parameters.motorcycle_headlight = true; parameters.motorcycle_steering_member = true; }
   }
   if (component.primitive === 'wheel' && bicycle) parameters.bicycle_wheel = true;
@@ -95,6 +111,7 @@ function semanticParameters(component: SemanticComponent, machineName: string) {
   }
   if (tags.has('steering-wheel') || /steering wheel/.test(role)) parameters.road_vehicle_steering_wheel = true;
   if (tags.has('steering-rack') || /steering rack/.test(role)) parameters.road_vehicle_steering_rack = true;
+  if (tags.has('road-vehicle-brake')) parameters.road_vehicle_brake = true;
   if (tags.has('automotive-body')) { parameters.automotive_body = true; parameters.road_vehicle_body = true; }
   if (tags.has('passenger-car-body')) {
     parameters.automotive_body = true; parameters.road_vehicle_body = true; parameters.passenger_car_body = true;
@@ -317,9 +334,10 @@ function tagsFromParameters(component: ComponentBlueprint) {
   if (parameters.aircraft_navigation_light === true) tags.add(`nav-light-${String(parameters.navigation_side ?? 'tail')}`);
   if (parameters.landing_light === true) tags.add('landing-light');
   if (parameters.bicycle_wheel === true) tags.add('bicycle-wheel');
-  for (const key of ['motorcycle_wheel', 'motorcycle_front_wheel', 'motorcycle_frame', 'motorcycle_fork', 'motorcycle_seat', 'motorcycle_handlebar', 'motorcycle_power_unit', 'motorcycle_bodywork', 'motorcycle_fender', 'motorcycle_motor', 'motorcycle_fork_crown', 'motorcycle_rear_shock', 'motorcycle_headlight', 'motorcycle_steering_member']) {
+  for (const key of ['motorcycle_wheel', 'motorcycle_front_wheel', 'motorcycle_frame', 'motorcycle_fork', 'motorcycle_seat', 'motorcycle_solo_seat', 'motorcycle_handlebar', 'motorcycle_power_unit', 'motorcycle_bodywork', 'motorcycle_fender', 'motorcycle_motor', 'motorcycle_fork_crown', 'motorcycle_rear_shock', 'motorcycle_front_suspension', 'motorcycle_brake', 'motorcycle_brake_light', 'motorcycle_turn_signal', 'motorcycle_headlight', 'motorcycle_steering_member']) {
     if (parameters[key] === true) tags.add(key.replaceAll('_', '-'));
   }
+  if (parameters.road_vehicle_brake === true) tags.add('road-vehicle-brake');
   if (parameters.human_power_input === true) tags.add('human-power-input');
   if (parameters.headlight === true) tags.add('headlight');
   if (parameters.brake_light === true) tags.add('brake-light');

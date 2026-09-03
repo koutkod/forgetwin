@@ -1034,7 +1034,7 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
     tube(`${side < 0 ? 'left' : 'right'} telescopic fork`, [front[0], front[1], side * .11], [.72, 1.58, side * .11], .07);
   }
   const forkCrown = builder.component('support', 'motorcycle fork crown and steering head', assembly, steeringPivot, [.22, .16, .42], 'steel', 'fixed', { motorcycle_fork_crown: true, motorcycle_steering_member: true, ...steeringMotion }, 1.6);
-  const rearShock = builder.component('spring', 'rear monoshock suspension', assembly, [-.58, 1.02, 0], [.095, .5, .095], 'steel', 'fixed', { motorcycle_rear_shock: true, stiffness: 28000, damping: 2200 }, 2.2);
+  const rearShock = builder.component('spring', 'rear monoshock suspension', assembly, [-.58, 1.02, 0], [.095, .5, .095], 'steel', 'fixed', { motorcycle_rear_shock: true, motorcycle_rear_suspension: true, stiffness: 28000, damping: 2200 }, 2.2);
   builder.rotate(rearShock, [0, 0, -.42]);
   frameIds.forEach((id, index) => builder.connect(index ? frameIds[index - 1] : rearDropout, id, 'mechanical', 'welded_motorcycle_frame'));
   builder.connect(frameIds.at(-1)!, frontDropout, 'mechanical', 'front_fork_axle');
@@ -1052,8 +1052,8 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
     return { wheel, joint };
   };
   const rearWheel = centeredWheel(rearDropout, 'rear driven motorcycle wheel', rear, false);
-  centeredWheel(frontDropout, 'front steering motorcycle wheel', front, true);
-  const seat = builder.component('seat', 'stepped rider and pillion saddle', assembly, [-.38, 1.49, 0], [.92, .18, .42], 'polymer', 'fixed', { seat_form: 'saddle', motorcycle_seat: true }, 1.8);
+  const frontWheel = centeredWheel(frontDropout, 'front steering motorcycle wheel', front, true);
+  const seat = builder.component('seat', 'sculpted solo rider saddle', assembly, [-.38, 1.49, 0], [.76, .18, .42], 'polymer', 'fixed', { seat_form: 'saddle', motorcycle_seat: true, motorcycle_solo_seat: true, rider_capacity: 1 }, 1.6);
   const steering = builder.component('steering', 'motorcycle handlebar control', assembly, [.72, 1.78, 0], [.28, .12, .92], 'steel', 'fixed', { control_form: 'handlebar', motorcycle_handlebar: true, motorcycle_steering_member: true, ...steeringMotion }, 1.3);
   const power = builder.component(electric ? 'battery' : 'body-shell', electric ? 'traction battery and controller pack' : 'compact engine and fuel system', assembly, [-.1, 1.04, 0], [.72, .56, .48], electric ? 'polymer' : 'aluminum', 'fixed', { motorcycle_power_unit: true, motorcycle_battery: electric }, electric ? 12 : 18);
   const tank = builder.component('body-shell', electric ? 'sculpted upper battery cover and tank fairing' : 'sculpted fuel tank', assembly, [.28, 1.42, 0], [.92, .54, .56], 'composite', 'fixed', { motorcycle_bodywork: true, motorcycle_tank: true }, 4.2);
@@ -1066,11 +1066,47 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   const drive = builder.motor(motor, rearWheel.joint, Math.max(95, values.torqueNm * 1.5), 520, -1);
   builder.joint('belt', motor, rearWheel.wheel, [0, 0, 1], { ratio: 3.1 });
   for (const id of [seat, steering, power, tank, motor, chain, frontFender, rearFender, footPegs]) builder.connect(id, frameIds[0], 'mechanical', 'motorcycle_mount');
+
+  // The fork tubes are visibly telescopic and carry explicit damping/rate
+  // metadata so both the renderer and external agents can distinguish the
+  // front suspension from the rear monoshock without inventing a floating
+  // decorative spring next to the wheel.
+  for (const forkId of frameIds.filter((id) => builder.components.find((item) => item.id === id)?.parameters?.motorcycle_fork)) {
+    const fork = builder.components.find((item) => item.id === forkId)!;
+    fork.parameters = { ...fork.parameters, motorcycle_front_suspension: true, stiffness: 24000, damping: 1950, suspension_travel_m: .12 };
+  }
+
+  // Each hydraulic disc brake is one compact physical module: the custom
+  // renderer exposes its rotor and caliper, while the brake actuator damps the
+  // corresponding wheel's real revolute axle during simulation.
+  const addBrake = (axle: 'front' | 'rear', wheel: { wheel: string; joint: string }, support: string, position: Vec3) => {
+    const brake = builder.component('servo', `${axle} hydraulic disc brake rotor and caliper`, assembly, position, [axle === 'front' ? .48 : .44, .035, axle === 'front' ? .48 : .44], 'steel', 'fixed', { road_vehicle_brake: true, motorcycle_brake: true, motorcycle_brake_axle: axle, road_wheel_radius_m: wheelDiameter / 2, operation_speed_mps: 1.35 }, axle === 'front' ? .9 : .82);
+    builder.connect(brake, support, 'mechanical', `${axle}_brake_caliper_mount`);
+    const actuator = builder.actuator(brake, wheel.joint, 'brake', axle === 'front' ? 2200 : 1850, 9, .012);
+    return { brake, actuator };
+  };
+  const frontBrake = addBrake('front', frontWheel, frontDropout, [front[0], front[1], -.13]);
+  const rearBrake = addBrake('rear', rearWheel, rearDropout, [rear[0], rear[1], -.13]);
+
   const headlight = builder.component('light', 'round LED motorcycle headlight', assembly, [.93, 1.5, 0], [.3, .24, .3], 'aluminum', 'fixed', { headlight: true, vehicle_light: true, motorcycle_headlight: true, motorcycle_steering_member: true, ...steeringMotion, light_direction: 'front', facing_x: 1, facing_axis: '+X', beam_range: 5 }, .48);
+  const brakeLight = builder.component('light', 'rear LED motorcycle brake light', assembly, [-1.38, 1.18, 0], [.18, .15, .28], 'polymer', 'fixed', { brake_light: true, vehicle_light: true, motorcycle_brake_light: true, light_direction: 'rear', facing_x: -1, facing_axis: '-X', beam_range: 2.1 }, .2);
+  builder.components.find((item) => item.id === brakeLight)!.color = '#ff313d';
+  builder.connect(brakeLight, rearFender, 'mechanical', 'rear_light_bracket');
+
+  for (const end of ['front', 'rear'] as const) for (const side of ['left', 'right'] as const) {
+    const sideSign = side === 'left' ? -1 : 1;
+    const frontSignal = end === 'front';
+    const signal = builder.component('light', `${end} ${side} amber motorcycle turn signal`, assembly, [frontSignal ? .88 : -1.3, frontSignal ? 1.55 : 1.16, sideSign * (frontSignal ? .38 : .34)], [.16, .12, .12], 'aluminum', 'fixed', { vehicle_light: true, marker_light: true, turn_signal: true, motorcycle_turn_signal: true, signal_end: end, signal_side: side, light_direction: frontSignal ? 'front' : 'rear', facing_x: frontSignal ? 1 : -1, facing_axis: frontSignal ? '+X' : '-X', beam_range: 1.8, ...(frontSignal ? { motorcycle_steering_member: true, ...steeringMotion } : {}) }, .12);
+    builder.components.find((item) => item.id === signal)!.color = '#ff9d2e';
+    builder.connect(signal, frontSignal ? forkCrown : rearFender, 'mechanical', `${end}_turn_signal_bracket`);
+    builder.connect(power, signal, 'power', 'indicator_bus');
+  }
   const imuBody = builder.component('sensor', 'lean and wheel-speed sensor', assembly, [-.05, 1.36, .18], [.14, .11, .1], 'polymer', 'fixed', { motorcycle_imu: true }, .08);
   const imu = builder.sensor(imuBody, 'imu', 'motorcycle_lean', frameIds[0], 4);
   builder.connect(headlight, power, 'power', 'lighting_bus');
+  builder.connect(brakeLight, power, 'power', 'brake_light_bus');
   builder.connect(imuBody, frameIds[0], 'mechanical', 'sensor_mount');
+  builder.control('motorcycle service brakes', 'threshold', [imu], [frontBrake.actuator, rearBrake.actuator], 'apply both hydraulic disc brakes during the braking phase and illuminate the rear brake light', .35);
   builder.control('motorcycle stability and drive', 'pid', [imu], [], 'coordinate throttle with measured lean and wheel speed while preserving rider steering input', 0);
   return { id: 'motorcycle', mountId: frameIds[0], editableId: steering, handles: ['mobile', 'rotate', 'stabilize', 'measure'], driveId: drive };
 }

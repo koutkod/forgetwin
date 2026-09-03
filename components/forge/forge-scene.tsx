@@ -1144,12 +1144,22 @@ function IndustrialRobotGripper({ component, xray, selected, operating }: { comp
   </group>;
 }
 
-function VehicleLightBody({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
+function VehicleLightBody({ component, xray, selected, operating }: { component: MachineComponent; xray: boolean; selected: boolean; operating: boolean }) {
   const [x, y, z] = component.dimensions;
-  const rear = component.parameters.brake_light || component.parameters.light_direction === 'rear';
+  const lampRef = useRef<Group>(null);
+  const operationTime = useContext(OperationTimeContext);
+  const indicator = Boolean(component.parameters.turn_signal) || /turn signal|indicator/i.test(component.role);
+  const rear = Boolean(component.parameters.brake_light) || (!indicator && component.parameters.light_direction === 'rear');
+  const emitter = indicator ? '#ff9d2e' : rear ? '#ff2944' : '#e7fbff';
+  useFrame(() => {
+    if (!lampRef.current) return;
+    const visible = !indicator || !operating || Math.sin(operationTime.current * Math.PI * 2.4) > -.08;
+    lampRef.current.scale.setScalar(visible ? 1 : .82);
+    lampRef.current.visible = visible;
+  });
   return <group>
-    <RoundedBox args={[Math.min(.055, x * .28), Math.max(.055, y * .48), z * 1.18]} radius={.025} smoothness={6}><meshPhysicalMaterial color={selected ? '#65e5ff' : rear ? '#ff2944' : '#e7fbff'} emissive={rear ? '#d60023' : '#9eefff'} emissiveIntensity={xray ? .5 : 1.8} metalness={.04} roughness={.12} transparent opacity={xray ? .3 : .94} /></RoundedBox>
-    <group position={[rear ? -.035 : .035, 0, 0]}><BoxBody size={[.015, y * .18, z * .72]} color={rear ? '#ff6676' : '#ffffff'} xray={xray} selected={selected} radius={.008} metalness={.05} roughness={.1} /></group>
+    <RoundedBox args={[Math.min(.065, x * .34), Math.max(.055, y * .52), z * 1.18]} radius={.025} smoothness={6}><meshPhysicalMaterial color="#263238" metalness={.62} roughness={.24} transparent opacity={xray ? .34 : .98} /></RoundedBox>
+    <group ref={lampRef} position={[Number(component.parameters.facing_x ?? 1) < 0 ? -.038 : .038, 0, 0]}><BoxBody size={[.018, y * .72, z * .88]} color={selected ? '#65e5ff' : emitter} xray={xray} selected={selected} radius={.022} metalness={.04} roughness={.08} /></group>
   </group>;
 }
 
@@ -1661,7 +1671,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.parameters.robot_arm_camera) return <IndustrialRobotCamera component={component} xray={xray} selected={selected} />;
   if (component.parameters.robot_arm_gripper) return <IndustrialRobotGripper component={component} xray={xray} selected={selected} operating={operating} />;
   if (component.parameters.motorcycle_headlight) return <MotorcycleHeadlight component={component} xray={xray} selected={selected} />;
-  if (component.parameters.vehicle_light || component.parameters.headlight || component.parameters.brake_light) return <VehicleLightBody component={component} xray={xray} selected={selected} />;
+  if (component.parameters.vehicle_light || component.parameters.headlight || component.parameters.brake_light || component.parameters.turn_signal) return <VehicleLightBody component={component} xray={xray} selected={selected} operating={operating} />;
   if (component.parameters.motorcycle_wheel) return <MotorcycleWheel component={component} xray={xray} selected={selected} operating={operating} />;
   if (component.parameters.motorcycle_fork_crown) return <MotorcycleForkCrown component={component} xray={xray} selected={selected} />;
   if (component.parameters.motorcycle_frame || component.parameters.motorcycle_fork) return <MotorcycleTube component={component} color={color} xray={xray} selected={selected} />;

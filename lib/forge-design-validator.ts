@@ -41,16 +41,29 @@ function validateCompleteness(plan: CompiledWorldPlan, prompt: string, issues: D
     requireSubsystem(/steering wheel/.test(roles), 'KART_STEERING_MISSING', 'A go-kart needs a steering wheel and steering path.');
     requireSubsystem(/seat/.test(roles), 'KART_SEAT_MISSING', 'A go-kart needs a supported driver seat.');
   }
+  if (intent.machineType === 'motorcycle') {
+    requireSubsystem(components.filter((item) => item.parameters?.motorcycle_wheel).length >= 2, 'MOTORCYCLE_WHEELS_MISSING', 'A motorcycle needs separate front and rear wheels.');
+    requireSubsystem(components.some((item) => item.parameters?.motorcycle_front_wheel) && /handlebar|steering/.test(roles), 'MOTORCYCLE_STEERING_MISSING', 'A motorcycle needs a steering fork, front wheel, and handlebar control.');
+    requireSubsystem(components.some((item) => item.parameters?.motorcycle_rear_shock) && components.some((item) => item.parameters?.motorcycle_front_suspension), 'MOTORCYCLE_SUSPENSION_MISSING', 'A motorcycle needs distinct front and rear suspension.');
+    requireSubsystem(components.filter((item) => item.parameters?.motorcycle_brake).length >= 2 && plan.actuators.filter((item) => item.type === 'brake').length >= 2, 'MOTORCYCLE_BRAKES_MISSING', 'A motorcycle needs working front and rear service brakes.');
+    requireSubsystem(components.some((item) => item.parameters?.motorcycle_motor) && components.some((item) => item.parameters?.motorcycle_battery), 'MOTORCYCLE_POWERTRAIN_MISSING', 'An electric motorcycle needs a traction battery and electric motor.');
+  }
 }
 
 function validateLighting(plan: CompiledWorldPlan, prompt: string, issues: DesignIssue[]) {
   const normalized = normalizeEngineeringIntent(prompt).normalizedRequest.toLowerCase();
   const wantsBrakeLight = /\b(?:brake|rear) lights?\b/.test(normalized);
   const wantsForwardLight = /\b(?:headlights?|head lamps?|landing lights?|front lights?)\b/.test(normalized);
+  const wantsTurnSignals = /\b(?:turn signals?|indicators?)\b/.test(normalized);
   const brakeLights = plan.components.filter((component) => component.primitive === 'light' && /brake|rear light|tail light|taillight/.test(textFor(component)));
   const forwardLights = plan.components.filter((component) => component.primitive === 'light' && /headlight|head lamp|landing light|front light/.test(textFor(component)));
   if (wantsBrakeLight && !brakeLights.length) issues.push({ code: 'BRAKE_LIGHT_MISSING', severity: 'error', message: 'The requested rear brake light was not created.', componentIds: [] });
   if (wantsForwardLight && !forwardLights.length) issues.push({ code: 'FORWARD_LIGHT_MISSING', severity: 'error', message: 'The requested forward-facing light was not created.', componentIds: [] });
+  if (wantsTurnSignals) {
+    const signals = plan.components.filter((component) => component.primitive === 'light' && (component.parameters?.turn_signal || /turn signal|indicator/.test(textFor(component))));
+    const positions = new Set(signals.map((signal) => `${String(signal.parameters?.signal_end ?? (/rear/.test(signal.role) ? 'rear' : 'front'))}-${String(signal.parameters?.signal_side ?? (/left/.test(signal.role) ? 'left' : 'right'))}`));
+    if (!['front-left', 'front-right', 'rear-left', 'rear-right'].every((position) => positions.has(position))) issues.push({ code: 'TURN_SIGNALS_MISSING', severity: 'error', message: 'The requested turn-signal system needs front-left, front-right, rear-left, and rear-right lamps.', componentIds: signals.map((signal) => signal.id) });
+  }
   for (const light of brakeLights) {
     if (Number(light.parameters?.facing_x ?? 0) !== -1 || light.parameters?.light_direction !== 'rear' || light.parameters?.facing_axis !== '-X') issues.push({ code: 'BRAKE_LIGHT_DIRECTION', severity: 'repair', message: `${light.role} must face rearward (-X).`, componentIds: [light.id] });
     const supports = plan.connections.filter((edge) => edge.type === 'mechanical' && (edge.sourceId === light.id || edge.targetId === light.id))

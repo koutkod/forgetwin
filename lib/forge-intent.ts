@@ -44,6 +44,7 @@ function classifyMachine(text: string) {
   const mechanismText = text.replace(/\b(?:brake|tail|rear) lights?\b/g, 'vehicle-light');
   if (/\b(?:bicycle|bike)\b[^.]{0,40}\b(?:brake|caliper)\b|\b(?:brake|caliper)\b[^.]{0,40}\b(?:bicycle|bike)\b/.test(mechanismText)) return { machineType: 'bicycle-brake-assembly', requiredSubsystems: ['rotor or rim interface', 'caliper', 'pads', 'actuation input'] };
   if (/\bbicycle\b/.test(text)) return { machineType: 'bicycle', requiredSubsystems: ['frame', 'two wheels', 'steering', 'seat', 'drivetrain'] };
+  if (/\b(?:motorcycle|motorbike|scooter)\b/.test(text)) return { machineType: 'motorcycle', requiredSubsystems: ['tubular frame', 'two wheels', 'steering fork', 'front and rear suspension', 'seat', 'powertrain', 'front and rear brakes', 'lighting'] };
   if (/\b(?:airplane|fixed-wing aircraft)\b/.test(text)) return { machineType: 'fixed-wing-aircraft', requiredSubsystems: ['fuselage', 'left wing', 'right wing', 'tail surfaces', 'propulsion', 'landing gear'] };
   if (/\b(?:go-kart|kart)\b/.test(text)) return { machineType: 'go-kart', requiredSubsystems: ['chassis', 'four wheels', 'steering', 'seat', 'powertrain', 'brakes'] };
   if (/\b(?:helicopter|rotorcraft)\b/.test(text)) return { machineType: 'helicopter', requiredSubsystems: ['fuselage', 'main rotor', 'tail rotor', 'landing support', 'powertrain'] };

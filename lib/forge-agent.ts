@@ -369,6 +369,12 @@ function validatePhysicalSignature(plan: AgentPlan, requested: string) {
     requireSignature(count('wheel') >= 2 && count('tube') + count('frame') + count('beam') >= 3, 'two wheels on a recognizable tubular motorcycle frame');
     requireSignature(count('seat') >= 1 && count('steering') >= 1, 'a rider saddle and handlebar steering control');
     requireSignature(relevantDrivenJoints((component, text) => component.primitive === 'wheel' || /chain|drive wheel|traction/.test(text)).length >= 1, 'a power unit coupled to the rear wheel');
+    if (/\bsuspension\b/.test(requested)) requireSignature(count('spring') >= 1 && /telescopic fork|front suspension/.test(roles), 'distinct front and rear motorcycle suspension');
+    if (/\bbrakes?\b/.test(requested)) requireSignature(/front hydraulic disc brake/.test(roles) && /rear hydraulic disc brake/.test(roles) && plan.actuators.filter((item) => item.actuator_type === 'brake').length >= 2, 'working front and rear motorcycle brakes');
+    if (/\bturn signals?|indicators?\b/.test(requested)) {
+      const signals = plan.components.filter((component) => component.primitive === 'light' && /turn signal|indicator/.test(componentText(component.id)));
+      requireSignature(signals.length >= 4 && ['front left', 'front right', 'rear left', 'rear right'].every((position) => signals.some((signal) => componentText(signal.id).includes(position))), 'front and rear turn signals on both sides');
+    }
   }
   if (/\b(?:airplane|aeroplane|fixed[- ]wing aircraft)\b/.test(requested)) {
     requireSignature(count('fuselage') >= 1 && count('aerofoil') >= 2, 'a fuselage with main wing and stabilizing tail surfaces');
