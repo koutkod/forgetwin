@@ -243,7 +243,12 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
       position = position.map((value, axis) => value + tipDelta[axis]) as Vec3;
     }
   } else if (!jointPoseApplied && /crane/.test(context.machine)) {
-    if (/hook|suspended payload/.test(role)) position[1] += wave * 1.05;
+    // The hook and every explicitly rigged load share the exact same hoist
+    // travel. Role-name matching previously missed "suspended beam payload",
+    // leaving the beam on the floor while its hook and sling rose above it.
+    if (component.parameters.winch_hook || component.parameters.rigged_load) {
+      position[1] += wave * Math.max(0, Number(component.parameters.winch_travel_m ?? 1.05));
+    }
     if (role.includes('boom head pulley')) rotation[2] += elapsed * 1.35;
   }
 

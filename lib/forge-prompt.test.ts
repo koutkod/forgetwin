@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { componentMass, engineeringExamples } from './forge-data';
-import { localPointToWorld } from './forge-motion';
+import { animatedCableEndpoints, localPointToWorld } from './forge-motion';
 import { compileDesignBrief } from './forge-prompt';
 import { simulateDesign } from './forge-simulation';
 import { assemblePlan } from './forge-test-utils';
@@ -75,6 +75,12 @@ describe('ForgeTwin world-first brief compiler', () => {
 
     expect(offsets.length).toBeGreaterThan(20);
     expect(offsets.every((offset) => Math.abs(offset[0]) < .001 && Math.abs(offset[1] + 1.02) < .001 && Math.abs(offset[2]) < .001)).toBe(true);
+    const hookHeights = run.replay.map((frame) => frame.items.find((item) => item.id === hook.id)!.position[1]);
+    expect(Math.max(...hookHeights) - Math.min(...hookHeights)).toBeGreaterThanOrEqual(2.9);
+    const cable = state.components.find((item) => item.parameters.rigging)!;
+    const restingCable = animatedCableEndpoints(cable, 0, true)!;
+    const liftedCable = animatedCableEndpoints(cable, Math.PI / 1.45, true)!;
+    expect(liftedCable.end[1] - restingCable.end[1]).toBeCloseTo(3, 3);
   }, 30_000);
 
   it('builds a recognizable, controlled scissor lift instead of a generic guided elevator', () => {

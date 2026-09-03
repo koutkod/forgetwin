@@ -279,7 +279,7 @@ export function animatedCableEndpoints(component: MachineComponent, elapsed: num
     end[1] = pivotY + dx * Math.sin(angle) + dy * Math.cos(angle);
   }
   if (component.parameters.drawbridge_cable === 'counterweight') end[1] -= liftWave * .62;
-  if (component.parameters.rigging) end[1] += liftWave * 1.05;
+  if (component.parameters.rigging) end[1] += liftWave * Math.max(0, Number(component.parameters.winch_travel_m ?? 1.05));
   if (component.parameters.winch_cable && component.parameters.cable_segment === 'load') end[1] += liftWave * Math.min(1.6, Number(component.parameters.winch_travel_m ?? 1));
   return { start, end };
 }
