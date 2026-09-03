@@ -12,7 +12,7 @@ const bodyType = z.enum(['fixed', 'dynamic', 'kinematic']);
 const materialId = z.enum(['steel', 'aluminum', 'copper', 'polymer', 'rubber', 'concrete', 'composite']);
 const jointType = z.enum(['fixed', 'revolute', 'prismatic', 'spherical', 'spring', 'rope', 'gear', 'belt']);
 const sensorType = z.enum(['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence']);
-const actuatorType = z.enum(['rotary-motor', 'servo', 'linear', 'piston', 'winch']);
+const actuatorType = z.enum(['rotary-motor', 'servo', 'linear', 'piston', 'winch', 'brake']);
 const controlMode = z.enum(['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized']);
 const connectionType = z.enum(['mechanical', 'power', 'signal']);
 const vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
@@ -630,7 +630,11 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
   unique(plan.joints.map((item) => [item.component_a, item.component_b].sort().join('|')), 'Joint body pair');
   for (const item of plan.joints) { assertReference(componentIds, item.component_a, `Joint ${item.id}`); assertReference(componentIds, item.component_b, `Joint ${item.id}`); if (item.component_a === item.component_b) throw new Error(`Joint ${item.id} needs two bodies.`); if (Math.hypot(...item.axis) < .5) throw new Error(`Joint ${item.id} needs a non-zero axis.`); if (item.limits && item.limits[0] > item.limits[1]) throw new Error(`Joint ${item.id} has reversed limits.`); if (['prismatic', 'spring', 'rope'].includes(item.joint_type) && !item.limits) throw new Error(`Joint ${item.id} needs finite travel limits.`); if (['gear', 'belt'].includes(item.joint_type) && item.ratio <= 0) throw new Error(`Joint ${item.id} needs a positive ratio.`); if (item.joint_type !== 'fixed' && bodyById.get(item.component_a)?.body_type === 'fixed' && bodyById.get(item.component_b)?.body_type === 'fixed') throw new Error(`Joint ${item.id} cannot create motion between two fixed bodies.`); }
   for (const item of plan.motors) { assertReference(componentIds, item.component_id, `Motor ${item.id}`); assertReference(jointIds, item.joint_id, `Motor ${item.id}`, true); const source = plan.components.find((part) => part.id === item.component_id); if (source?.primitive !== 'motor' && !source?.semantic_tags.includes('human-power-input')) throw new Error(`Motor ${item.id} must target a motor primitive or modeled human-power input.`); if (item.joint_id) { const driven = plan.joints.find((joint) => joint.id === item.joint_id)!; if (driven.joint_type === 'fixed' || bodyById.get(driven.component_b)?.body_type === 'fixed') throw new Error(`Motor ${item.id} must drive the movable component_b endpoint of a motion joint.`); } }
-  for (const item of plan.sensors) { assertReference(componentIds, item.component_id, `Sensor ${item.id}`); assertReference(componentIds, item.target_id, `Sensor ${item.id}`, true); if (!['sensor', 'camera'].includes(plan.components.find((part) => part.id === item.component_id)?.primitive ?? '')) throw new Error(`Sensor ${item.id} must target a sensor or camera primitive.`); }
+  // A sensor channel may be embedded in the physical part it measures (for
+  // example a force-sensing brake lever or smart bearing). Dedicated sensor
+  // and camera bodies remain available, but are not an artificial schema
+  // requirement for every channel.
+  for (const item of plan.sensors) { assertReference(componentIds, item.component_id, `Sensor ${item.id}`); assertReference(componentIds, item.target_id, `Sensor ${item.id}`, true); }
   for (const item of plan.actuators) { assertReference(componentIds, item.component_id, `Actuator ${item.id}`); assertReference(jointIds, item.joint_id, `Actuator ${item.id}`); if (!['motor', 'servo', 'piston'].includes(plan.components.find((part) => part.id === item.component_id)?.primitive ?? '')) throw new Error(`Actuator ${item.id} needs a motor, servo, or piston body.`); const driven = plan.joints.find((joint) => joint.id === item.joint_id)!; if (driven.joint_type === 'fixed' || bodyById.get(driven.component_b)?.body_type === 'fixed') throw new Error(`Actuator ${item.id} must drive the movable component_b endpoint of a motion joint.`); }
   for (const item of plan.controls) { item.sensor_ids.forEach((id) => assertReference(sensorIds, id, `Control ${item.id}`)); item.actuator_ids.forEach((id) => assertReference(actuatorIds, id, `Control ${item.id}`)); }
   assertReference(componentIds, plan.editable_component_id, 'Editable component');
@@ -932,7 +936,7 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
     }
     if (action.tool === 'set_motor_speed') { assertReference(motors, action.motor_id, 'Motor speed edit'); touchMotor(action.motor_id); continue; }
     if (action.tool === 'add_sensor') {
-      assertReference(components, action.component_id, `Sensor ${action.sensor_id}`); assertReference(components, action.target_id, `Sensor ${action.sensor_id}`, true); if (!['sensor', 'camera'].includes(primitiveById.get(action.component_id) ?? '')) throw new Error(`Sensor ${action.sensor_id} needs a sensor or camera body.`);
+      assertReference(components, action.component_id, `Sensor ${action.sensor_id}`); assertReference(components, action.target_id, `Sensor ${action.sensor_id}`, true);
       sensors.add(action.sensor_id); sensorById.set(action.sensor_id, { component_id: action.component_id, target_id: action.target_id }); touchSensor(action.sensor_id); continue;
     }
     if (action.tool === 'set_sensor_range') { assertReference(sensors, action.sensor_id, 'Sensor range edit'); touchSensor(action.sensor_id); continue; }

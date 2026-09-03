@@ -33,7 +33,8 @@ describe('ForgeTwin world-first brief compiler', () => {
     expect(plans.rover.components.filter((item) => item.primitive === 'spring')).toHaveLength(4);
     expect(plans.gearbox.components.filter((item) => item.primitive === 'gear').length).toBeGreaterThanOrEqual(2);
     expect(plans.gearbox.joints.some((item) => item.type === 'gear' && item.ratio === 4)).toBe(true);
-    expect(plans.lift.joints.filter((item) => item.type === 'prismatic').length).toBeGreaterThanOrEqual(2);
+    expect(plans.lift.joints.filter((item) => item.type === 'prismatic')).toHaveLength(1);
+    expect(plans.lift.actuators.filter((item) => item.type === 'piston')).toHaveLength(2);
     expect(plans.arm.joints.filter((item) => item.type === 'revolute').length).toBeGreaterThanOrEqual(3);
     expect(plans.arm.components.some((item) => item.primitive === 'gripper')).toBe(true);
     expect(plans.bridge.components.filter((item) => item.primitive === 'beam').length).toBeGreaterThanOrEqual(3);
@@ -149,6 +150,15 @@ describe('ForgeTwin world-first brief compiler', () => {
       const plan = compileDesignBrief(example.prompt);
       expect(checks[example.id]?.(plan), `${example.title} should compile to its own recognizable physical signature`).toBe(true);
     }
+  });
+
+  it('does not confuse engineering measurements with primitive quantities', () => {
+    const crane = compileDesignBrief('Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.');
+    expect(crane.assemblies.some((item) => item.name === 'requested primitive extension')).toBe(false);
+    expect(crane.components.filter((item) => item.role === 'suspended beam payload')).toHaveLength(1);
+
+    const fourWheelRover = compileDesignBrief('Build a rover with 4 wheels that carries a 5 kg payload over uneven ground.');
+    expect(fourWheelRover.components.filter((item) => item.parameters?.rover_wheel)).toHaveLength(4);
   });
 
   it('constructs recognizable CAD-style parts and rotating assemblies from primitives', () => {
@@ -338,7 +348,7 @@ describe('ForgeTwin world-first brief compiler', () => {
     const crane = compileDesignBrief('Build a gearbox-driven crane with a 4:1 reduction that lifts 80 kg by 2 meters.');
     expect(crane.components.some((item) => item.primitive === 'gear')).toBe(true);
     expect(crane.components.some((item) => item.primitive === 'pulley')).toBe(true);
-    expect(crane.components.some((item) => item.role === 'suspended payload')).toBe(true);
+    expect(crane.components.some((item) => /suspended.*payload/.test(item.role))).toBe(true);
     expect(crane.components.some((item) => item.role.startsWith('road wheel'))).toBe(false);
     expect(crane.connections.some((item) => item.channel === 'compound_drive_output')).toBe(true);
     expect(crane.goal.constraints.map((item) => item.metric)).toEqual(expect.arrayContaining(['speed_ratio', 'payload_capacity', 'lift_height']));

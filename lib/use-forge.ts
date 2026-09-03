@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { createInitialForgeState } from './forge-data';
 import { applyForgeTool, commitSimulation, createCheckpoint, markSimulationRunning, toggleUi } from './forge-engine';
 import { simulateDesign } from './forge-simulation';
-import type { Actor, CompiledWorldPlan, ForgeState, ForgeToolName, ToolResult, Vec3 } from './forge-types';
+import type { Actor, CollisionClassification, CompiledWorldPlan, ForgeState, ForgeToolName, MetricReading, RequirementCoverage, SimulationRun, ToolResult, Vec3 } from './forge-types';
 
 export const STORAGE_KEY = 'forgetwin-workspace-v3';
 const revision = z.number().int().nonnegative();
@@ -35,9 +35,9 @@ export const schemas = {
   set_motor_speed: z.object({ motor_id: id, max_rpm: z.number().finite().positive().max(100000), direction: z.number().finite().min(-1).max(1), ...guard }).strict(),
   add_sensor: z.object({ sensor_id: id, component_id: id, sensor_type: z.enum(['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence']), channel: key, target_id: id.optional(), range: z.number().finite().positive().max(100), ...guard }).strict(),
   set_sensor_range: z.object({ sensor_id: id, range: z.number().finite().positive().max(100), ...guard }).strict(),
-  add_actuator: z.object({ actuator_id: id, component_id: id, joint_id: id, actuator_type: z.enum(['rotary-motor', 'servo', 'linear', 'piston', 'winch']), max_force: z.number().finite().positive(), max_speed: z.number().finite().positive(), travel: z.number().finite().positive(), ...guard }).strict(),
+  add_actuator: z.object({ actuator_id: id, component_id: id, joint_id: id, actuator_type: z.enum(['rotary-motor', 'servo', 'linear', 'piston', 'winch', 'brake']), max_force: z.number().finite().positive(), max_speed: z.number().finite().positive(), travel: z.number().finite().positive(), ...guard }).strict(),
   set_actuator_timing: z.object({ actuator_id: id, max_speed: z.number().finite().positive().max(10000), travel: z.number().finite().positive().max(100), ...guard }).strict(),
-  set_control_logic: z.object({ control_id: id, name: z.string().min(1).max(80), mode: z.enum(['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized']), sensor_ids: z.array(id).max(12), actuator_ids: z.array(id).max(12), expression: z.string().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10), calibration_x: z.number().finite().min(-60).max(60).optional(), ...guard }).strict(),
+  set_control_logic: z.object({ control_id: id, name: z.string().min(1).max(80), mode: z.enum(['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized']), sensor_ids: z.array(id).min(1).max(12), actuator_ids: z.array(id).max(12), motor_ids: z.array(id).max(12).optional(), expression: z.string().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10), calibration_x: z.number().finite().min(-60).max(60).optional(), ...guard }).strict().refine((value) => value.actuator_ids.length > 0 || (value.motor_ids?.length ?? 0) > 0, { message: 'A controller requires at least one actuator or motor output.' }),
   update_control_logic: z.object({ control_id: id, expression: z.string().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10), ...guard }).strict(),
   run_simulation: z.object(guard).strict(),
   inspect_telemetry: z.object({ run_id: z.string().max(80).optional() }).strict(),
@@ -121,7 +121,7 @@ export function preflightCompiledWorldPlan(plan: CompiledWorldPlan) {
     ...plan.motors.map((item) => ({ name: 'add_motor' as const, input: { motor_id: item.id, component_id: item.componentId, joint_id: item.jointId, max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction } })),
     ...plan.sensors.map((item) => ({ name: 'add_sensor' as const, input: { sensor_id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId, range: item.range } })),
     ...plan.actuators.map((item) => ({ name: 'add_actuator' as const, input: { actuator_id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel } })),
-    ...plan.controls.map((item) => ({ name: 'set_control_logic' as const, input: { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX } })),
+    ...plan.controls.map((item) => ({ name: 'set_control_logic' as const, input: { control_id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, motor_ids: item.motorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibration_x: item.calibrationX } })),
   ];
   return steps.map((step) => ({ name: step.name, ...prepareForgeToolArguments(step.name, { ...step.input, ...guard }) }));
 }
@@ -165,11 +165,81 @@ const descriptions: Record<ForgeToolName, string> = {
 
 const persistedState = z.object({ schemaVersion: z.literal(3), workspaceId: z.string(), workspaceNonce: nonce, revision, designRevision: revision, assemblies: z.array(z.unknown()), components: z.array(z.unknown()), joints: z.array(z.unknown()), runs: z.array(z.unknown()), revisions: z.array(z.unknown()), activity: z.array(z.unknown()) }).passthrough();
 
+const metricEvidence = new Set<MetricReading['evidence']>(['replay-telemetry', 'rapier-contact', 'reduced-order-model', 'design-inspection', 'not-evaluated']);
+const collisionClassifications = new Set<CollisionClassification>(['expected-contact', 'connected-component-contact', 'ground-contact', 'clearance-violation', 'self-interference', 'harmful-impact']);
+
+/** Keep saved pre-evidence workspaces usable without presenting historical
+ * heuristic numbers as newly measured proof. A fresh Run Physics action will
+ * replace these conservative migration labels with current replay evidence. */
+export function migratePersistedState(state: ForgeState): ForgeState {
+  const runs = (Array.isArray(state.runs) ? state.runs : []).map((run, runIndex) => {
+    const candidate = run as SimulationRun;
+    const sourceMeasures = Array.isArray(candidate.metrics?.measures) ? candidate.metrics.measures : [];
+    const legacyEvidence = sourceMeasures.some((reading) => !metricEvidence.has(reading.evidence))
+      || !Array.isArray(candidate.requirementCoverage)
+      || !candidate.evaluationLevel;
+    const measures: MetricReading[] = sourceMeasures.map((reading) => {
+      const evidence = metricEvidence.has(reading.evidence) ? reading.evidence : 'not-evaluated';
+      return { ...reading, evidence, status: evidence === 'not-evaluated' ? 'info' : reading.status };
+    });
+    const fallbackCoverage: RequirementCoverage[] = measures.map((reading, index) => ({
+      id: `migrated-${runIndex}-${index}`,
+      category: 'user requirement',
+      requirement: reading.label,
+      status: 'not-evaluated',
+      componentIds: [],
+      simulationEvidence: 'Saved before the current evidence contract; this value is not treated as verified.',
+      missingItems: ['fresh fixed-step replay'],
+      recommendedCorrection: 'Run Physics again to produce current telemetry and contact evidence.',
+    }));
+    const requirementCoverage = Array.isArray(candidate.requirementCoverage)
+      ? candidate.requirementCoverage.map((item, index) => ({
+        id: item.id || `migrated-${runIndex}-${index}`,
+        category: item.category || 'user requirement',
+        requirement: item.requirement || measures[index]?.label || `Requirement ${index + 1}`,
+        status: item.status || 'not-evaluated',
+        componentIds: Array.isArray(item.componentIds) ? item.componentIds : [],
+        simulationEvidence: item.simulationEvidence || 'No saved evidence description.',
+        missingItems: Array.isArray(item.missingItems) ? item.missingItems : [],
+        recommendedCorrection: item.recommendedCorrection || 'Run Physics again for current evidence.',
+      }))
+      : fallbackCoverage;
+    const collisions = (Array.isArray(candidate.collisions) ? candidate.collisions : []).map((collision, index) => ({
+      ...collision,
+      id: collision.id || `migrated-contact-${runIndex}-${index}`,
+      point: collision.point ?? [0, 0, 0],
+      replayFrame: collision.replayFrame ?? 0,
+      harmful: collision.harmful ?? false,
+      classification: collisionClassifications.has(collision.classification) ? collision.classification : 'connected-component-contact',
+      reason: collision.reason || 'Legacy contact retained for replay; rerun to classify it with the current collision model.',
+    }));
+    return {
+      ...candidate,
+      status: legacyEvidence && candidate.status === 'passed' ? 'partial' : candidate.status,
+      evaluationLevel: candidate.evaluationLevel ?? 'concept-only',
+      metrics: { ...candidate.metrics, measures },
+      requirementCoverage,
+      collisions,
+    };
+  });
+  const latest = runs.at(-1);
+  return {
+    ...state,
+    runs,
+    phase: latest && state.phase === 'passed' && latest.status !== 'passed' ? latest.status : state.phase,
+    controls: (Array.isArray(state.controls) ? state.controls : [])
+      .map((control) => ({ ...control, motorIds: control.motorIds ?? (control.actuatorIds.length ? [] : state.motors.map((motor) => motor.id)) }))
+      .filter((control) => control.sensorIds.length > 0 && (control.actuatorIds.length > 0 || (control.motorIds?.length ?? 0) > 0)),
+  };
+}
+
 function hydrate(): ForgeState {
   if (typeof window === 'undefined') return createInitialForgeState();
   try {
     const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null') as unknown;
-    if (persistedState.safeParse(parsed).success) return parsed as ForgeState;
+    if (persistedState.safeParse(parsed).success) {
+      return migratePersistedState(parsed as ForgeState);
+    }
   } catch { /* Corrupt or unavailable storage falls back to a deterministic world. */ }
   return createInitialForgeState();
 }
@@ -313,9 +383,9 @@ function jsonSchemaFor(name: ForgeToolName): Record<string, unknown> {
     set_motor_speed: { properties: { motor_id: identifier, max_rpm: { type: 'number', exclusiveMinimum: 0, maximum: 100000 }, direction: { type: 'number', minimum: -1, maximum: 1 }, ...common }, required: ['motor_id', 'max_rpm', 'direction', ...requiredCommon] },
     add_sensor: { properties: { sensor_id: identifier, component_id: identifier, sensor_type: { enum: ['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence'] }, channel: metricKey, target_id: identifier, range: { type: 'number', exclusiveMinimum: 0 }, ...common }, required: ['sensor_id', 'component_id', 'sensor_type', 'channel', 'range', ...requiredCommon] },
     set_sensor_range: { properties: { sensor_id: identifier, range: { type: 'number', exclusiveMinimum: 0, maximum: 100 }, ...common }, required: ['sensor_id', 'range', ...requiredCommon] },
-    add_actuator: { properties: { actuator_id: identifier, component_id: identifier, joint_id: identifier, actuator_type: { enum: ['rotary-motor', 'servo', 'linear', 'piston', 'winch'] }, max_force: { type: 'number', exclusiveMinimum: 0 }, max_speed: { type: 'number', exclusiveMinimum: 0 }, travel: { type: 'number', exclusiveMinimum: 0 }, ...common }, required: ['actuator_id', 'component_id', 'joint_id', 'actuator_type', 'max_force', 'max_speed', 'travel', ...requiredCommon] },
+    add_actuator: { properties: { actuator_id: identifier, component_id: identifier, joint_id: identifier, actuator_type: { enum: ['rotary-motor', 'servo', 'linear', 'piston', 'winch', 'brake'] }, max_force: { type: 'number', exclusiveMinimum: 0 }, max_speed: { type: 'number', exclusiveMinimum: 0 }, travel: { type: 'number', exclusiveMinimum: 0 }, ...common }, required: ['actuator_id', 'component_id', 'joint_id', 'actuator_type', 'max_force', 'max_speed', 'travel', ...requiredCommon] },
     set_actuator_timing: { properties: { actuator_id: identifier, max_speed: { type: 'number', exclusiveMinimum: 0, maximum: 10000 }, travel: { type: 'number', exclusiveMinimum: 0, maximum: 100 }, ...common }, required: ['actuator_id', 'max_speed', 'travel', ...requiredCommon] },
-    set_control_logic: { properties: { control_id: identifier, name: { type: 'string' }, mode: { enum: ['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized'] }, sensor_ids: { type: 'array', items: identifier }, actuator_ids: { type: 'array', items: identifier }, expression: { type: 'string' }, setpoint: { type: 'number' }, kp: { type: 'number' }, ki: { type: 'number' }, kd: { type: 'number' }, calibration_x: { type: 'number', minimum: -60, maximum: 60 }, ...common }, required: ['control_id', 'name', 'mode', 'sensor_ids', 'actuator_ids', 'expression', 'setpoint', 'kp', 'ki', 'kd', ...requiredCommon] },
+    set_control_logic: { properties: { control_id: identifier, name: { type: 'string' }, mode: { enum: ['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized'] }, sensor_ids: { type: 'array', minItems: 1, items: identifier }, actuator_ids: { type: 'array', items: identifier }, motor_ids: { type: 'array', items: identifier }, expression: { type: 'string' }, setpoint: { type: 'number' }, kp: { type: 'number' }, ki: { type: 'number' }, kd: { type: 'number' }, calibration_x: { type: 'number', minimum: -60, maximum: 60 }, ...common }, required: ['control_id', 'name', 'mode', 'sensor_ids', 'actuator_ids', 'expression', 'setpoint', 'kp', 'ki', 'kd', ...requiredCommon] },
     update_control_logic: { properties: { control_id: identifier, expression: { type: 'string' }, setpoint: { type: 'number' }, kp: { type: 'number', minimum: 0, maximum: 10 }, ki: { type: 'number', minimum: 0, maximum: 10 }, kd: { type: 'number', minimum: 0, maximum: 10 }, ...common }, required: ['control_id', 'expression', 'setpoint', 'kp', 'ki', 'kd', ...requiredCommon] },
     run_simulation: { properties: common, required: requiredCommon },
     inspect_telemetry: { properties: { run_id: { type: 'string' } }, required: [] },

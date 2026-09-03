@@ -85,6 +85,19 @@ export function contextualMechanicalEdits(state: ForgeState, instruction: string
         && !/\b(?:seat post|seat stay|seat tube|seat rail|seat crossmember|seat support)\b/.test(component.role.toLowerCase()));
     if (seat) commands.push({ tool: 'move_component', input: { component_id: seat.id, position: [Number((seat.position[0] - .25).toFixed(3)), seat.position[1], seat.position[2]] }, label: `Move ${seat.role} rearward` });
   }
+  const movePedals = /\b(?:move|shift|position)\b[^.]{0,45}\bpedals?\b|\bpedals?\b[^.]{0,45}\b(?:back|forward|up|down|left|right)\b/.test(text);
+  if (movePedals) {
+    const amountMatch = text.match(/(\d+(?:\.\d+)?)\s*(cm|centimeters?|m|meters?|mm|millimeters?)/);
+    const amount = amountMatch ? Number(amountMatch[1]) * (amountMatch[2] === 'mm' || amountMatch[2].startsWith('mill') ? .001 : amountMatch[2].startsWith('c') ? .01 : 1) : .15;
+    const delta: Vec3 = /\b(?:back|backward|rearward)\b/.test(text) ? [-amount, 0, 0]
+      : /\bforward\b/.test(text) ? [amount, 0, 0]
+        : /\bup(?:ward)?\b/.test(text) ? [0, amount, 0]
+          : /\bdown(?:ward)?\b/.test(text) ? [0, -amount, 0]
+            : /\bleft\b/.test(text) ? [0, 0, -amount] : /\bright\b/.test(text) ? [0, 0, amount] : [-amount, 0, 0];
+    for (const pedal of state.components.filter((component) => component.parameters.bicycle_pedal || component.primitive === 'pedal')) {
+      commands.push({ tool: 'move_component', input: { component_id: pedal.id, position: pedal.position.map((value, index) => Number((value + delta[index]).toFixed(3))) as Vec3 }, label: `Move ${pedal.role} ${Math.round(amount * 100)} cm` });
+    }
+  }
   return commands;
 }
 

@@ -88,23 +88,36 @@ Every mutating call is Zod-validated and guarded by the current workspace nonce 
 
 ## Physics and measurement
 
-- Every physical component receives a Rapier rigid body and collider using its transform, shape, material friction/restitution, and mass.
+- Every physical component receives a Rapier rigid body using its authored transform and mass. Load-bearing/contact geometry receives material-aware colliders; cables, sensors, bearing shells, steering interfaces, and other visual abstractions retain mass and topology but are explicitly disclosed as reduced-order clearance models instead of being treated as solid envelopes.
 - Supported physical joints are instantiated between bodies; motors and actuators drive dynamic bodies during fixed 60 Hz trials.
 - Rapier’s collision event queue supplies contact evidence and replay markers.
-- Graph-derived analysis measures quantities such as total mass, center of mass, footprint, payload capacity, lift height, stability, reach, torque margin, ratio, speed, traction, tracking error, throughput, collisions, structural capacity, and deflection.
+- Replay frames, sensor channels, dashboard cards, collision markers, failure diagnosis, and optimization all refer to the same immutable run. Gearbox input/output speed and ratio, lift travel, package delivery, sorting accuracy, and collision counts are read from that captured replay when available.
+- Every metric carries an evidence label: `replay-telemetry`, `rapier-contact`, `design-inspection`, `reduced-order-model`, or `not-evaluated`. Reduced-order values are never relabeled as full physics evidence.
+- The Results panel includes a requirement-coverage table that separates user requirements, AI assumptions, and safety requirements and shows status, involved components, run evidence, missing evidence, and the safest correction.
+- A run is **Passed** only when every measured constraint and safety check passes. Missing domain/contact fidelity produces **Partial**, and aircraft remain **Concept only** unless aerodynamic evidence exists.
 - The first bounded design is allowed to fail. The optimizer reads the failing measurement and modifies relevant fields—such as control gains, actuator force, motor torque, spring properties, counterweight mass, or structural section depth—before rerunning the same world.
 - Optimization pass count is provenance only: it is not an input to physics or any verdict. Unsupported measurement names are rejected instead of receiving a fabricated score.
 - Seed `424242` and a deterministic fallback make the judging sequence repeatable without an external API.
 
-Gear/belt power transmission and structural stress use disclosed reduced-order engineering proxies around the real rigid-body world. ForgeTwin is a concept-level digital-twin lab, not production CAD, FEA, CFD, medical approval, or safety certification.
+Gear/belt power transmission, structural stress, detailed manufacturing clearances, tire/terrain behavior, flexible cables, grasp contact, aerodynamics, and several domain processes use disclosed reduced-order or kinematic models around the real rigid-body world. ForgeTwin is a concept-level digital-twin lab, not production CAD, FEA, CFD, medical approval, or safety certification.
+
+### Run evidence contract
+
+```text
+prompt → typed requirements → bodies → physical joints → controller outputs
+       → one 60 Hz run → replay frames → sensor telemetry → measurements
+       → coverage verdict → evidence-linked redesign
+```
+
+Semantic connections explain intent but do not count as physical attachment. Assembly integrity is computed only from joints (with separate fixed supports sharing the grounded world). Controllers must have at least one sensor input and a real motor or actuator output. Unexpected contacts are classified as expected contact, connected-component contact, ground contact, clearance violation, self-interference, or harmful impact, with time, impulse, point, and replay frame.
 
 ## Human-agent collaboration
 
-After a design passes, drag or edit a component. ForgeTwin marks the changed physical field as human-owned and invalidates the prior calibration. The agent detects the new design hash, simulates the modified world, and redesigns surrounding unlocked fields without moving the human component back. Compare and version-history views make the preservation visible.
+After a design produces run evidence, drag or edit a component. ForgeTwin marks the changed physical field as human-owned and invalidates the prior calibration. The agent detects the new design hash, simulates the modified world, and redesigns surrounding unlocked fields without moving the human component back. Compare and version-history views make the preservation visible.
 
 The **Edit with chat** panel changes the existing world rather than silently starting over. The connected model receives the bounded current graph, selected body, device/control state, latest failed metrics, human locks, and recent chat context. Requests such as “lengthen the boom,” “widen the outriggers,” “move the sensor up 0.5 m,” “reverse the drive motor,” “retune the PID,” or “add another support” compile into the smallest guarded action sequence. Multi-action revisions execute against a shadow world and commit atomically only if every action, stale-state guard, and preservation invariant passes. If a request is materially ambiguous, the agent asks one clarification before mutating anything. ForgeTwin then runs physics and uses the same evidence-driven redesign loop if a constraint fails. Without a model key, the bounded local interpreter handles recognized geometry, transform, mass, material, add, and remove requests and refuses unknown edits instead of changing an arbitrary part.
 
-The renderer uses the same primitive graph to produce industrial frames, rounded structural members, geared shafts, grooved pulleys, rigging, wheels with hubs and tread, drive housings, crates, solar panels, conveyors, supports, and control devices. Camera framing is derived from the current world bounds, so a compact gearbox and a tall crane both fill the workspace without machine-specific camera presets.
+The renderer uses the same primitive graph to produce industrial frames, rounded structural members, geared shafts, grooved pulleys, rigging, wheels with hubs and tread, drive housings, crates, solar panels, conveyors, supports, and control devices. Camera framing is derived from the current world bounds, so a compact gearbox and a tall crane both fill the workspace without machine-specific camera presets. Stored replay has play/pause, restart, stepping, speed, timeline scrubbing, exact-frame transforms, and collision markers. A WebGL capability check selects the Three.js view only once; `?renderer=compatibility` forces the interactive SVG fallback for testing or restricted browsers.
 
 ## Export and CAD handoff
 
@@ -158,7 +171,7 @@ Key modules:
 1. Enter a crane, rover, gearbox, robotic mechanism, bridge, or entirely new mechanical goal.
 2. Use the included hosted AI immediately, or select **Connect AI** to override it with a temporary visitor key.
 3. Select **Engineer with AI** or **Engineer locally** and watch the agent console explain its plan, observations, and guarded world-tool calls.
-4. Observe the baseline physics failure, then open **Replay 0.25×** or **Telemetry** for causal evidence.
+4. Observe the baseline physics failure, then open **Replay simulation** or **Results** for causal evidence and explicit coverage limits.
 5. Let the agent inspect, measure, redesign, and rerun until all constraints pass.
 6. Toggle **X-Ray** to expose joints, axes, signal lines, actuator paths, velocity vectors, and contacts.
 7. Select any body and move, rotate, resize, or change its material.

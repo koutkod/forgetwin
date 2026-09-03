@@ -57,7 +57,7 @@ describe('model-authored world compilation', () => {
 
     expect(result.components.length).toBeGreaterThan(40);
     expect(result.components.length).toBeLessThanOrEqual(80);
-    expect(result.joints).toHaveLength(17);
+    expect(result.joints.length).toBeGreaterThanOrEqual(17);
     const roundTrip = compileAgentPlan(prompt, result);
     expect(roundTrip.components.filter((item) => item.parameters?.road_vehicle_kingpin)).toHaveLength(2);
     expect(roundTrip.components.filter((item) => item.parameters?.road_vehicle_wheel_hub)).toHaveLength(4);

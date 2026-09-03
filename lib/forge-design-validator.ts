@@ -221,6 +221,27 @@ function repairWorldBounds(plan: CompiledWorldPlan, issues: DesignIssue[]) {
   return [`expanded world bounds to ${required.map((value) => value.toFixed(1)).join(' × ')} m`];
 }
 
+function materializeRigidAttachments(plan: CompiledWorldPlan) {
+  const repaired: string[] = [];
+  const jointPairs = new Set(plan.joints.map((joint) => [joint.componentA, joint.componentB].sort().join('|')));
+  const usedIds = new Set(plan.joints.map((joint) => joint.id));
+  for (const edge of plan.connections.filter((connection) => connection.type === 'mechanical')) {
+    const left = plan.components.find((component) => component.id === edge.sourceId);
+    const right = plan.components.find((component) => component.id === edge.targetId);
+    const pair = [edge.sourceId, edge.targetId].sort().join('|');
+    // Welded brackets, frames, housings, and bodywork need a real fixed-joint
+    // declaration. Moving/flexible interfaces still require an explicit
+    // revolute, prismatic, rope, spring, gear, or belt joint from the planner.
+    if (!left || !right || (left.bodyType !== 'fixed' && right.bodyType !== 'fixed') || jointPairs.has(pair)) continue;
+    const shared = left.position.map((value, axis) => (value + right.position[axis]) / 2) as [number, number, number];
+    let id = `weld-${edge.id}`.slice(0, 64); let suffix = 2;
+    while (usedIds.has(id)) { id = `${`weld-${edge.id}`.slice(0, 58)}-${suffix}`; suffix += 1; }
+    plan.joints.push({ id, type: 'fixed', componentA: left.id, componentB: right.id, anchorA: shared.map((value, axis) => value - left.position[axis]) as [number, number, number], anchorB: shared.map((value, axis) => value - right.position[axis]) as [number, number, number], axis: [0, 1, 0] });
+    usedIds.add(id); jointPairs.add(pair); repaired.push(`materialized ${edge.channel} as a fixed joint`);
+  }
+  return repaired;
+}
+
 export function validateCompiledWorldPlan(plan: CompiledWorldPlan, prompt = plan.brief) {
   const issues: DesignIssue[] = [];
   validateReferencesAndBounds(plan, issues);
@@ -240,6 +261,7 @@ export function finalizeCompiledWorldPlan(input: CompiledWorldPlan, prompt = inp
   const repairs = [
     ...repairLighting(plan, firstPass), ...repairVehicleGeometry(plan, firstPass), ...repairWindshields(plan, firstPass),
     ...removeUnexpectedSystems(plan, firstPass), ...repairUnsupportedComponents(plan, firstPass), ...repairWorldBounds(plan, firstPass),
+    ...materializeRigidAttachments(plan),
   ];
   const issues = validateCompiledWorldPlan(plan, prompt).filter((issue) => issue.severity !== 'repair');
   const errors = issues.filter((issue) => issue.severity === 'error');

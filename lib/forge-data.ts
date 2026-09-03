@@ -72,9 +72,50 @@ export interface EngineeringExample {
   prompt: string;
   description: string;
   builds: string;
+  requiredComponents: string[];
+  requiredMechanisms: string[];
+  expectedMovingComponents: string[];
+  correctMetrics: string[];
+  acceptanceTests: string[];
+  suggestedEdits: string[];
+  animationCameraSequence: string[];
+  failureConditions: string[];
+  expectedGenerationSeconds: number;
+  successCriteria: string[];
 }
 
-export const engineeringExamples: EngineeringExample[] = [
+type EngineeringExampleSeed = Omit<EngineeringExample, 'requiredComponents' | 'requiredMechanisms' | 'expectedMovingComponents' | 'correctMetrics' | 'acceptanceTests' | 'suggestedEdits' | 'animationCameraSequence' | 'failureConditions' | 'expectedGenerationSeconds' | 'successCriteria'>;
+
+const metricsByExample: Record<string, string[]> = {
+  sorter: ['throughput', 'sorting accuracy', 'collisions'], crane: ['payload capacity', 'lift height', 'stability margin', 'placement error'], rover: ['payload capacity', 'course time', 'platform tilt', 'traction margin'],
+  'go-kart': ['course time', 'traction margin', 'assembly integrity', 'collisions'], motorcycle: ['course time', 'traction margin', 'assembly integrity'], airplane: ['assembly integrity', 'propeller speed', 'component count'], helicopter: ['assembly integrity', 'rotor speed', 'component count'],
+  'service-robot': ['payload capacity', 'reach', 'joint margin', 'placement error'], arm: ['payload capacity', 'reach', 'joint margin', 'placement error'], gearbox: ['speed ratio', 'output speed', 'output torque', 'transmission efficiency'],
+  suspension: ['platform tilt', 'traction margin', 'course time'], solar: ['tracking error', 'actuator count', 'response time'], lift: ['payload capacity', 'lift height', 'peak acceleration', 'stability margin'], bridge: ['span', 'load capacity', 'deflection', 'safety factor'],
+  warehouse: ['throughput', 'collisions', 'control error'], agriculture: ['sorting accuracy', 'throughput', 'drop height'], recycling: ['sorting accuracy', 'throughput', 'collisions'], 'hvac-fixture': ['alignment error', 'clamp force', 'assembly integrity'], drawbridge: ['span', 'load capacity', 'response time', 'stability margin'],
+};
+
+function enrichExample(seed: EngineeringExampleSeed): EngineeringExample {
+  const requiredComponents = seed.builds.split('·').map((item) => item.trim()).filter(Boolean);
+  const movingWords = /wheel|motor|rotor|propeller|servo|gate|belt|winch|cable|hook|actuator|arm|gripper|drum|span|counterweight|selector|package|tomato|load/i;
+  const expectedMovingComponents = requiredComponents.filter((item) => movingWords.test(item));
+  const correctMetrics = metricsByExample[seed.id] ?? ['component count', 'assembly integrity'];
+  const successCriteria = [seed.description, ...correctMetrics.map((metric) => `${metric} is measured from the captured run and meets its target`)];
+  return {
+    ...seed,
+    requiredComponents,
+    requiredMechanisms: [seed.description],
+    expectedMovingComponents: expectedMovingComponents.length ? expectedMovingComponents : ['the requirement load path'],
+    correctMetrics,
+    acceptanceTests: ['moving bodies have valid joints and axes', 'replay and sensor telemetry agree', 'unexpected collisions cannot pass', ...correctMetrics.map((metric) => `${metric} meets its stated target`)],
+    suggestedEdits: [`Make the ${requiredComponents[0].toLowerCase()} 10% larger`, `Move the ${requiredComponents.at(-1)!.toLowerCase()} up 0.2 m`, `Use aluminum for the ${requiredComponents[0].toLowerCase()}`],
+    animationCameraSequence: ['isometric machine overview', 'moving-mechanism close-up', 'results and failure-marker view'],
+    failureConditions: ['a required body or joint is missing', 'a commanded body does not move', 'unexpected self-interference occurs', ...correctMetrics.map((metric) => `${metric} misses its target`)],
+    expectedGenerationSeconds: 8,
+    successCriteria,
+  };
+}
+
+const engineeringExampleSeeds: EngineeringExampleSeed[] = [
   { id: 'sorter', sector: 'Logistics', title: 'Two-color package sorter', prompt: 'Build a conveyor system that sorts red and blue boxes into separate bins at 20 boxes per minute.', description: 'Recognizes each colored box and sends it to the matching collection bin without stopping the belt.', builds: 'Conveyor · vision portal · servo gate · 2 chutes · 2 bins' },
   { id: 'crane', sector: 'Construction', title: 'Counterbalanced tower crane', prompt: 'Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.', description: 'Raises a suspended beam with a winch while outriggers and a rear counterweight keep the crane stable.', builds: 'Base · outriggers · lattice mast · boom · winch · cable · hook' },
   { id: 'rover', sector: 'Robotics', title: 'Four-wheel payload rover', prompt: 'Build a four-wheel rover that carries 50 kg across rough terrain in under 20 seconds without tipping.', description: 'Carries a protected payload over uneven ground with driven wheels and tilt feedback.', builds: 'Chassis · 4 wheels · 2 drive motors · payload bay · IMU' },
@@ -95,6 +136,11 @@ export const engineeringExamples: EngineeringExample[] = [
   { id: 'hvac-fixture', sector: 'HVAC manufacturing', title: 'Heat-exchanger brazing fixture', prompt: 'Build a brazing fixture plate that positions a heat exchanger and two copper pipes within 2 mm before brazing.', description: 'Locates a finned heat exchanger and two copper tubes, then clamps them at the brazing joints.', builds: 'Machined plate · locating pins · exchanger core · copper pipes · clamps' },
   { id: 'drawbridge', sector: 'Civil mechanisms', title: 'Counterweighted drawbridge', prompt: 'Build a 4 meter drawbridge that raises in under 15 seconds using a motor, pulley, and counterweight.', description: 'Pivots a reinforced road span upward while a cable, pulley, and counterweight reduce motor load.', builds: 'Abutment · truss deck · hinge · motor · pulley · cable · counterweight' },
 ];
+
+/** The gallery, prompt launcher, chat suggestions, success criteria, and
+ * acceptance tests all consume these same records so card copy cannot drift
+ * away from the exact prompt that is submitted. */
+export const engineeringExamples: EngineeringExample[] = engineeringExampleSeeds.map(enrichExample);
 
 export function materialFor(id: string) {
   return materials.find((material) => material.id === id) ?? materials[0];

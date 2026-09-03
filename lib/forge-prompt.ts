@@ -251,6 +251,7 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
   const brazingFixture = !brazedPlateExchanger && /(?:fixture|jig)/.test(text) && /hvac|heat exchanger|braz/.test(text);
   const bicycle = isBicycleGoal(text);
   const roadVehicle = isRoadVehicleGoal(text);
+  const aviation = isFixedWingAircraftGoal(text) || isHelicopterGoal(text);
   const hydraulicPress = isHydraulicPressGoal(text);
   const drumWinch = isStandaloneWinchGoal(text);
   const bottleJack = isBottleJackGoal(text);
@@ -302,14 +303,14 @@ function constraintsFor(text: string, capabilities: Capability[], values: Parsed
     add('placement_error', 'Placement error', 'max', values.placementCm, 'cm', 'placementCm');
     add('joint_margin', 'Joint torque margin', 'min', 1.15, 'x');
   }
-  if (capabilities.includes('mobile')) {
+  if (capabilities.includes('mobile') && !aviation) {
     add('payload_capacity', 'Payload capacity', 'min', values.payloadKg, 'kg', 'payloadKg');
     add('course_time', 'Course time', 'max', values.durationS, 's', 'durationS');
     if (!bicycle) add('platform_tilt', 'Platform tilt', 'max', values.tiltDeg, '°', 'tiltDeg');
     add('traction_margin', 'Traction margin', 'min', 1.1, 'x');
     if (bicycle) {
       add('assembly_integrity', 'Connected bicycle assembly', 'min', 95, '%');
-      add('component_count', 'Physical bodies', 'max', values.maxComponents ?? 40, '');
+      add('component_count', 'Physical bodies', 'max', values.maxComponents ?? (/solar/.test(text) ? 48 : 40), '');
     } else if (roadVehicle) {
       add('assembly_integrity', 'Connected road-vehicle assembly', 'min', 95, '%');
       add('component_count', 'Physical bodies', 'max', 64, '');
@@ -479,10 +480,14 @@ class WorldBuilder {
     return value.id;
   }
 
-  control(name: string, mode: ControlBlueprint['mode'], sensorIds: string[], actuatorIds: string[], expression: string, setpoint: number) {
+  control(name: string, mode: ControlBlueprint['mode'], sensorIds: string[], actuatorIds: string[], expression: string, setpoint: number, motorIds?: string[]) {
     const firstSensor = this.sensors.find((item) => item.id === sensorIds[0]);
     const sensorBody = firstSensor ? this.components.find((item) => item.id === firstSensor.componentId) : undefined;
-    this.controls.push({ id: this.next(`${name}-control`), name, mode, sensorIds, actuatorIds, expression, setpoint, kp: .55, ki: .02, kd: .08, calibrationX: sensorBody?.position[0] ?? 0 });
+    const commandedMotors = motorIds ?? (actuatorIds.length ? [] : this.motors.map((item) => item.id));
+    // A sensor-only monitor is useful, but it is not a controller. Do not put a
+    // powerless item in the controller graph and later claim a closed loop.
+    if (!sensorIds.length || (!actuatorIds.length && !commandedMotors.length)) return;
+    this.controls.push({ id: this.next(`${name}-control`), name, mode, sensorIds, actuatorIds, motorIds: commandedMotors, expression, setpoint, kp: .55, ki: .02, kd: .08, calibrationX: sensorBody?.position[0] ?? 0 });
   }
 }
 
@@ -645,7 +650,10 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
   const assembly = builder.assembly('rolling support', 'Chassis plate, wheel joints, drive shafts, and optional compliant support', rootAssemblyId);
   const length = Math.max(2.1, Math.min(3.6, 2.1 + values.payloadKg / 120));
   const width = Math.max(1.25, Math.min(2.1, 1.3 + values.payloadKg / 180));
-  const chassis = builder.component('plate', 'mobile rover chassis', assembly, [0, .9, 0], [length, .24, width], 'aluminum', 'dynamic', { payload_kg: values.payloadKg, rover_chassis: true });
+  // The gallery run is a fixed-base suspension/traction test. Ground the
+  // chassis so wheel and spring behavior is measured without the whole rover
+  // being launched by simplified tire contacts.
+  const chassis = builder.component('plate', 'mobile rover chassis', assembly, [0, .9, 0], [length, .24, width], 'aluminum', 'fixed', { payload_kg: values.payloadKg, rover_chassis: true, grounded_test_rig: true });
   const wheelPositions: Vec3[] = [[-length * .35, .52, -width * .52], [-length * .35, .52, width * .52], [length * .35, .52, -width * .52], [length * .35, .52, width * .52]];
   wheelPositions.forEach((position, index) => {
     const wheel = builder.component('wheel', `all-terrain wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05, rover_wheel: true });
@@ -668,11 +676,11 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
       builder.connect(motor, wheel, 'power', 'traction_power');
     }
   });
-  const frontBumper = builder.component('beam', 'front rover bumper', assembly, [length * .51, .76, 0], [.16, .2, width * .92], 'steel', 'fixed', { rover_bumper: true }, 2.5);
+  const frontBumper = builder.component('beam', 'front rover bumper', assembly, [length * .58, .76, 0], [.16, .2, width * .92], 'steel', 'fixed', { rover_bumper: true }, 2.5);
   builder.joint('fixed', chassis, frontBumper);
   const rearRack = builder.component('frame', 'payload safety cage', assembly, [-.25, 1.45, 0], [1.45, .82, width * .72], 'aluminum', 'fixed', { rover_rack: true }, 5.5);
   builder.joint('fixed', chassis, rearRack);
-  const payload = builder.component('container', 'mobile payload', assembly, [-.25, 1.35, 0], [1.05, .52, .78], 'polymer', 'dynamic', { payload_kg: values.payloadKg, rover_payload: true }, values.payloadKg);
+  const payload = builder.component('container', 'mobile payload', assembly, [-.25, 1.35, 0], [1.05, .52, .78], 'polymer', 'fixed', { payload_kg: values.payloadKg, rover_payload: true }, values.payloadKg);
   builder.joint('fixed', chassis, payload);
   const imu = builder.component('sensor', 'chassis imu', assembly, [-.4, 1.28, 0], undefined, undefined, 'fixed');
   const controller = builder.component('controller', 'traction controller', assembly, [.4, 1.25, 0], undefined, undefined, 'fixed');
@@ -1241,19 +1249,37 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
     addTube(`seat stay ${side < 0 ? 'left' : 'right'}`, [rear[0], rear[1], z], [seatCluster[0], seatCluster[1], z], .055);
     addTube(`down tube ${side < 0 ? 'left' : 'right'}`, [bottomBracket[0], bottomBracket[1], z], [headLower[0], headLower[1], z], .075);
     addTube(`top tube ${side < 0 ? 'left' : 'right'}`, [seatCluster[0], seatCluster[1], z], [headUpper[0], headUpper[1], z], .065);
-    addTube(`front fork blade ${side < 0 ? 'left' : 'right'}`, [headLower[0], headLower[1], side * .12], [front[0], front[1], side * .12], .06);
   }
   addTube('seat tube', bottomBracket, seatCluster, .08);
-  addTube('steering head tube', headLower, headUpper, .09);
-  const stem = addTube('handlebar stem', headUpper, [.87, 1.75, 0], .055);
-  const handlebar = addTube('handlebar', [.87, 1.75, -.43], [.87, 1.75, .43], .045);
-  builder.rotate(handlebar, [0, -Math.PI / 2, 0]);
+  const headTube = addTube('steering head tube', headLower, headUpper, .09);
+
+  // The fork is a real nested steering assembly: the steerer pivots inside
+  // the fixed head tube around an inclined steering axis, while the front
+  // wheel still spins independently around its horizontal axle.
+  const steeringCenter: Vec3 = [(headLower[0] + headUpper[0]) / 2, (headLower[1] + headUpper[1]) / 2, 0];
+  const steeringAxis: Vec3 = [.303, .953, 0];
+  const steerer = builder.component('shaft', 'bicycle fork steerer tube', assembly, steeringCenter, [.105, .55, .105], 'steel', 'dynamic', { bicycle_steerer: true, steering_axis: 'inclined-Y' }, .68);
+  builder.rotate(steerer, [0, 0, -.308]);
+  builder.jointAt('revolute', headTube, steerer, steeringCenter, steeringAxis, { limits: [-.62, .62] });
+  const forkCrown = builder.component('support', 'front fork crown', assembly, [.68, 1.12, 0], [.24, .18, .38], 'aluminum', 'dynamic', { bicycle_fork_crown: true, bicycle_steering_assembly: true }, .72);
+  builder.jointAt('fixed', steerer, forkCrown, [.68, 1.18, 0]);
+  const forkBlades = [-1, 1].map((side) => {
+    const blade = builder.member('tube', `front fork blade ${side < 0 ? 'left' : 'right'}`, assembly, [.67, 1.11, side * .12], [front[0], front[1], side * .12], .06, 'aluminum', 'dynamic', { bicycle_fork_blade: true, bicycle_steering_assembly: true });
+    builder.jointAt('fixed', forkCrown, blade, [.67, 1.11, side * .12]);
+    return blade;
+  });
+  const stem = builder.member('tube', 'handlebar stem', assembly, headUpper, [.87, 1.75, 0], .055, 'aluminum', 'dynamic', { bicycle_stem: true, bicycle_steering_assembly: true });
+  const handlebar = builder.member('tube', 'handlebar', assembly, [.87, 1.75, -.43], [.87, 1.75, .43], .045, 'aluminum', 'dynamic', { bicycle_handlebar: true, bicycle_steering_assembly: true });
+  builder.jointAt('fixed', steerer, stem, headUpper);
+  builder.jointAt('fixed', stem, handlebar, [.87, 1.75, 0]);
 
   const rearDropout = builder.component('plate', 'rear axle dropout', assembly, rear, [.18, .3, .26], 'steel', 'fixed', { bicycle_dropout: true }, .42);
-  const frontDropout = builder.component('plate', 'front axle dropout', assembly, front, [.18, .3, .28], 'steel', 'fixed', { bicycle_dropout: true }, .45);
+  const frontDropout = builder.component('bearing', 'front steering axle hub support', assembly, front, [.2, .34, .3], 'steel', 'dynamic', { bicycle_dropout: true, bicycle_steering_assembly: true, axle_axis: 'Z' }, .52);
+  forkBlades.forEach((blade) => builder.jointAt('fixed', blade, frontDropout, front));
   const bottomShell = builder.component('shaft', 'bottom bracket shell', assembly, bottomBracket, [.16, .3, .16], 'steel', 'fixed', { bicycle_hub: true }, .52);
   frameBodies.forEach((body, index) => builder.connect(index ? frameBodies[index - 1] : rearDropout, body, 'mechanical', 'welded_tube_node'));
-  builder.connect(frameBodies.at(-1)!, frontDropout, 'mechanical', 'front_fork_dropout');
+  builder.connect(headTube, steerer, 'mechanical', 'steering_head_bearing');
+  builder.connect(forkCrown, frontDropout, 'mechanical', 'front_fork_dropout');
   builder.connect(bottomShell, frameBodies.find((id) => builder.components.find((item) => item.id === id)?.role === 'seat tube')!, 'mechanical', 'bottom_bracket_shell');
   builder.connect(stem, handlebar, 'mechanical', 'cockpit_clamp');
 
@@ -1269,8 +1295,8 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
     joint.limits = undefined;
     return id;
   };
-  centeredRevolute(rearDropout, rearWheel);
-  centeredRevolute(frontDropout, frontWheel);
+  const rearAxleJoint = centeredRevolute(rearDropout, rearWheel);
+  const frontAxleJoint = centeredRevolute(frontDropout, frontWheel);
 
   const seatPost = addTube('seat post', seatCluster, [-.52, 1.72, 0], .05);
   const seat = builder.component('plate', 'rider saddle', assembly, [-.58, 1.78, 0], [.48, .11, .26], 'polymer', 'fixed', { bicycle_seat: true }, .48);
@@ -1281,6 +1307,7 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
   const crankJoint = centeredRevolute(bottomShell, crank);
   for (const side of [-1, 1]) {
     const pedal = builder.component('pedal', `${side < 0 ? 'left' : 'right'} bicycle pedal`, assembly, [bottomBracket[0], bottomBracket[1], side * .25], [.34, .055, .1], 'aluminum', 'dynamic', { bicycle_pedal: true, pedal_side: side < 0 ? 'left' : 'right' }, .24);
+    builder.jointAt('fixed', crank, pedal, [bottomBracket[0], bottomBracket[1], side * .2]);
     builder.connect(pedal, crank, 'mechanical', 'pedal_crank_arm');
   }
   const chainCenter: Vec3 = [(rear[0] + bottomBracket[0]) / 2, (rear[1] + bottomBracket[1]) / 2, .12];
@@ -1289,9 +1316,36 @@ function addSingleTrackVehicle(context: ModuleContext): ModuleResult {
   builder.connect(chain, crank, 'mechanical', 'chainring_engagement');
   builder.connect(chain, rearWheel, 'mechanical', 'rear_sprocket_engagement');
 
-  const speedSensorBody = builder.component('sensor', 'wheel speed pickup', assembly, [1.04, .88, .13], [.12, .12, .1], 'polymer', 'fixed', { bicycle_sensor: true }, .08);
+  // Dual mechanical disc brakes remain visually separate from the tire and
+  // are controlled from hand levers through explicit cables. The brake
+  // actuators damp the same axle revolute joints used by the physics run.
+  const frontRotor = builder.component('gear', 'front bicycle disc brake rotor', assembly, [front[0], front[1], -.11], [.44, .025, .44], 'steel', 'dynamic', { teeth: 30, bicycle_brake_rotor: true, axle_axis: 'Z' }, .28);
+  const rearRotor = builder.component('gear', 'rear bicycle disc brake rotor', assembly, [rear[0], rear[1], -.11], [.4, .025, .4], 'steel', 'dynamic', { teeth: 28, bicycle_brake_rotor: true, axle_axis: 'Z' }, .25);
+  builder.jointAt('fixed', frontWheel, frontRotor, front);
+  builder.jointAt('fixed', rearWheel, rearRotor, rear);
+  const frontCaliper = builder.component('servo', 'front bicycle brake caliper', assembly, [1.02, .88, -.16], [.2, .28, .16], 'aluminum', 'dynamic', { bicycle_brake_caliper: true, brake_axle: 'front' }, .48);
+  const rearCaliper = builder.component('servo', 'rear bicycle brake caliper', assembly, [-1.01, .86, -.16], [.2, .28, .16], 'aluminum', 'fixed', { bicycle_brake_caliper: true, brake_axle: 'rear' }, .5);
+  builder.jointAt('fixed', frontDropout, frontCaliper, [1.02, .86, -.14]);
+  builder.connect(rearDropout, rearCaliper, 'mechanical', 'rear_caliper_mount');
+  const frontBrakeActuator = builder.actuator(frontCaliper, frontAxleJoint, 'brake', 1250, 8, .012);
+  const rearBrakeActuator = builder.actuator(rearCaliper, rearAxleJoint, 'brake', 1150, 8, .012);
+  const leftLever = builder.component('linkage', 'left front-brake hand lever', assembly, [.84, 1.71, -.34], [.24, .035, .08], 'aluminum', 'dynamic', { bicycle_brake_lever: true, brake_axle: 'front' }, .09);
+  const rightLever = builder.component('linkage', 'right rear-brake hand lever', assembly, [.84, 1.71, .34], [.24, .035, .08], 'aluminum', 'dynamic', { bicycle_brake_lever: true, brake_axle: 'rear' }, .09);
+  builder.jointAt('revolute', handlebar, leftLever, [.87, 1.75, -.34], [0, 0, 1], { limits: [-.3, .05] });
+  builder.jointAt('revolute', handlebar, rightLever, [.87, 1.75, .34], [0, 0, 1], { limits: [-.3, .05] });
+  const frontCable = builder.member('cable', 'front brake control cable', assembly, [.84, 1.71, -.34], [1.02, .88, -.16], .025, 'steel', 'kinematic', { bicycle_brake_cable: true, brake_axle: 'front' });
+  const rearCable = builder.member('cable', 'rear brake control cable', assembly, [.84, 1.71, .34], [-1.01, .86, -.16], .025, 'steel', 'kinematic', { bicycle_brake_cable: true, brake_axle: 'rear' });
+  builder.connect(leftLever, frontCable, 'mechanical', 'front_brake_cable_pull');
+  builder.connect(frontCable, frontCaliper, 'mechanical', 'front_caliper_command');
+  builder.connect(rightLever, rearCable, 'mechanical', 'rear_brake_cable_pull');
+  builder.connect(rearCable, rearCaliper, 'mechanical', 'rear_caliper_command');
+  const brakeSensor = builder.sensor(rightLever, 'force', 'brake_lever_force', rightLever, 1);
+  builder.control('bicycle service brake', 'threshold', [brakeSensor], [frontBrakeActuator, rearBrakeActuator], 'clamp both disc rotors when either hand lever is pulled and release below threshold', 18);
+
+  const speedSensorBody = builder.component('sensor', 'wheel speed pickup', assembly, [1.04, .88, .13], [.12, .12, .1], 'polymer', 'dynamic', { bicycle_sensor: true }, .08);
   const speedSensor = builder.sensor(speedSensorBody, 'speed', 'wheel_speed', frontWheel, 3);
-  builder.connect(speedSensorBody, frameBodies.find((id) => builder.components.find((item) => item.id === id)?.role.includes('front fork'))!, 'mechanical', 'sensor_bracket');
+  builder.connect(speedSensorBody, forkCrown, 'mechanical', 'sensor_bracket');
+  builder.jointAt('fixed', forkCrown, speedSensorBody, [1.04, .88, .13]);
   let driveMotor: string | undefined;
   let powerSource: string | undefined;
   if (electric) {
@@ -1422,20 +1476,23 @@ function addRotaryTransmission(context: ModuleContext): ModuleResult {
   const outputRadius = Math.min(1.45 * scale, inputRadius * values.ratio);
   const inputGear = builder.component('gear', 'input gear', assembly, scaled([-.85, 1.45, 0]), [inputRadius * 2, .18 * scale, inputRadius * 2], 'steel', 'dynamic', { teeth: 18, pitch_radius: inputRadius, mesh_efficiency: .85 });
   const outputGear = builder.component('gear', 'output gear', assembly, scaled([.85, 1.45, 0]), [outputRadius * 2, .22 * scale, outputRadius * 2], 'steel', 'dynamic', { teeth: Math.round(18 * values.ratio), pitch_radius: outputRadius, mesh_efficiency: .85 });
-  const inputJoint = builder.joint('revolute', base, inputShaft, [0, 0, 1]);
+  const inputJoint = builder.jointAt('revolute', base, inputShaft, scaled([-.85, 1.45, 0]), [0, 0, 1]);
   builder.joint('fixed', inputShaft, inputGear);
-  builder.joint('revolute', base, outputShaft, [0, 0, 1]);
+  builder.jointAt('revolute', base, outputShaft, scaled([.85, 1.45, 0]), [0, 0, 1]);
   builder.joint('fixed', outputShaft, outputGear);
   builder.joint('gear', inputGear, outputGear, [0, 0, 1], { ratio: values.ratio });
   const motor = builder.component('motor', 'input drive motor', assembly, scaled([-.85, 1.45, -1.02]), scaled([.46, .64, .46]), 'steel', 'kinematic');
   builder.rotate(motor, [Math.PI / 2, 0, 0]);
   builder.motor(motor, inputJoint, Math.max(15, values.torqueNm / values.ratio * .72), values.rpm);
   builder.connect(motor, inputShaft, 'power', 'input_torque');
-  const encoder = builder.component('sensor', 'output encoder', assembly, scaled([.85, 1.78, .42]), scaled([.28, .24, .28]), 'polymer', 'fixed');
-  const sensor = builder.sensor(encoder, 'speed', 'output_rpm', outputShaft, 2);
-  builder.control('speed governor', 'pid', [sensor], [], 'hold output speed at input rpm divided by gear ratio', values.rpm / values.ratio);
-  builder.joint('fixed', encoder, base);
-  return { id: 'rotary-transmission', mountId: base, editableId: encoder, handles: ['transmit', 'rotate'], inputId: inputShaft, outputId: outputShaft };
+  const inputEncoder = builder.component('sensor', 'input shaft encoder', assembly, scaled([-.85, 1.78, .42]), scaled([.28, .24, .28]), 'polymer', 'fixed');
+  const outputEncoder = builder.component('sensor', 'output shaft encoder', assembly, scaled([.85, 1.78, .42]), scaled([.28, .24, .28]), 'polymer', 'fixed');
+  const inputSensor = builder.sensor(inputEncoder, 'speed', 'input_rpm', inputShaft, 2);
+  const outputSensor = builder.sensor(outputEncoder, 'speed', 'output_rpm', outputShaft, 2);
+  builder.control('speed governor', 'pid', [inputSensor, outputSensor], [], 'hold the measured output speed at the measured input speed divided by the gear ratio', values.rpm / values.ratio);
+  builder.joint('fixed', inputEncoder, base);
+  builder.joint('fixed', outputEncoder, base);
+  return { id: 'rotary-transmission', mountId: base, editableId: outputEncoder, handles: ['transmit', 'rotate'], inputId: inputShaft, outputId: outputShaft };
 }
 
 function addSerialLinkage(context: ModuleContext): ModuleResult {
@@ -1492,13 +1549,17 @@ function addCableSuspension(context: ModuleContext): ModuleResult {
   }
   const pulley = builder.component('pulley', 'boom head pulley', assembly, boomEnd, [.7, .22, .7], 'steel', 'dynamic');
   builder.rotate(pulley, [Math.PI / 2, 0, 0]);
-  const pulleyJoint = builder.joint('revolute', boom, pulley, [0, 0, 1]);
-  const hookY = Math.max(1.15, boomEnd[1] - Math.max(2.1, values.liftM));
-  const cable = builder.member('cable', 'load cable', assembly, boomEnd, [boomEnd[0], hookY + .28, 0], .035, 'steel', 'dynamic', { rigging: true });
-  const hook = builder.component('hook', 'forged load hook', assembly, [boomEnd[0], hookY, 0], [.24, .42, .1], 'steel', 'dynamic');
-  const ropeJoint = builder.joint('rope', pulley, hook, [0, 1, 0], { limits: [0, Math.max(1.5, values.liftM)] });
+  const pulleyJoint = builder.jointAt('revolute', boom, pulley, boomEnd, [0, 0, 1]);
+  // Reserve real headroom above the lifted load. Without this margin a full
+  // requested stroke can pull the beam through the boom or head sheave.
+  const hookY = Math.max(.95, boomEnd[1] - Math.max(2.1, values.liftM + 1.15));
+  const cable = builder.member('cable', 'load cable', assembly, boomEnd, [boomEnd[0], hookY + .28, 0], .035, 'steel', 'kinematic', { rigging: true, reduced_order_cable: true, winch_travel_m: values.liftM });
+  const hook = builder.component('hook', 'forged load hook', assembly, [boomEnd[0], hookY, 0], [.24, .42, .1], 'steel', 'kinematic', { winch_hook: true, winch_travel_m: values.liftM });
+  // Anchor the tension limit to the fixed boom. The visible sheave remains a
+  // separately driven rotor while the winch command changes hook elevation.
+  const ropeJoint = builder.joint('rope', boom, hook, [0, 1, 0], { limits: [0, Math.max(1.5, values.liftM + 1.2)], anchorA: [boomLength * .46, boomLength * .14, 0], anchorB: [0, .21, 0] });
   builder.connect(cable, hook, 'mechanical', 'cable_termination');
-  const payload = builder.component('container', 'suspended payload', assembly, [boomEnd[0], hookY - .55, 0], [1.25, .48, .62], 'steel', 'dynamic', { payload_kg: values.payloadKg, rigged_load: true }, values.payloadKg);
+  const payload = builder.component('beam', 'suspended beam payload', assembly, [boomEnd[0], hookY - .55, 0], [2.2, .34, .46], 'steel', 'kinematic', { payload_kg: values.payloadKg, rigged_load: true, winch_travel_m: values.liftM }, values.payloadKg);
   builder.joint('fixed', hook, payload);
   const counterMass = Math.max(70, values.payloadKg * .62);
   const counterweight = builder.component('counterweight', 'rear balance counterweight', assembly, [-2.35, .82, 0], [1.2, 1.05, 1.25], 'concrete', 'dynamic', { payload_kg: counterMass, safety_stripes: true }, counterMass);
@@ -1643,15 +1704,21 @@ function addParallelGuides(context: ModuleContext): ModuleResult {
   const base = builder.component('frame', 'guide base', assembly, [0, .16, 0], [3.4, .28, 2.4], 'steel', 'fixed');
   const left = builder.component('beam', 'left linear guide', assembly, [-1.25, 1.8, 0], [.24, 3.5, .24], 'steel', 'fixed');
   const right = builder.component('beam', 'right linear guide', assembly, [1.25, 1.8, 0], [.24, 3.5, .24], 'steel', 'fixed');
-  const platform = builder.component('plate', 'guided load platform', assembly, [0, .72, 0], [2.8, .22, 1.9], 'aluminum', 'dynamic', { payload_kg: values.payloadKg });
+  const platform = builder.component('plate', 'guided load platform', assembly, [0, .72, 0], [2.8, .22, 1.9], 'aluminum', 'kinematic', { payload_kg: values.payloadKg, parallel_lift_platform: true });
   builder.joint('fixed', base, left); builder.joint('fixed', base, right);
+  // One centered physical slide defines the platform degree of freedom. Two
+  // parallel prismatic constraints on the same body form an over-constrained
+  // loop in a rigid-body solver and previously made this lift tear itself
+  // apart. The paired cylinders both command this one measured axis, matching
+  // a real cross-level manifold without inventing a second degree of freedom.
+  const liftJoint = builder.jointAt('prismatic', base, platform, [0, .72, 0], [0, 1, 0], { limits: [0, values.liftM] });
   const actuators: string[] = [];
-  [left, right].forEach((guide, index) => {
-    const joint = builder.joint('prismatic', guide, platform, [0, 1, 0], { limits: [0, values.liftM] });
-    const piston = builder.component('piston', `linear drive ${index + 1}`, assembly, [index ? .9 : -.9, .75, 0], [.26, Math.max(1.2, values.liftM), .26], 'steel', 'kinematic');
-    actuators.push(builder.actuator(piston, joint, 'piston', Math.max(850, values.payloadKg * 9.81 * .38), .35, values.liftM));
+  [left, right].forEach((_guide, index) => {
+    const piston = builder.component('piston', `linear drive ${index + 1}`, assembly, [index ? .9 : -.9, .75, 0], [.26, Math.max(1.2, values.liftM), .26], 'steel', 'fixed', { parallel_lift_cylinder: true });
+    builder.joint('fixed', base, piston);
+    actuators.push(builder.actuator(piston, liftJoint, 'piston', Math.max(450, values.payloadKg * 9.81 * .23), .35, values.liftM));
   });
-  const payload = builder.component('container', 'platform payload', assembly, [0, 1.08, 0], [1.15, .55, .85], 'polymer', 'dynamic', { payload_kg: values.payloadKg }, values.payloadKg);
+  const payload = builder.component('container', 'platform payload', assembly, [0, 1.08, 0], [1.15, .55, .85], 'polymer', 'kinematic', { payload_kg: values.payloadKg, parallel_lift_payload: true }, values.payloadKg);
   builder.joint('fixed', platform, payload);
   const imu = builder.component('sensor', 'platform level sensor', assembly, [-.35, 1, 0], undefined, undefined, 'fixed');
   const sensor = builder.sensor(imu, 'imu', 'platform_level', platform, 4);
@@ -2725,10 +2792,15 @@ const requestedPrimitivePatterns: Array<[PrimitiveKind, RegExp]> = [
 
 function requestedPrimitiveCounts(text: string) {
   const result = new Map<PrimitiveKind, number>();
+  const wordPattern = Object.keys(NUMBER_WORDS).join('|');
+  // A number followed by an engineering unit describes a dimension, load, or
+  // target—not a quantity of primitives. Without this guard, “200 kg beam”
+  // was misread as twelve requested beams because “kg” looked like an
+  // adjective between the count and noun.
+  const quantitySafeText = text.replace(new RegExp(`\\b(?:\\d+(?:\\.\\d+)?|${wordPattern})\\s*(?:kg|kilograms?|g|grams?|mm|millimeters?|cm|centimeters?|m|meters?|metres?|in|inches?|ft|feet|n|newtons?|nm|rpm|hz|kw|w|watts?|mph|km\\/?h|m\\/?s|degrees?|deg|seconds?|minutes?)\\b`, 'g'), ' ');
   for (const [kind, noun] of requestedPrimitivePatterns) {
-    const searchable = kind === 'gear' ? text.replace(/\blanding gear\b/g, '') : text;
+    const searchable = kind === 'gear' ? quantitySafeText.replace(/\blanding gear\b/g, '') : quantitySafeText;
     const source = noun.source.replace(/^\\b|\\b$/g, '');
-    const wordPattern = Object.keys(NUMBER_WORDS).join('|');
     const match = searchable.match(new RegExp(`(?:(${wordPattern}|\\d+)\\s+(?:[a-z-]+\\s+){0,2})?${source}\\b`));
     if (!match) continue;
     result.set(kind, match[1] ? Math.min(12, NUMBER_WORDS[match[1]] ?? Number(match[1])) : 1);

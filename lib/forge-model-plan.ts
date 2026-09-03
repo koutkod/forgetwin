@@ -274,8 +274,9 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
     controls: plan.controls.map((item) => {
       const sensor = sensorById.get(item.sensor_ids[0] ?? '');
       const sensorBody = sensor ? components.find((component) => component.id === sensor.component_id) : undefined;
-      return { id: item.id, name: item.name, mode: item.mode, sensorIds: [...item.sensor_ids], actuatorIds: [...item.actuator_ids], expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibrationX: sensorBody?.position[0] ?? 0 };
-    }),
+      const motorIds = item.actuator_ids.length ? [] : plan.motors.map((motor) => motor.id);
+      return { id: item.id, name: item.name, mode: item.mode, sensorIds: [...item.sensor_ids], actuatorIds: [...item.actuator_ids], motorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibrationX: sensorBody?.position[0] ?? 0 };
+    }).filter((item) => item.sensorIds.length > 0 && (item.actuatorIds.length > 0 || item.motorIds.length > 0)),
     assumptions,
   };
   return finalizeCompiledWorldPlan(compiled, requestedPrompt).plan;

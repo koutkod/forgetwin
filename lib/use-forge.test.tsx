@@ -1,10 +1,29 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { STORAGE_KEY, useForge } from './use-forge';
+import { createInitialForgeState } from './forge-data';
+import type { SimulationRun } from './forge-types';
+import { migratePersistedState, STORAGE_KEY, useForge } from './use-forge';
 
 afterEach(() => window.localStorage.clear());
 
 describe('atomic ForgeTwin edit batches', () => {
+  it('migrates saved pre-evidence runs without crashing or overstating proof', () => {
+    const state = createInitialForgeState('lab');
+    state.phase = 'passed';
+    state.runs = [{
+      status: 'passed',
+      metrics: { score: 100, componentCount: 1, jointCount: 0, totalMass: 1, energy: 0, collisions: 0, measures: [{ metric: 'legacy', label: 'Legacy estimate', operator: 'max', target: 1, unit: '', value: 1, status: 'pass', provenance: 'old workspace' }] },
+      collisions: [{ id: 'old-contact', time: 0, bodyA: 'a', bodyB: 'b', impulse: 0 }],
+    } as unknown as SimulationRun];
+
+    const migrated = migratePersistedState(state);
+    expect(migrated.phase).toBe('partial');
+    expect(migrated.runs[0]).toMatchObject({ status: 'partial', evaluationLevel: 'concept-only' });
+    expect(migrated.runs[0].metrics.measures[0]).toMatchObject({ evidence: 'not-evaluated', status: 'info' });
+    expect(migrated.runs[0].requirementCoverage[0]).toMatchObject({ status: 'not-evaluated' });
+    expect(migrated.runs[0].collisions[0]).toMatchObject({ classification: 'connected-component-contact', replayFrame: 0 });
+  });
+
   it('commits every valid action together and rolls back the entire shadow batch on failure', async () => {
     const { result } = renderHook(() => useForge());
     await waitFor(() => expect(result.current.hydrated).toBe(true));

@@ -293,7 +293,7 @@ export async function exportForgeDesign(state: ForgeState, format: ForgeExportFo
     const mime = format === 'png' ? 'image/png' : 'image/jpeg';
     const fallback = format === 'png-fallback';
     const actualMime = fallback ? 'image/png' : mime;
-    download(await canvasBlob(renderSceneImage(state, { forceFallback: fallback }), actualMime, format === 'jpg' ? .94 : undefined), `${base}${fallback ? '-cpu-verified' : ''}.${fallback ? 'png' : format}`);
+    download(await canvasBlob(renderSceneImage(state, { forceFallback: fallback }), actualMime, format === 'jpg' ? .94 : undefined), `${base}${fallback ? '-cpu-compatibility' : ''}.${fallback ? 'png' : format}`);
     return;
   }
   if (format === 'pdf') { await exportPdf(state); return; }

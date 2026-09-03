@@ -622,7 +622,11 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     return { state, result: success(state, 'Motor speed updated.', target) };
   }
   if (name === 'add_sensor') {
-    const target = component(state, input.component_id); if (!['sensor', 'camera'].includes(target.primitive)) throw new Error('INVALID_INPUT: add_sensor targets a sensor or camera primitive.');
+    // A sensor channel may be integrated into any physical part (for example
+    // a strain-gauged brake lever or an encoder inside a bearing). Dedicated
+    // sensor/camera primitives remain available when a visible housing is
+    // useful, but are not required for every embedded measurement.
+    const target = component(state, input.component_id);
     if (input.target_id) component(state, input.target_id);
     const type = String(input.sensor_type ?? 'position') as SensorType;
     const allowed: SensorType[] = ['distance', 'position', 'angle', 'speed', 'load', 'force', 'imu', 'camera', 'color', 'light', 'limit', 'presence'];
@@ -646,7 +650,7 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     const target = component(state, input.component_id); const targetJoint = joint(state, input.joint_id);
     if (!['motor', 'servo', 'piston'].includes(target.primitive)) throw new Error('INVALID_INPUT: actuator body must be motor, servo, or piston.');
     assertDrivenJoint(state, targetJoint, target.id, actor);
-    const value = { id: idValue(input.actuator_id, 'actuator_id'), componentId: target.id, jointId: targetJoint.id, type: String(input.actuator_type ?? 'servo') as 'rotary-motor' | 'servo' | 'linear' | 'piston' | 'winch', maxForce: Number(input.max_force), maxSpeed: Number(input.max_speed), travel: Number(input.travel) };
+    const value = { id: idValue(input.actuator_id, 'actuator_id'), componentId: target.id, jointId: targetJoint.id, type: String(input.actuator_type ?? 'servo') as 'rotary-motor' | 'servo' | 'linear' | 'piston' | 'winch' | 'brake', maxForce: Number(input.max_force), maxSpeed: Number(input.max_speed), travel: Number(input.travel) };
     if (state.actuators.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: actuator_id already exists.');
     if (![value.maxForce, value.maxSpeed, value.travel].every(Number.isFinite) || value.maxForce <= 0 || value.maxSpeed <= 0 || value.travel <= 0) throw new Error('INVALID_INPUT: actuator limits must be positive finite values.');
     state.actuators.push(value);
@@ -665,17 +669,21 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
   if (name === 'set_control_logic') {
     const sensorIds = Array.isArray(input.sensor_ids) ? input.sensor_ids.map(String) : [];
     const actuatorIds = Array.isArray(input.actuator_ids) ? input.actuator_ids.map(String) : [];
+    const motorIds = Array.isArray(input.motor_ids) ? input.motor_ids.map(String) : [];
     sensorIds.forEach((id) => { if (!state.sensors.some((item) => item.id === id)) throw new Error(`INVALID_INPUT: sensor “${id}” was not found.`); });
     actuatorIds.forEach((id) => { if (!state.actuators.some((item) => item.id === id)) throw new Error(`INVALID_INPUT: actuator “${id}” was not found.`); });
+    motorIds.forEach((id) => { if (!state.motors.some((item) => item.id === id)) throw new Error(`INVALID_INPUT: motor “${id}” was not found.`); });
+    if (!sensorIds.length) throw new Error('INVALID_TOPOLOGY: a closed-loop controller requires at least one sensor input.');
+    if (!actuatorIds.length && !motorIds.length) throw new Error('INVALID_TOPOLOGY: a controller requires at least one actuator or motor output.');
     const mode = String(input.mode ?? 'pid') as ControlMode;
     if (!['pid', 'threshold', 'state-machine', 'tracking', 'timed', 'synchronized'].includes(mode)) throw new Error('INVALID_INPUT: unsupported control mode.');
     const firstSensor = state.sensors.find((item) => item.id === sensorIds[0]);
     const sensorBody = firstSensor ? state.components.find((item) => item.id === firstSensor.componentId) : undefined;
-    const value = { id: idValue(input.control_id, 'control_id'), name: String(input.name ?? 'Controller').slice(0, 80), mode, sensorIds, actuatorIds, expression: String(input.expression ?? 'hold measured state at setpoint').slice(0, 180), setpoint: Number(input.setpoint ?? 0), kp: Number(input.kp ?? .55), ki: Number(input.ki ?? .02), kd: Number(input.kd ?? .08), calibrationX: Number(input.calibration_x ?? sensorBody?.position[0] ?? 0) };
+    const value = { id: idValue(input.control_id, 'control_id'), name: String(input.name ?? 'Controller').slice(0, 80), mode, sensorIds, actuatorIds, motorIds, expression: String(input.expression ?? 'hold measured state at setpoint').slice(0, 180), setpoint: Number(input.setpoint ?? 0), kp: Number(input.kp ?? .55), ki: Number(input.ki ?? .02), kd: Number(input.kd ?? .08), calibrationX: Number(input.calibration_x ?? sensorBody?.position[0] ?? 0) };
     if (state.controls.some((item) => item.id === value.id)) throw new Error('CONSTRAINT_VIOLATION: control_id already exists.');
     if (![value.setpoint, value.kp, value.ki, value.kd, value.calibrationX].every(Number.isFinite)) throw new Error('INVALID_INPUT: control values must be finite.');
     state.controls.push(value);
-    state = designMutation(state, name, 'Control logic added', actor, `${value.mode} controller “${value.id}” connects ${sensorIds.length} sensor${sensorIds.length === 1 ? '' : 's'} to ${actuatorIds.length} actuator${actuatorIds.length === 1 ? '' : 's'}.`);
+    state = designMutation(state, name, 'Control logic added', actor, `${value.mode} controller “${value.id}” connects ${sensorIds.length} sensor${sensorIds.length === 1 ? '' : 's'} to ${actuatorIds.length + motorIds.length} drive output${actuatorIds.length + motorIds.length === 1 ? '' : 's'}.`);
     return { state, result: success(state, 'Control logic set.', value) };
   }
   if (name === 'update_control_logic') {
@@ -703,7 +711,7 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state.joints = state.joints.filter((item) => item.id !== target.id);
     state.motors = state.motors.filter((item) => item.jointId !== target.id);
     state.actuators = state.actuators.filter((item) => item.jointId !== target.id);
-    state.controls = state.controls.map((item) => ({ ...item, actuatorIds: item.actuatorIds.filter((id) => !removedActuators.has(id)) })).filter((item) => item.sensorIds.length || item.actuatorIds.length);
+    state.controls = state.controls.map((item) => ({ ...item, actuatorIds: item.actuatorIds.filter((id) => !removedActuators.has(id)), motorIds: (item.motorIds ?? []).filter((id) => state.motors.some((motor) => motor.id === id)) })).filter((item) => item.sensorIds.length && (item.actuatorIds.length || (item.motorIds?.length ?? 0)));
     state = designMutation(state, name, `${target.type} joint removed`, actor, `Removed ${target.id} and dependent drives.`);
     return { state, result: success(state, 'Joint removed.') };
   }
@@ -720,7 +728,7 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
     state.motors = state.motors.filter((item) => item.componentId !== target.id && (!item.jointId || !attachedJoints.includes(item.jointId)));
     state.sensors = state.sensors.filter((item) => item.componentId !== target.id && item.targetId !== target.id);
     state.actuators = state.actuators.filter((item) => item.componentId !== target.id && !attachedJoints.includes(item.jointId));
-    state.controls = state.controls.map((item) => ({ ...item, sensorIds: item.sensorIds.filter((id) => !removedSensors.has(id)), actuatorIds: item.actuatorIds.filter((id) => !removedActuators.has(id)) })).filter((item) => item.sensorIds.length || item.actuatorIds.length);
+    state.controls = state.controls.map((item) => ({ ...item, sensorIds: item.sensorIds.filter((id) => !removedSensors.has(id)), actuatorIds: item.actuatorIds.filter((id) => !removedActuators.has(id)), motorIds: (item.motorIds ?? []).filter((id) => state.motors.some((motor) => motor.id === id)) })).filter((item) => item.sensorIds.length && (item.actuatorIds.length || (item.motorIds?.length ?? 0)));
     state.humanConstraints = state.humanConstraints.filter((item) => item.componentId !== target.id);
     state = designMutation(state, name, `${target.role} removed`, actor, `Removed ${target.id} and dependent graph edges.`);
     return { state, result: success(state, 'Component removed.') };
@@ -771,8 +779,9 @@ export function markSimulationRunning(state: ForgeState, actor: Actor) {
 
 export function commitSimulation(state: ForgeState, run: SimulationRun, actor: Actor): { state: ForgeState; result: ToolResult } {
   if (run.designHash !== state.designHash || run.designRevision !== state.designRevision) throw new Error('STALE_RUN: simulation evidence does not match the current shared world.');
-  let next: ForgeState = { ...state, phase: run.status === 'passed' ? 'passed' : 'failed', runs: [...state.runs, run].slice(-20), replayRunId: run.id, replayMode: run.status === 'failed' ? 'failure' : 'normal' };
-  next = addActivity(next, 'run_simulation', `${run.status === 'passed' ? 'Passed' : 'Failed'} with objective ${run.objective.toFixed(3)}; ${run.metrics.measures.filter((item) => item.status === 'pass').length}/${run.metrics.measures.length} constraints pass.`, actor, run.status === 'passed' ? 'success' : 'failed');
+  let next: ForgeState = { ...state, phase: run.status, runs: [...state.runs, run].slice(-20), replayRunId: run.id, replayMode: run.status === 'failed' ? 'failure' : 'normal' };
+  const label = run.status === 'passed' ? 'Passed' : run.status === 'partial' ? 'Partial' : 'Failed';
+  next = addActivity(next, 'run_simulation', `${label} at ${run.evaluationLevel} fidelity with objective ${run.objective.toFixed(3)}; ${run.metrics.measures.filter((item) => item.status === 'pass').length}/${run.metrics.measures.length} measured targets pass.`, actor, run.status === 'failed' ? 'failed' : 'success');
   return { state: next, result: success(next, `Simulation ${run.status}.`, run) };
 }
 

@@ -2,7 +2,7 @@
 
 import { ContactShadows, Edges, Grid, Line, OrbitControls, RoundedBox } from '@react-three/drei';
 import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { type Group, MathUtils, Plane, Quaternion, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
 import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPose, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
@@ -1328,13 +1328,17 @@ function LightBody({ component, color, xray, selected }: { component: MachineCom
   </group>;
 }
 
-function CableBody({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
+function CableBody({ component, color, xray, selected, operating, endPosition }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean; endPosition?: Vec3 }) {
   const cableRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
   const placeCable = (elapsed: number) => {
     const group = cableRef.current;
     const endpoints = animatedCableEndpoints(component, elapsed, operating);
     if (!group || !endpoints) return;
+    // Simulation replay is authoritative. Keep a hoist line terminated at the
+    // replayed hook instead of advancing a second wall-clock animation that can
+    // visually pass through the load after pause, seek, or speed changes.
+    if (endPosition && component.parameters.rigging) endpoints.end = [endPosition[0], endPosition[1] + .21, endPosition[2]];
     const start = new Vector3(...endpoints.start);
     const end = new Vector3(...endpoints.end);
     const direction = end.clone().sub(start);
@@ -1449,7 +1453,7 @@ function TrackBody({ component, color, xray, selected }: { component: MachineCom
   return <group><RoundedBox args={[x, y, z]} radius={Math.min(.18, y * .45)} smoothness={5}><StandardMaterial color="#171d20" xray={xray} selected={selected} roughness={.88} /></RoundedBox>{Array.from({ length: 10 }, (_, index) => <group key={index} position={[-x * .43 + index * x * .095, y * .51, 0]}><BoxBody size={[x * .065, y * .12, z * 1.08]} color={color} xray={xray} selected={selected} radius={.01} /></group>)}</group>;
 }
 
-function ComponentShape({ component, xray, selected, actuatorValue, operating, operationSpeed = 1 }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean; operationSpeed?: number }) {
+function ComponentShape({ component, xray, selected, actuatorValue, operating, operationSpeed = 1, cableEndPosition }: { component: MachineComponent; xray: boolean; selected: boolean; actuatorValue: number; operating: boolean; operationSpeed?: number; cableEndPosition?: Vec3 }) {
   const color = component.humanLockedFields.length ? '#f2b85a' : component.color;
   if (component.parameters.product_form) return <ProductItem component={component} xray={xray} selected={selected} />;
   if (component.parameters.patient_sling) return <PatientSling component={component} xray={xray} selected={selected} />;
@@ -1546,7 +1550,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.primitive === 'piston') return <LinearActuator component={component} color={color} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operating} />;
   if (component.primitive === 'belt') return <BeltBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'cable') {
-    return animatedCableEndpoints(component, 0, false) ? <CableBody component={component} color={color} xray={xray} selected={selected} operating={operating} /> : <mesh><cylinderGeometry args={[Math.max(.015, component.dimensions[0]), Math.max(.015, component.dimensions[0]), component.dimensions[1], 10]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>;
+    return animatedCableEndpoints(component, 0, false) ? <CableBody component={component} color={color} xray={xray} selected={selected} operating={operating} endPosition={cableEndPosition} /> : <mesh><cylinderGeometry args={[Math.max(.015, component.dimensions[0]), Math.max(.015, component.dimensions[0]), component.dimensions[1], 10]} /><StandardMaterial color={color} xray={xray} selected={selected} /></mesh>;
   }
   if (component.primitive === 'sensor' || component.primitive === 'camera') return <group><BoxBody size={component.dimensions} color={color} xray={xray} selected={selected} radius={.035} /><mesh position={[0, 0, component.dimensions[2] * .58]} rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[component.dimensions[0] * .22, component.dimensions[0] * .22, component.dimensions[2] * .18, 22]} /><StandardMaterial color="#5ee8ff" xray={xray} selected={selected} metalness={.22} roughness={.14} /></mesh><mesh position={[0, 0, component.dimensions[2] * 2.2]}><coneGeometry args={[component.dimensions[0] * 1.4, component.dimensions[2] * 3.2, 16, 1, true]} /><meshBasicMaterial color="#57e5ff" transparent opacity={xray ? .19 : .06} depthWrite={false} /></mesh></group>;
   if (component.primitive === 'light') return <LightBody component={component} color={color} xray={xray} selected={selected} />;
@@ -1615,7 +1619,7 @@ function RotationGizmo({ component, bodyRef, snapDegrees, onRotate, onDragChange
   return <group>{rings.map((ring) => <mesh key={ring.axis} rotation={ring.rotation} onPointerDown={start(ring.axis)} onPointerMove={move} onPointerUp={end} onPointerCancel={end}><torusGeometry args={[radius, Math.max(.018, radius * .025), 10, 72]} /><meshBasicMaterial color={ring.color} transparent opacity={.92} depthTest={false} /></mesh>)}</group>;
 }
 
-function EditableBody({ component, bounds, xray, selected, actuatorValue, enabled, replay, operatingContext, operationSpeed, rotationSnapDegrees, onMove, onRotate, onSelect, onDragChange }: { component: MachineComponent; bounds: Vec3; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; operatingContext: OperatingContext; operationSpeed: number; rotationSnapDegrees?: number | null; onMove: (componentId: string, position: Vec3) => void; onRotate?: (componentId: string, rotation: Vec3) => void; onSelect: () => void; onDragChange: (dragging: boolean) => void }) {
+function EditableBody({ component, bounds, xray, selected, actuatorValue, enabled, replay, cableEndPosition, operatingContext, operationSpeed, rotationSnapDegrees, onMove, onRotate, onSelect, onDragChange }: { component: MachineComponent; bounds: Vec3; xray: boolean; selected: boolean; actuatorValue: number; enabled: boolean; replay?: ReplayFrame['items'][number]; cableEndPosition?: Vec3; operatingContext: OperatingContext; operationSpeed: number; rotationSnapDegrees?: number | null; onMove: (componentId: string, position: Vec3) => void; onRotate?: (componentId: string, rotation: Vec3) => void; onSelect: () => void; onDragChange: (dragging: boolean) => void }) {
   const [dragging, setDragging] = useState(false);
   const [draftPosition, setDraftPosition] = useState<Vec3>(component.position);
   const verticalDrag = useRef({ active: false, startClientY: 0, startY: component.position[1] });
@@ -1649,7 +1653,7 @@ function EditableBody({ component, bounds, xray, selected, actuatorValue, enable
   const speed = replay ? Math.hypot(...replay.velocity) : 0;
   const vectorScale = speed > 0 ? Math.min(.45, 1.5 / speed) : 0;
   return <group ref={bodyRef} position={renderedPosition} rotation={replay ? undefined : component.rotation} quaternion={replay?.rotation} onClick={(event) => { event.stopPropagation(); onSelect(); }} onPointerDown={(event) => { if (!enabled) return; event.stopPropagation(); setDraftPosition(component.position); verticalDrag.current = { active: event.shiftKey, startClientY: event.clientY, startY: component.position[1] }; setDragging(true); onDragChange(true); (event.target as unknown as { setPointerCapture(id: number): void }).setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={end} onPointerCancel={end}>
-    <ComponentShape component={component} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operatingContext.enabled} operationSpeed={operationSpeed} />
+    <ComponentShape component={component} xray={xray} selected={selected} actuatorValue={actuatorValue} operating={operatingContext.enabled} operationSpeed={operationSpeed} cableEndPosition={cableEndPosition} />
     {selected && enabled && !replay && <RotationGizmo component={component} bodyRef={bodyRef} snapDegrees={rotationSnapDegrees} onRotate={onRotate} onDragChange={onDragChange} />}
     {enabled && xray && <><Line points={[[-2.5, 0, 0], [2.5, 0, 0]]} color="#ff6478" dashed dashScale={3} transparent opacity={.72} /><Line points={[[0, -2.5, 0], [0, 2.5, 0]]} color="#65e58d" dashed dashScale={3} transparent opacity={.72} /><Line points={[[0, 0, -2.5], [0, 0, 2.5]]} color="#55a8ff" dashed dashScale={3} transparent opacity={.72} /></>}
     {xray && replay && speed > .01 && <Line points={[[0, component.dimensions[1], 0], [replay.velocity[0] * vectorScale, component.dimensions[1] + replay.velocity[1] * vectorScale, replay.velocity[2] * vectorScale]]} color="#ffffff" transparent opacity={.76} />}
@@ -1660,7 +1664,10 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
   const previewData = useMemo(() => previewWorld(), []);
   const [componentDragging, setComponentDragging] = useState(false);
   const operationTime = useRef(0);
-  useFrame((_, delta) => { if (operating) operationTime.current += Math.min(delta, .05); });
+  useFrame((_, delta) => {
+    if (frame) operationTime.current = frame.time;
+    else if (operating) operationTime.current += Math.min(delta, .05);
+  });
   const components = useMemo(
     () => state.components.length ? state.components : preview ? previewData.components : [],
     [preview, previewData.components, state.components],
@@ -1694,8 +1701,13 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
     <pointLight position={[-4, 4, -3]} intensity={24} color="#2bd9ff" distance={12} />
     <pointLight position={[4, 3, 4]} intensity={18} color="#ff9c45" distance={11} />
     {components.map((component) => {
-      const replaySafe = state.replayMode === 'failure' && !state.goal?.capabilities.includes('transmit');
-      const replay = replaySafe ? frame?.items.find((item) => item.id === component.id) : undefined;
+      const replay = frame?.items.find((item) => item.id === component.id);
+      const replayedHook = component.parameters.rigging
+        ? components.find((item) => item.parameters.winch_hook)
+        : undefined;
+      const cableEndPosition = replayedHook
+        ? frame?.items.find((item) => item.id === replayedHook.id)?.position ?? replayedHook.position
+        : undefined;
       const targetJoint = joints.find((item) => item.componentB === component.id);
       const actuator = state.actuators.find((item) => item.jointId === targetJoint?.id);
       const actuatorValue = operating ? .5 + Math.sin((component.id.length + state.designRevision) * .7) * .08 : actuator ? frame?.actuatorValues[actuator.id] ?? .55 : .55;
@@ -1704,10 +1716,10 @@ function Machine({ state, preview, operating = false, frame, onComponentMove, on
       const connectedMotorIds = state.connections.filter((connection) => connection.type === 'power' && (connection.sourceId === component.id || connection.targetId === component.id)).flatMap((connection) => [connection.sourceId, connection.targetId]);
       const driveRpm = state.motors.filter((motor) => motor.componentId === component.id || connectedMotorIds.includes(motor.componentId) || (motor.jointId && targetJoint?.id === motor.jointId)).reduce((maximum, motor) => Math.max(maximum, motor.maxRpm), 0);
       const operationSpeed = driveRpm > 0 ? MathUtils.clamp(driveRpm / 100, .35, 3) : 1;
-      return <EditableBody key={component.id} component={component} bounds={state.world.bounds} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} operatingContext={operatingContext} operationSpeed={operationSpeed} rotationSnapDegrees={rotationSnapDegrees} onMove={onComponentMove} onRotate={onComponentRotate} onSelect={() => onSelect(component.id)} onDragChange={setComponentDragging} />;
+      return <EditableBody key={component.id} component={component} bounds={state.world.bounds} xray={state.xray} selected={selected} actuatorValue={actuatorValue} enabled={enabled} replay={replay} cableEndPosition={cableEndPosition} operatingContext={operatingContext} operationSpeed={operationSpeed} rotationSnapDegrees={rotationSnapDegrees} onMove={onComponentMove} onRotate={onComponentRotate} onSelect={() => onSelect(component.id)} onDragChange={setComponentDragging} />;
     })}
-    {state.replayMode === 'failure' && frame?.items.filter((item) => item.id === 'test-payload' || item.id.startsWith('sort-package-')).map((item) => <ReplayPackage key={item.id} item={item} xray={state.xray} />)}
-    {state.replayMode === 'failure' && frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[.16, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={.92} /></mesh>)}
+    {frame?.items.filter((item) => item.id === 'test-payload' || item.id.startsWith('sort-package-')).map((item) => <ReplayPackage key={item.id} item={item} xray={state.xray} />)}
+    {frame?.collisionPoints.map((point, index) => <mesh key={`${point.join('-')}-${index}`} position={point}><sphereGeometry args={[.16, 16, 16]} /><meshBasicMaterial color="#ff4f62" transparent opacity={.92} /></mesh>)}
     {state.xray && joints.map((joint) => {
       const a = byId.get(joint.componentA), b = byId.get(joint.componentB); if (!a || !b) return null;
       const positionA = frame?.items.find((item) => item.id === a.id)?.position ?? a.position;
@@ -1728,21 +1740,74 @@ function useReplay(state: ForgeState) {
   const failureFrame = run?.failures[0]?.replayFrame ?? 0;
   const start = run && state.replayMode === 'failure' ? Math.max(0, failureFrame - 34) : 0;
   const end = run && state.replayMode === 'failure' ? Math.min(run.replay.length - 1, failureFrame + 34) : Math.max(0, (run?.replay.length ?? 1) - 1);
-  const [cursor, setCursor] = useState({ runId: '', index: 0 });
+  const runKey = `${run?.id ?? 'none'}:${state.replayMode}:${start}`;
+  const [session, setSession] = useState({ runKey: '', index: 0, playing: true, speed: 1 });
   const [reducedMotion, setReducedMotion] = useState(false);
-  const index = run && cursor.runId === run.id ? Math.max(start, Math.min(end, cursor.index)) : start;
+  const active = session.runKey === runKey ? session : { runKey, index: start, playing: true, speed: state.replayMode === 'failure' ? .25 : 1 };
+  const playing = active.playing && !reducedMotion;
+  const speed = active.speed;
+  const index = Math.max(start, Math.min(end, active.index));
   useEffect(() => { const media = window.matchMedia('(prefers-reduced-motion: reduce)'); const update = () => setReducedMotion(media.matches); update(); media.addEventListener('change', update); return () => media.removeEventListener('change', update); }, []);
   useEffect(() => {
-    if (!run || reducedMotion || state.replayMode !== 'failure') return;
-    const timer = window.setInterval(() => setCursor((current) => { const currentIndex = current.runId === run.id ? current.index : start; return { runId: run.id, index: currentIndex >= end ? start : Math.min(end, currentIndex + (state.replayMode === 'failure' ? 1 : 3)) }; }), state.replayMode === 'failure' ? 200 : 60);
+    if (!run || reducedMotion || !playing) return;
+    const timer = window.setInterval(() => setSession((current) => { const currentIndex = current.runKey === runKey ? current.index : start; return { runKey, index: currentIndex >= end ? start : Math.min(end, currentIndex + 1), playing: true, speed }; }), Math.max(20, 50 / speed));
     return () => window.clearInterval(timer);
-  }, [run, start, end, state.replayMode, reducedMotion]);
-  return { run, frame: run?.replay[index] ?? null };
+  }, [run, runKey, start, end, reducedMotion, playing, speed]);
+  return {
+    run, frame: run?.replay[index] ?? null, index, start, end, playing, speed, reducedMotion,
+    setPlaying: (next: boolean) => setSession({ ...active, runKey, playing: next }),
+    setSpeed: (next: number) => setSession({ ...active, runKey, speed: next }),
+    restart: () => setSession({ ...active, runKey, index: start }),
+    step: (delta: number) => setSession({ ...active, runKey, playing: false, index: Math.max(start, Math.min(end, index + delta)) }),
+    seek: (next: number) => setSession({ ...active, runKey, playing: false, index: Math.max(start, Math.min(end, next)) }),
+  };
+}
+
+function supportsWebGl() {
+  try {
+    if (typeof document === 'undefined' || typeof WebGLRenderingContext === 'undefined') return false;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: true }) ?? canvas.getContext('webgl', { failIfMajorPerformanceCaveat: true });
+    if (!context) return false;
+    context.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
+  } catch { return false; }
+}
+
+const subscribeRenderer = () => () => undefined;
+function rendererSnapshot(): 'webgl' | 'compatibility' {
+  if (new URLSearchParams(window.location.search).get('renderer') === 'compatibility') return 'compatibility';
+  return supportsWebGl() ? 'webgl' : 'compatibility';
+}
+
+function CompatibilityScene({ state, frame, onSelect }: { state: ForgeState; frame: ReplayFrame | null; onSelect: (id: string) => void }) {
+  const [zoom, setZoom] = useState(1);
+  const [turn, setTurn] = useState(0);
+  const replayById = new Map(frame?.items.map((item) => [item.id, item]) ?? []);
+  const project = (position: Vec3) => {
+    const angle = turn * Math.PI / 2;
+    const x = position[0] * Math.cos(angle) - position[2] * Math.sin(angle);
+    const z = position[0] * Math.sin(angle) + position[2] * Math.cos(angle);
+    return [450 + (x - z) * 34 * zoom, 300 - position[1] * 42 * zoom + (x + z) * 11 * zoom];
+  };
+  return <div className="compatibility-scene" role="img" aria-label={`Compatibility projection of ${state.goal?.machineName ?? 'the mechanical world'}`}>
+    <div className="compatibility-message"><strong>Compatibility renderer</strong><span>WebGL is unavailable. The machine remains visible, selectable, replayable, and exportable.</span></div>
+    <svg viewBox="0 0 900 560" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><defs><pattern id="cpu-grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" fill="none" stroke="#18303a" strokeWidth="1" /></pattern></defs><rect width="900" height="560" fill="#080c10" /><rect y="300" width="900" height="260" fill="url(#cpu-grid)" />{state.components.map((component) => { const replay = replayById.get(component.id); const [x, y] = project(replay?.position ?? component.position); const width = Math.max(5, component.dimensions[0] * 24 * zoom); const height = Math.max(5, component.dimensions[1] * 24 * zoom); const selected = state.selectedComponentId === component.id; return <g key={component.id} role="button" tabIndex={0} onClick={() => onSelect(component.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onSelect(component.id); }}><rect x={x - width / 2} y={y - height / 2} width={width} height={height} rx={component.shape === 'cylinder' || component.shape === 'sphere' ? Math.min(width, height) / 2 : 3} fill={component.color} fillOpacity={selected ? .95 : .72} stroke={selected ? '#ffffff' : '#57dff8'} strokeWidth={selected ? 3 : 1} /><title>{component.role}</title></g>; })}{frame?.items.filter((item) => item.id.startsWith('sort-package-') || item.id === 'test-payload').map((item) => { const [x, y] = project(item.position); return <rect key={item.id} x={x - 10} y={y - 10} width="20" height="20" rx="2" fill={item.color}><title>{item.label}</title></rect>; })}</svg>
+    <div className="compatibility-controls"><button onClick={() => setZoom((value) => Math.max(.5, value - .15))} aria-label="Zoom out compatibility projection">−</button><button onClick={() => setZoom((value) => Math.min(2.2, value + .15))} aria-label="Zoom in compatibility projection">+</button><button onClick={() => setTurn((value) => (value + 1) % 4)}>Rotate 90°</button></div>
+  </div>;
 }
 
 export function ForgeScene(props: Props) {
-  const { run, frame } = useReplay(props.state);
+  const replay = useReplay(props.state);
+  const { run, frame } = replay;
+  const renderer = useSyncExternalStore(subscribeRenderer, rendererSnapshot, () => 'checking' as const);
   const label = props.state.goal ? `3D physical world for ${props.state.goal.machineName}. The adjacent world hierarchy and component inspector provide an accessible editing alternative.` : '3D general-purpose mechanical engineering world.';
-  const replayFrame = props.state.replayMode === 'failure' ? frame : null;
-  return <div className="canvas-wrap" data-forgetwin-scene={props.preview ? undefined : 'true'}><Canvas style={{ touchAction: 'none' }} aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true, preserveDrawingBuffer: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine key={props.state.designHash} {...props} frame={replayFrame} /></Suspense></Canvas>{!props.preview && <div className="sr-only">{run ? `${run.status} multi-body simulation ${props.state.replayMode === 'failure' ? 'failure replay' : 'result'} is active.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
+  const selectedItem = frame?.items.find((item) => item.id === props.state.selectedComponentId);
+  const selectedCollisions = run?.collisions.filter((item) => item.replayFrame === replay.index && (item.bodyA === props.state.selectedComponentId || item.bodyB === props.state.selectedComponentId)) ?? [];
+  const selectedJoint = props.state.joints.find((item) => item.componentB === props.state.selectedComponentId || item.componentA === props.state.selectedComponentId);
+  const selectedActuator = props.state.actuators.find((item) => item.jointId === selectedJoint?.id);
+  const selectedSensors = props.state.sensors.filter((item) => item.componentId === props.state.selectedComponentId || item.targetId === props.state.selectedComponentId);
+  const jointAngle = selectedItem && selectedJoint?.type === 'revolute' ? 2 * Math.acos(Math.max(-1, Math.min(1, Math.abs(selectedItem.rotation[3])))) * 180 / Math.PI : null;
+  const actuatorForce = selectedActuator && frame ? selectedActuator.maxForce * (frame.actuatorValues[selectedActuator.id] ?? 0) : null;
+  return <div className="canvas-wrap" data-forgetwin-scene={props.preview ? undefined : 'true'}>{renderer === 'checking' ? <div className="renderer-check" role="status">Checking graphics compatibility…</div> : renderer === 'compatibility' ? <CompatibilityScene state={props.state} frame={run ? frame : null} onSelect={props.onSelect} /> : <Canvas style={{ touchAction: 'none' }} aria-label={props.preview ? undefined : label} aria-hidden={props.preview || undefined} role={props.preview ? undefined : 'img'} tabIndex={-1} shadows="basic" dpr={[1, 1.5]} camera={{ position: [8.4, 6.4, 10.6], fov: 42 }} gl={{ antialias: true, preserveDrawingBuffer: true }} onPointerMissed={() => props.onSelect('')}><color attach="background" args={['#080c10']} /><fog attach="fog" args={['#080c10', 12, 28]} /><Suspense fallback={null}><Machine key={props.state.designHash} {...props} frame={run ? frame : null} /></Suspense></Canvas>}{run && !props.preview && <section className="replay-console" aria-label="Simulation replay controls"><div><strong>{props.state.replayMode === 'failure' ? 'Failure replay' : 'Simulation replay'}</strong><span>{frame?.time.toFixed(2) ?? '0.00'} s / {run.physics.simulatedSeconds.toFixed(2)} s · {run.evaluationLevel}</span></div><div className="replay-buttons"><button onClick={replay.restart} aria-label="Restart replay">↺</button><button onClick={() => replay.step(-1)} aria-label="Previous replay frame">‹</button><button onClick={() => replay.setPlaying(!replay.playing)} aria-label={replay.playing ? 'Pause replay' : 'Play replay'}>{replay.playing ? 'Pause' : 'Play'}</button><button onClick={() => replay.step(1)} aria-label="Next replay frame">›</button><label>Speed<select value={replay.speed} onChange={(event) => replay.setSpeed(Number(event.target.value))}><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label></div><input aria-label="Replay timeline" type="range" min={replay.start} max={replay.end} value={replay.index} onChange={(event) => replay.seek(Number(event.target.value))} /><div className="replay-markers">{run.collisions.filter((item) => item.harmful).map((item) => <button key={item.id} aria-label={`Jump to ${item.classification} at ${item.time} seconds`} title={`${item.classification}: ${item.bodyA} / ${item.bodyB}`} style={{ left: `${(item.replayFrame / Math.max(1, run.replay.length - 1)) * 100}%` }} onClick={() => replay.seek(item.replayFrame)} />)}</div>{selectedItem && !replay.playing && <p className="replay-selection"><strong>{selectedItem.label}</strong> Position {selectedItem.position.map((value) => value.toFixed(2)).join(', ')} m · Rotation q[{selectedItem.rotation.map((value) => value.toFixed(2)).join(', ')}] · Velocity {selectedItem.velocity.map((value) => value.toFixed(2)).join(', ')} m/s · {selectedJoint ? `${selectedJoint.type} joint axis [${selectedJoint.axis.join(', ')}]${jointAngle === null ? '' : ` at ${jointAngle.toFixed(1)}°`}` : 'no joint'} · {actuatorForce === null ? 'no actuator force' : `${actuatorForce.toFixed(1)} N commanded force`} · {selectedSensors.length ? selectedSensors.map((sensor) => `${sensor.channel} ${(frame?.sensorValues[sensor.id] ?? 0).toFixed(2)}`).join(', ') : 'no sensor channel'} · {selectedCollisions.length ? `${selectedCollisions.length} contact event (${selectedCollisions[0].classification}, ${selectedCollisions[0].impulse} N·s)` : 'no contact at this frame'}</p>}</section>}{!props.preview && <div className="sr-only">{run ? `${run.status} ${run.evaluationLevel} simulation replay is ${replay.playing ? 'playing' : 'paused'} at ${frame?.time.toFixed(2) ?? 0} seconds.` : `${props.state.components.length} physical bodies and ${props.state.joints.length} joints are visible.`}</div>}</div>;
 }

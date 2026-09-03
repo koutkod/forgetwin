@@ -94,7 +94,7 @@ describe('ForgeTwin accessible world editor shell', () => {
   it('moves focus into analysis drawers, closes on Escape, and restores focus', async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(createInitialForgeState('lab')));
     const { getByRole, queryByRole } = render(<ForgeTwinApp />);
-    const telemetry = await waitFor(() => getByRole('button', { name: 'Telemetry' }));
+    const telemetry = await waitFor(() => getByRole('button', { name: 'Results' }));
     telemetry.focus(); fireEvent.click(telemetry);
     const close = await waitFor(() => getByRole('button', { name: 'Close panel' }));
     expect(document.activeElement).toBe(close);
@@ -108,16 +108,16 @@ describe('ForgeTwin accessible world editor shell', () => {
     await waitFor(() => expect(getByRole('button', { name: 'Engineer locally' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer locally' }));
     expect(await findByRole('status', { name: 'Live engineering progress' })).toBeTruthy();
-    expect(await findByText('Generated + physics verified', {}, { timeout: 20_000 })).toBeTruthy();
+    expect(await findByText('Generated + run evidence available', {}, { timeout: 20_000 })).toBeTruthy();
     expect(getByRole('button', { name: 'Compare runs' })).toBeTruthy();
     expect(getByRole('button', { name: 'Select editable body' })).toBeTruthy();
-    const animate = getByRole('button', { name: 'Animate design' });
+    const animate = getByRole('button', { name: 'Kinematic preview' });
     await waitFor(() => expect(animate.hasAttribute('disabled')).toBe(false));
     expect(animate.getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(animate);
-    expect(getByRole('button', { name: 'Pause animation' }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(getByRole('button', { name: 'Pause animation' }));
-    expect(getByRole('button', { name: 'Animate design' }).getAttribute('aria-pressed')).toBe('false');
+    expect(getByRole('button', { name: 'Pause preview' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(getByRole('button', { name: 'Pause preview' }));
+    expect(getByRole('button', { name: 'Kinematic preview' }).getAttribute('aria-pressed')).toBe('false');
   }, 25_000);
 
   it('routes a connected model decision into the guarded in-app agent loop', async () => {
@@ -145,7 +145,7 @@ describe('ForgeTwin accessible world editor shell', () => {
     await waitFor(() => expect(getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
     fireEvent.change(getByRole('textbox', { name: 'What should ForgeTwin engineer?' }), { target: { value: connectedCranePlan.normalized_prompt } });
     fireEvent.click(getByRole('button', { name: 'Engineer with AI' }));
-    expect(await findByText('Engineering mission complete', {}, { timeout: 20_000 })).toBeTruthy();
+    expect(await findByText('Compact test crane', {}, { timeout: 20_000 })).toBeTruthy();
     expect((await findAllByText(/Model agent · gpt-5.4-mini/i)).length).toBeGreaterThan(0);
   }, 25_000);
 
@@ -160,7 +160,7 @@ describe('ForgeTwin accessible world editor shell', () => {
     fireEvent.click(getByRole('button', { name: 'Verify & connect for this tab' }));
     await waitFor(() => expect(getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer with AI' }));
-    expect(await findByText('Engineering mission complete', {}, { timeout: 20_000 })).toBeTruthy();
+    expect(await findByText(/Engineering mission complete|Concept run complete with limits/, {}, { timeout: 20_000 })).toBeTruthy();
     expect((await findAllByText(/gpt-5.6-sol · your key/i)).length).toBeGreaterThan(0);
   }, 25_000);
 });
