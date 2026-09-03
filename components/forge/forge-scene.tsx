@@ -5,7 +5,7 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { type Group, MathUtils, Plane, Quaternion, Vector3 } from 'three';
 import { catalogFor, componentMass } from '../../lib/forge-data';
-import { accumulationZoneActivity, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPose, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, type MechanismMotionGraph } from '../../lib/forge-motion';
+import { accumulationZoneActivity, aircraftControlSurfaceAngle, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, motorcycleSteeringAngle, productOperationPose, propulsorVisualMotion, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelYaw, rollingWheelAngle, rotatePoseAroundPivot, rotorcraftHoverOffset, terrainWheelTravel, type MechanismMotionGraph } from '../../lib/forge-motion';
 import { compileDesignBrief, DEFAULT_DESIGN_PROMPT } from '../../lib/forge-prompt';
 import type { ForgeState, Joint, MachineComponent, ReplayFrame, Vec3 } from '../../lib/forge-types';
 
@@ -141,7 +141,30 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   if (!jointPoseApplied && (component.parameters.road_vehicle_steering_knuckle || (component.parameters.road_vehicle_front_steering && (component.parameters.road_vehicle_spindle || component.parameters.road_vehicle_wheel_hub || component.parameters.road_vehicle_brake)))) {
     rotation[1] += roadVehicleWheelYaw(elapsed, component.role, true, String(component.parameters.steering_side ?? ''), Number(component.parameters.ackermann_wheelbase_m ?? 1.7), Number(component.parameters.ackermann_track_m ?? 1.38));
   }
-  if (!jointPoseApplied && component.parameters.motorcycle_steering_member) rotation[1] += Math.sin(elapsed * .82) * .28;
+  if (!jointPoseApplied && (component.parameters.motorcycle_steering_member || component.parameters.motorcycle_front_wheel)) {
+    const pivot: Vec3 = [
+      Number(component.parameters.motorcycle_steering_pivot_x ?? .72),
+      Number(component.parameters.motorcycle_steering_pivot_y ?? 1.55),
+      Number(component.parameters.motorcycle_steering_pivot_z ?? 0),
+    ];
+    const steered = rotatePoseAroundPivot(position, rotation, pivot, [0, 1, 0], motorcycleSteeringAngle(elapsed));
+    position = steered.position;
+    rotation = steered.rotation;
+  }
+
+  if (!jointPoseApplied && component.parameters.aircraft_control_surface) {
+    const pivot: Vec3 = [
+      Number(component.parameters.motion_pivot_x ?? component.position[0]),
+      Number(component.parameters.motion_pivot_y ?? component.position[1]),
+      Number(component.parameters.motion_pivot_z ?? component.position[2]),
+    ];
+    const deflection = aircraftControlSurfaceAngle(elapsed, String(component.parameters.control_axis ?? 'pitch'), String(component.parameters.aircraft_side ?? ''));
+    const moved = rotatePoseAroundPivot(position, rotation, pivot, [0, 0, 1], deflection);
+    position = moved.position;
+    rotation = moved.rotation;
+  }
+
+  if (!jointPoseApplied && component.parameters.rotorcraft_hover_member) position[1] += rotorcraftHoverOffset(elapsed);
 
   if (!jointPoseApplied && (component.parameters.bicycle_brake_rotor || component.parameters.bicycle_brake_axle)) rotation[2] -= elapsed * 3.2;
   if (!jointPoseApplied && component.parameters.bicycle_brake_pad) {
@@ -153,7 +176,7 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     && !component.parameters.road_vehicle_wheel
     && !component.parameters.road_vehicle_steering_wheel
     && !component.parameters.vise_screw;
-  if (!jointPoseApplied && independentlyRollingWheel) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? -3.4);
+  if (!jointPoseApplied && independentlyRollingWheel) rotation[2] += rollingWheelAngle(elapsed, Math.max(component.dimensions[0], component.dimensions[2]) / 2, Number(component.parameters.operation_speed_mps ?? 1.4));
   const planetaryGear = Boolean(component.parameters.planetary_sun || component.parameters.planetary_ring || component.parameters.planetary_planet);
   if (!jointPoseApplied && !planetaryGear && (component.primitive === 'gear' || component.parameters.bicycle_sprocket) && !component.parameters.road_vehicle_brake) {
     const direction = /output/.test(role) ? -1 : 1;
@@ -165,7 +188,7 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
   // operation_spin to this outer world transform makes a shaft tumble end over
   // end (especially obvious on planetary outputs) instead of rotating in its
   // bearings. Pulleys do not have an internal animation and still rotate here.
-  else if (!jointPoseApplied && (component.primitive === 'pulley' || (component.parameters.operation_spin && component.primitive !== 'shaft'))) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? 1.85);
+  else if (!jointPoseApplied && (component.primitive === 'pulley' || (component.parameters.operation_spin && !['shaft', 'propeller', 'rotor'].includes(component.primitive)))) rotation[2] += elapsed * Number(component.parameters.operation_spin ?? 1.85);
   if (component.parameters.road_vehicle_steering_rack) position[2] += roadVehicleRackTravel(elapsed);
 
   if (!jointPoseApplied && /solar|tracking/.test(context.machine)) {
@@ -228,6 +251,11 @@ function operationPose(component: MachineComponent, elapsed: number, context: Op
     if (component.parameters.suspension_arm) rotation[0] += (travel - .07) * .72;
     if (component.primitive === 'spring' && component.parameters.suspension_corner) position[1] += travel * .5;
     if (component.parameters.road_bump) position[1] += travel;
+  }
+  if (!jointPoseApplied && (component.parameters.rover_wheel || component.parameters.rover_upright || component.parameters.rover_suspension_spring)) {
+    const suspensionIndex = Number(component.parameters.operation_index ?? 0);
+    const travel = terrainWheelTravel(elapsed, suspensionIndex);
+    position[1] += component.parameters.rover_suspension_spring ? travel * .5 : travel;
   }
   if (!jointPoseApplied && component.parameters.buffer_gate) {
     const zoneIndex = Number(component.parameters.operation_index ?? 0);
@@ -338,7 +366,7 @@ function RoadVehicleWheel({ component, xray, selected }: { component: MachineCom
     if (!steeringRef.current || !rollingRef.current) return;
     const elapsed = operationTime.current;
     steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, Boolean(component.parameters.road_vehicle_front_steering), String(component.parameters.steering_side ?? ''), Number(component.parameters.ackermann_wheelbase_m ?? 1.7), Number(component.parameters.ackermann_track_m ?? 1.38));
-    rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
+    rollingRef.current.rotation.z = rollingWheelAngle(elapsed, radius, Number(component.parameters.operation_speed_mps ?? 1.55));
   });
   return <group ref={steeringRef}><group ref={rollingRef}>
     <mesh rotation={[Math.PI / 2, 0, 0]} castShadow receiveShadow><cylinderGeometry args={[radius, radius, width, 40]} /><StandardMaterial color="#171d20" xray={xray} selected={selected} metalness={.08} roughness={.9} /></mesh>
@@ -355,17 +383,14 @@ function RoadVehicleWheel({ component, xray, selected }: { component: MachineCom
 function MotorcycleWheel({ component, xray, selected }: { component: MachineComponent; xray: boolean; selected: boolean }) {
   const radius = component.dimensions[0] / 2;
   const width = component.dimensions[1];
-  const steeringRef = useRef<Group>(null);
   const rollingRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
   useFrame(() => {
-    if (!steeringRef.current || !rollingRef.current) return;
-    const elapsed = operationTime.current;
-    steeringRef.current.rotation.y = component.parameters.motorcycle_front_wheel ? Math.sin(elapsed * .82) * .28 : 0;
-    rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
+    if (!rollingRef.current) return;
+    rollingRef.current.rotation.z = rollingWheelAngle(operationTime.current, radius, Number(component.parameters.operation_speed_mps ?? 1.35));
   });
   const spokeColor = selected ? '#65e5ff' : '#c8d3d7';
-  return <group ref={steeringRef}><group ref={rollingRef}>
+  return <group ref={rollingRef}>
     <mesh castShadow receiveShadow><torusGeometry args={[radius * .84, radius * .14, 18, 64]} /><StandardMaterial color="#11171a" xray={xray} selected={selected} metalness={.04} roughness={.94} /></mesh>
     <mesh><torusGeometry args={[radius * .68, radius * .055, 12, 56]} /><StandardMaterial color="#788a92" xray={xray} selected={selected} metalness={.9} roughness={.16} /></mesh>
     {Array.from({ length: 10 }, (_, index) => { const angle = index / 10 * Math.PI * 2; return <Line key={index} points={[[0, 0, 0], [Math.cos(angle) * radius * .67, Math.sin(angle) * radius * .67, 0]]} color={spokeColor} lineWidth={xray ? .8 : 1.7} transparent opacity={xray ? .68 : .95} />; })}
@@ -374,7 +399,7 @@ function MotorcycleWheel({ component, xray, selected }: { component: MachineComp
     <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .12, radius * .12, width * 1.36, 26]} /><StandardMaterial color="#334148" xray={xray} selected={selected} metalness={.86} roughness={.2} /></mesh>
     {!xray && Array.from({ length: 18 }, (_, index) => <group key={index} rotation={[0, 0, index / 18 * Math.PI * 2]}><mesh position={[0, radius * .97, 0]}><boxGeometry args={[radius * .13, radius * .055, width * 1.12]} /><meshStandardMaterial color="#090d0f" roughness={.98} /></mesh></group>)}
     <group position={[radius * .35, 0, width * .15]}><BoxBody size={[radius * .2, radius * .3, width * .34]} color="#e79b3a" xray={xray} selected={selected} radius={.025} metalness={.65} roughness={.28} /></group>
-  </group></group>;
+  </group>;
 }
 
 function MotorcycleTube({ component, color, xray, selected }: { component: MachineComponent; color: string; xray: boolean; selected: boolean }) {
@@ -512,7 +537,7 @@ function RoadVehicleBrake({ component, xray, selected }: { component: MachineCom
     if (!steeringRef.current || !rollingRef.current) return;
     const elapsed = operationTime.current;
     steeringRef.current.rotation.y = roadVehicleWheelYaw(elapsed, component.role, true, String(component.parameters.steering_side ?? ''), Number(component.parameters.ackermann_wheelbase_m ?? 1.7), Number(component.parameters.ackermann_track_m ?? 1.38));
-    rollingRef.current.rotation.z = roadVehicleWheelRoll(elapsed);
+    rollingRef.current.rotation.z = rollingWheelAngle(elapsed, Number(component.parameters.road_wheel_radius_m ?? .3), Number(component.parameters.operation_speed_mps ?? 1.55));
   });
   return <group ref={steeringRef}><group ref={rollingRef}>
     <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius, radius, component.dimensions[1], 36]} /><StandardMaterial color="#b8c3c7" xray={xray} selected={selected} metalness={.94} roughness={.14} /></mesh>
@@ -1428,18 +1453,28 @@ function FuselageBody({ component, color, xray, selected }: { component: Machine
   </group>;
 }
 
-function PropulsorBody({ component, color, xray, selected, operating }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean }) {
+function PropulsorBody({ component, color, xray, selected, operating, speedScale }: { component: MachineComponent; color: string; xray: boolean; selected: boolean; operating: boolean; speedScale: number }) {
   const bladesRef = useRef<Group>(null);
   const operationTime = useContext(OperationTimeContext);
-  const vertical = component.primitive === 'rotor' || component.parameters.rotor_axis === 'vertical';
+  const visualMotion = propulsorVisualMotion(component, 0, speedScale);
+  const vertical = visualMotion.axis === 'y';
   const bladeCount = Math.max(2, Math.min(6, Number(component.parameters.blade_count ?? (vertical ? 4 : 3))));
   const radius = Math.max(.18, Math.max(component.dimensions[0], component.dimensions[2]) / 2);
-  useFrame(() => { if (!bladesRef.current || !operating) return; if (vertical) bladesRef.current.rotation.y = operationTime.current * 3.8; else bladesRef.current.rotation.z = operationTime.current * 7.2; });
+  useFrame(() => {
+    if (!bladesRef.current || !operating) return;
+    const motion = propulsorVisualMotion(component, operationTime.current, speedScale);
+    if (motion.axis === 'y') bladesRef.current.rotation.y = motion.angle;
+    else bladesRef.current.rotation.z = motion.angle;
+  });
   return <group>
     <group ref={bladesRef}>{Array.from({ length: bladeCount }, (_, index) => <group key={index} rotation={vertical ? [0, index / bladeCount * Math.PI * 2, 0] : [0, 0, index / bladeCount * Math.PI * 2]}>
-      <group position={vertical ? [radius * .52, 0, 0] : [radius * .52, 0, 0]} rotation={vertical ? [0, 0, -.04] : [0, 0, -.08]}><BoxBody size={[radius * .9, Math.max(.025, component.dimensions[1] * .32), Math.max(.055, radius * .13)]} color={color} xray={xray} selected={selected} radius={.035} metalness={.58} roughness={.25} /></group>
+      <group position={[radius * .52, 0, 0]} rotation={vertical ? [0, 0, -.04] : [0, 0, -.08]}>
+        <BoxBody size={[radius * .9, Math.max(.025, component.dimensions[1] * .32), Math.max(.055, radius * .13)]} color={color} xray={xray} selected={selected} radius={.035} metalness={.58} roughness={.25} />
+        <group position={[radius * .36, 0, 0]}><BoxBody size={[radius * .16, Math.max(.028, component.dimensions[1] * .36), Math.max(.06, radius * .145)]} color={index === 0 ? '#ffcc4d' : '#eef6f8'} xray={xray} selected={selected} radius={.025} metalness={.36} roughness={.3} /></group>
+      </group>
     </group>)}</group>
-    <mesh rotation={[Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .13, radius * .18, Math.max(.1, component.dimensions[1]), 24]} /><StandardMaterial color="#6f7d84" xray={xray} selected={selected} metalness={.88} roughness={.18} /></mesh>
+    {operating && <mesh rotation={vertical ? [0, 0, 0] : [Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .96, radius * .96, .012, 64]} /><meshBasicMaterial color={vertical ? '#8deaff' : '#d8f7ff'} transparent opacity={xray ? .035 : .075} depthWrite={false} /></mesh>}
+    <mesh rotation={vertical ? [0, 0, 0] : [Math.PI / 2, 0, 0]}><cylinderGeometry args={[radius * .13, radius * .18, Math.max(.1, component.dimensions[1]), 24]} /><StandardMaterial color="#6f7d84" xray={xray} selected={selected} metalness={.88} roughness={.18} /></mesh>
   </group>;
 }
 
@@ -1534,7 +1569,7 @@ function ComponentShape({ component, xray, selected, actuatorValue, operating, o
   if (component.primitive === 'body-shell') return <BodyShellBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'aerofoil') return <AerofoilBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'fuselage') return <FuselageBody component={component} color={color} xray={xray} selected={selected} />;
-  if (component.primitive === 'propeller' || component.primitive === 'rotor') return <PropulsorBody component={component} color={color} xray={xray} selected={selected} operating={operating} />;
+  if (component.primitive === 'propeller' || component.primitive === 'rotor') return <PropulsorBody component={component} color={color} xray={xray} selected={selected} operating={operating} speedScale={operationSpeed} />;
   if (component.primitive === 'landing-gear') return <LandingGearBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'track') return <TrackBody component={component} color={color} xray={xray} selected={selected} />;
   if (component.primitive === 'spring') return <Spring component={{ ...component, color }} xray={xray} selected={selected} operating={operating} />;

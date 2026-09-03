@@ -656,7 +656,7 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
   const chassis = builder.component('plate', 'mobile rover chassis', assembly, [0, .9, 0], [length, .24, width], 'aluminum', 'fixed', { payload_kg: values.payloadKg, rover_chassis: true, grounded_test_rig: true });
   const wheelPositions: Vec3[] = [[-length * .35, .52, -width * .52], [-length * .35, .52, width * .52], [length * .35, .52, -width * .52], [length * .35, .52, width * .52]];
   wheelPositions.forEach((position, index) => {
-    const wheel = builder.component('wheel', `all-terrain wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05, rover_wheel: true });
+    const wheel = builder.component('wheel', `all-terrain wheel ${index + 1}`, assembly, position, [.7 + values.payloadKg / 500, .24, .7 + values.payloadKg / 500], 'rubber', 'dynamic', { friction: 1.05, rover_wheel: true, road_vehicle_wheel: true, road_vehicle_front_steering: false, axle_axis: 'Z', operation_index: index, operation_speed_mps: 1.35 });
     let axleParent = chassis;
     if (context.capabilities.includes('stabilize')) {
       const stiffness = Math.max(15000, values.payloadKg * 680);
@@ -664,7 +664,7 @@ function addRollingSupport(context: ModuleContext): ModuleResult {
       const end = position[0] < 0 ? 'rear' : 'front';
       const carrier = builder.component('support', `${end} ${side} suspension upright`, assembly, [position[0], .68, position[2] * .9], [.2, .48, .18], 'steel', 'dynamic', { rover_upright: true, operation_index: index }, 3.8);
       builder.joint('spring', chassis, carrier, [0, 1, 0], { stiffness, damping: 2100, limits: [0, .55] });
-      const spring = builder.component('spring', `suspension element ${index + 1}`, assembly, [position[0], .82, position[2] * .78], [.12, .55, .12], 'steel', 'dynamic', { stiffness, damping: 2100, operation_index: index });
+      const spring = builder.component('spring', `suspension element ${index + 1}`, assembly, [position[0], .82, position[2] * .78], [.12, .55, .12], 'steel', 'dynamic', { stiffness, damping: 2100, rover_suspension_spring: true, operation_index: index });
       builder.connect(spring, chassis, 'mechanical', 'upper_spring_mount');
       builder.connect(spring, carrier, 'mechanical', 'lower_spring_mount');
       axleParent = carrier;
@@ -983,6 +983,8 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   const electric = /electric|battery/.test(text);
   const rear: Vec3 = [-1.12, .62, 0];
   const front: Vec3 = [1.18, .62, 0];
+  const steeringPivot: Vec3 = [.72, 1.55, 0];
+  const steeringMotion = { motorcycle_steering_pivot_x: steeringPivot[0], motorcycle_steering_pivot_y: steeringPivot[1], motorcycle_steering_pivot_z: steeringPivot[2] };
   const wheelDiameter = /dirt|off[- ]road/.test(text) ? 1.12 : 1.02;
   const frameIds: string[] = [];
   const tube = (role: string, start: Vec3, end: Vec3, section = .065) => {
@@ -991,6 +993,7 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
       motorcycle_frame: !isFork,
       motorcycle_fork: isFork,
       motorcycle_steering_member: isFork,
+      ...(isFork ? steeringMotion : {}),
       round_tube: true,
     });
     const body = builder.components.find((item) => item.id === id);
@@ -999,7 +1002,7 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
     return id;
   };
   const rearDropout = builder.component('bearing', 'rear wheel bearing and swingarm pivot', assembly, rear, [.25, .2, .25], 'steel', 'fixed', { motorcycle_bearing: true, motorcycle_rear_hub: true }, .9);
-  const frontDropout = builder.component('bearing', 'front steering axle bearing', assembly, front, [.25, .2, .25], 'steel', 'fixed', { motorcycle_bearing: true, motorcycle_front_hub: true, motorcycle_steering_member: true }, .9);
+  const frontDropout = builder.component('bearing', 'front steering axle bearing', assembly, front, [.25, .2, .25], 'steel', 'fixed', { motorcycle_bearing: true, motorcycle_front_hub: true, motorcycle_steering_member: true, ...steeringMotion }, .9);
   tube('lower cradle tube', [-.85, .78, 0], [.65, .8, 0], .08);
   tube('upper backbone tube', [-.62, 1.32, 0], [.58, 1.46, 0], .09);
   tube('rear frame stay', rear, [-.62, 1.32, 0], .065);
@@ -1008,7 +1011,7 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
     tube(`${side < 0 ? 'left' : 'right'} rear swingarm`, rear.map((value, index) => index === 2 ? side * .11 : value) as Vec3, [-.42, .82, side * .11], .065);
     tube(`${side < 0 ? 'left' : 'right'} telescopic fork`, [front[0], front[1], side * .11], [.72, 1.58, side * .11], .07);
   }
-  const forkCrown = builder.component('support', 'motorcycle fork crown and steering head', assembly, [.72, 1.55, 0], [.22, .16, .42], 'steel', 'fixed', { motorcycle_fork_crown: true, motorcycle_steering_member: true }, 1.6);
+  const forkCrown = builder.component('support', 'motorcycle fork crown and steering head', assembly, steeringPivot, [.22, .16, .42], 'steel', 'fixed', { motorcycle_fork_crown: true, motorcycle_steering_member: true, ...steeringMotion }, 1.6);
   const rearShock = builder.component('spring', 'rear monoshock suspension', assembly, [-.58, 1.02, 0], [.095, .5, .095], 'steel', 'fixed', { motorcycle_rear_shock: true, stiffness: 28000, damping: 2200 }, 2.2);
   builder.rotate(rearShock, [0, 0, -.42]);
   frameIds.forEach((id, index) => builder.connect(index ? frameIds[index - 1] : rearDropout, id, 'mechanical', 'welded_motorcycle_frame'));
@@ -1017,7 +1020,7 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   builder.connect(rearShock, frameIds[4], 'mechanical', 'rear_suspension_mount');
 
   const centeredWheel = (support: string, role: string, position: Vec3, frontSteering: boolean) => {
-    const wheel = builder.component('wheel', role, assembly, position, [wheelDiameter, .18, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, road_vehicle_front_steering: frontSteering, steering_side: 'center', motorcycle_wheel: true, motorcycle_front_wheel: frontSteering, axle_axis: 'Z', friction: 1.08 }, 4.8);
+    const wheel = builder.component('wheel', role, assembly, position, [wheelDiameter, .18, wheelDiameter], 'rubber', 'dynamic', { road_vehicle_wheel: true, road_vehicle_front_steering: frontSteering, steering_side: 'center', motorcycle_wheel: true, motorcycle_front_wheel: frontSteering, axle_axis: 'Z', friction: 1.08, operation_speed_mps: 1.35, ...(frontSteering ? steeringMotion : {}) }, 4.8);
     const joint = builder.joint('revolute', support, wheel, [0, 0, 1]);
     const supportBody = builder.components.find((item) => item.id === support)!;
     const hinge = builder.joints.find((item) => item.id === joint)!;
@@ -1029,19 +1032,19 @@ function addMotorcycle(context: ModuleContext): ModuleResult {
   const rearWheel = centeredWheel(rearDropout, 'rear driven motorcycle wheel', rear, false);
   centeredWheel(frontDropout, 'front steering motorcycle wheel', front, true);
   const seat = builder.component('seat', 'stepped rider and pillion saddle', assembly, [-.38, 1.49, 0], [.92, .18, .42], 'polymer', 'fixed', { seat_form: 'saddle', motorcycle_seat: true }, 1.8);
-  const steering = builder.component('steering', 'motorcycle handlebar control', assembly, [.72, 1.78, 0], [.28, .12, .92], 'steel', 'fixed', { control_form: 'handlebar', motorcycle_handlebar: true, motorcycle_steering_member: true }, 1.3);
+  const steering = builder.component('steering', 'motorcycle handlebar control', assembly, [.72, 1.78, 0], [.28, .12, .92], 'steel', 'fixed', { control_form: 'handlebar', motorcycle_handlebar: true, motorcycle_steering_member: true, ...steeringMotion }, 1.3);
   const power = builder.component(electric ? 'battery' : 'body-shell', electric ? 'traction battery and controller pack' : 'compact engine and fuel system', assembly, [-.1, 1.04, 0], [.72, .56, .48], electric ? 'polymer' : 'aluminum', 'fixed', { motorcycle_power_unit: true, motorcycle_battery: electric }, electric ? 12 : 18);
   const tank = builder.component('body-shell', electric ? 'sculpted upper battery cover and tank fairing' : 'sculpted fuel tank', assembly, [.28, 1.42, 0], [.92, .54, .56], 'composite', 'fixed', { motorcycle_bodywork: true, motorcycle_tank: true }, 4.2);
   const motor = builder.component('motor', electric ? 'electric motorcycle drive motor' : 'motorcycle engine output drive', assembly, [-.45, .85, .12], [.42, .24, .42], 'aluminum', 'kinematic', { motorcycle_motor: true }, 6.5);
   const chain = builder.component('belt', 'rear wheel chain drive', assembly, [-.77, .73, .12], [.95, .035, .25], 'steel', 'kinematic', { bicycle_chain: true, motorcycle_chain: true }, .9);
-  const frontFender = builder.component('body-shell', 'front wheel mudguard', assembly, [1.18, 1.01, 0], [.7, .11, .3], 'composite', 'fixed', { motorcycle_fender: true, motorcycle_front_fender: true, motorcycle_steering_member: true }, .8);
+  const frontFender = builder.component('body-shell', 'front wheel mudguard', assembly, [1.18, 1.01, 0], [.7, .11, .3], 'composite', 'fixed', { motorcycle_fender: true, motorcycle_front_fender: true, motorcycle_steering_member: true, ...steeringMotion }, .8);
   const rearFender = builder.component('body-shell', 'rear wheel mudguard and tail cowl', assembly, [-1.02, 1.03, 0], [.72, .12, .34], 'composite', 'fixed', { motorcycle_fender: true, motorcycle_rear_fender: true }, .9);
   const footPegs = builder.component('shaft', 'rider foot pegs', assembly, [-.1, .78, 0], [.08, .64, .08], 'steel', 'fixed', { motorcycle_foot_pegs: true }, .8);
   builder.rotate(footPegs, [Math.PI / 2, 0, 0]);
   const drive = builder.motor(motor, rearWheel.joint, Math.max(95, values.torqueNm * 1.5), 520, -1);
   builder.joint('belt', motor, rearWheel.wheel, [0, 0, 1], { ratio: 3.1 });
   for (const id of [seat, steering, power, tank, motor, chain, frontFender, rearFender, footPegs]) builder.connect(id, frameIds[0], 'mechanical', 'motorcycle_mount');
-  const headlight = builder.component('light', 'round LED motorcycle headlight', assembly, [.93, 1.5, 0], [.3, .24, .3], 'aluminum', 'fixed', { headlight: true, vehicle_light: true, motorcycle_headlight: true, motorcycle_steering_member: true, light_direction: 'front', facing_x: 1, facing_axis: '+X', beam_range: 5 }, .48);
+  const headlight = builder.component('light', 'round LED motorcycle headlight', assembly, [.93, 1.5, 0], [.3, .24, .3], 'aluminum', 'fixed', { headlight: true, vehicle_light: true, motorcycle_headlight: true, motorcycle_steering_member: true, ...steeringMotion, light_direction: 'front', facing_x: 1, facing_axis: '+X', beam_range: 5 }, .48);
   const imuBody = builder.component('sensor', 'lean and wheel-speed sensor', assembly, [-.05, 1.36, .18], [.14, .11, .1], 'polymer', 'fixed', { motorcycle_imu: true }, .08);
   const imu = builder.sensor(imuBody, 'imu', 'motorcycle_lean', frameIds[0], 4);
   builder.connect(headlight, power, 'power', 'lighting_bus');
@@ -1064,19 +1067,19 @@ function addFixedWingAircraft(context: ModuleContext): ModuleResult {
   for (const id of [canopy, leftWing, rightWing, tailplane, fin]) builder.connect(id, fuselage, 'mechanical', 'airframe_structure');
   for (const [side, wing] of [['left', leftWing], ['right', rightWing]] as const) {
     const z = side === 'left' ? -1.58 : 1.58;
-    const aileron = builder.component('aerofoil', `${side} aileron control surface`, assembly, [-.56, 1.31, z], [.34, .075, 1.55], 'composite', 'dynamic', { aircraft_control_surface: true, control_axis: 'roll', aircraft_side: side }, 2.1);
+    const aileron = builder.component('aerofoil', `${side} aileron control surface`, assembly, [-.56, 1.31, z], [.34, .075, 1.55], 'composite', 'dynamic', { aircraft_control_surface: true, control_axis: 'roll', aircraft_side: side, motion_pivot_x: -.39, motion_pivot_y: 1.31, motion_pivot_z: z }, 2.1);
     const hingeJoint = builder.joint('revolute', wing, aileron, [0, 0, 1], { limits: [-.35, .35] });
     const servo = builder.component('servo', `${side} aileron servo`, assembly, [-.25, 1.24, z], [.2, .12, .18], 'aluminum', 'fixed', { aircraft_servo: true, control_axis: 'roll' }, .55);
     builder.connect(servo, wing, 'mechanical', 'aileron_servo_mount');
     builder.actuator(servo, hingeJoint, 'servo', 180, 1.4, .7);
   }
-  const elevator = builder.component('aerofoil', 'elevator pitch control surface', assembly, [-1.93, 1.48, 0], [.3, .07, 1.55], 'composite', 'dynamic', { aircraft_control_surface: true, control_axis: 'pitch' }, 1.8);
+  const elevator = builder.component('aerofoil', 'elevator pitch control surface', assembly, [-1.93, 1.48, 0], [.3, .07, 1.55], 'composite', 'dynamic', { aircraft_control_surface: true, control_axis: 'pitch', motion_pivot_x: -1.78, motion_pivot_y: 1.48, motion_pivot_z: 0 }, 1.8);
   const elevatorJoint = builder.joint('revolute', tailplane, elevator, [0, 0, 1], { limits: [-.3, .3] });
   const elevatorServo = builder.component('servo', 'elevator servo', assembly, [-1.63, 1.4, 0], [.2, .12, .18], 'aluminum', 'fixed', { aircraft_servo: true, control_axis: 'pitch' }, .5);
   builder.connect(elevatorServo, tailplane, 'mechanical', 'elevator_servo_mount');
   builder.actuator(elevatorServo, elevatorJoint, 'servo', 180, 1.2, .6);
   const motor = builder.component('motor', 'nose-mounted propulsion motor', assembly, [1.95, 1.3, 0], [.42, .52, .52], 'aluminum', 'fixed', { aircraft_motor: true }, 18);
-  const propeller = builder.component('propeller', 'three-blade aircraft propeller', assembly, [2.28, 1.3, 0], [1.52, .16, 1.52], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'forward', operation_spin: true }, 3.6);
+  const propeller = builder.component('propeller', 'three-blade aircraft propeller', assembly, [2.28, 1.3, 0], [1.52, .16, 1.52], 'composite', 'dynamic', { blade_count: 3, rotor_axis: 'forward', operation_spin: true, powered_propulsor: true }, 3.6);
   builder.rotate(propeller, [0, Math.PI / 2, 0]);
   const propJoint = builder.joint('revolute', motor, propeller, [1, 0, 0]);
   const propBody = builder.components.find((item) => item.id === propeller)!;
@@ -1161,6 +1164,10 @@ function addHelicopter(context: ModuleContext): ModuleResult {
   const imu = builder.sensor(imuBody, 'imu', 'rotorcraft_attitude', fuselage, 8);
   builder.connect(battery, flightComputer, 'power', 'flight_bus'); builder.connect(flightComputer, mainMotor, 'signal', 'collective_speed'); builder.connect(flightComputer, tailMotor, 'signal', 'yaw_command');
   builder.control('rotorcraft stabilization', 'pid', [imu], [], 'coordinate main-rotor lift and tail-rotor anti-torque while maintaining level attitude', 0);
+  // Every airframe member shares the same hover displacement; only the blade
+  // groups spin locally. This prevents skids, tail boom, and rotors from
+  // separating during the kinematic preview.
+  for (const component of builder.components.filter((item) => item.assemblyId === assembly)) component.parameters = { ...(component.parameters ?? {}), rotorcraft_hover_member: true };
   return { id: 'helicopter', mountId: fuselage, editableId: rotor, handles: ['mobile', 'rotate', 'stabilize', 'measure'], outputId: tailRotor, driveId: mainDrive };
 }
 

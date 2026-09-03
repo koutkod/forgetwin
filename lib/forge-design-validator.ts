@@ -87,6 +87,52 @@ function validateVehicleGeometry(plan: CompiledWorldPlan, prompt: string, issues
   }
 }
 
+function rotarySupportFor(plan: CompiledWorldPlan, componentId: string) {
+  const visited = new Set<string>();
+  const queue = [componentId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const joint of plan.joints.filter((candidate) => candidate.componentA === current || candidate.componentB === current)) {
+      if (joint.type === 'revolute') return joint;
+      if (joint.type === 'fixed' && visited.size < 5) queue.push(joint.componentA === current ? joint.componentB : joint.componentA);
+    }
+  }
+  return undefined;
+}
+
+/** Generated previews must have an executable motion path, not merely moving
+ * labels. This validation applies to deterministic templates and model-authored
+ * worlds alike, so future vehicles and aircraft cannot silently ship with a
+ * decorative wheel or unpowered rotor. */
+function validateAnimationTopology(plan: CompiledWorldPlan, issues: DesignIssue[]) {
+  if (plan.goal.capabilities.includes('mobile')) {
+    for (const wheel of plan.components.filter((component) => component.primitive === 'wheel' && (component.parameters?.road_vehicle_wheel || component.parameters?.rover_wheel || component.parameters?.bicycle_wheel || /road wheel|motorcycle wheel/.test(component.role.toLowerCase())))) {
+      const rotary = rotarySupportFor(plan, wheel.id);
+      if (!rotary) issues.push({ code: 'ANIMATION_WHEEL_UNSUPPORTED', severity: 'error', message: `${wheel.role} has no revolute axle path for visible rolling motion.`, componentIds: [wheel.id] });
+      else if (Math.abs(rotary.axis[2]) < .9) issues.push({ code: 'ANIMATION_WHEEL_AXIS', severity: 'error', message: `${wheel.role} must roll around the transverse Z axle under the +X-forward convention.`, componentIds: [wheel.id, rotary.id] });
+    }
+  }
+
+  for (const propulsor of plan.components.filter((component) => (component.primitive === 'propeller' || component.primitive === 'rotor') && (component.parameters?.operation_spin || component.parameters?.powered_propulsor || plan.goal.capabilities.includes('mobile')))) {
+    const rotary = plan.joints.find((joint) => joint.type === 'revolute' && (joint.componentA === propulsor.id || joint.componentB === propulsor.id));
+    if (!rotary) {
+      issues.push({ code: 'ANIMATION_PROPULSOR_JOINT', severity: 'error', message: `${propulsor.role} needs a revolute shaft joint before it can animate.`, componentIds: [propulsor.id] });
+      continue;
+    }
+    const declared = String(propulsor.parameters?.rotor_axis ?? '').toLowerCase();
+    const correctAxis = declared === 'vertical' || declared === 'up' ? Math.abs(rotary.axis[1]) >= .9 : Math.abs(rotary.axis[0]) >= .9;
+    if (!correctAxis) issues.push({ code: 'ANIMATION_PROPULSOR_AXIS', severity: 'error', message: `${propulsor.role} has a shaft axis that does not match its rotor plane.`, componentIds: [propulsor.id, rotary.id] });
+    if (!plan.motors.some((motor) => motor.jointId === rotary.id)) issues.push({ code: 'ANIMATION_PROPULSOR_DRIVE', severity: 'error', message: `${propulsor.role} needs a motor bound to its revolute shaft joint.`, componentIds: [propulsor.id, rotary.id] });
+  }
+
+  for (const surface of plan.components.filter((component) => component.parameters?.aircraft_control_surface)) {
+    const hinge = plan.joints.find((joint) => joint.type === 'revolute' && (joint.componentA === surface.id || joint.componentB === surface.id));
+    if (!hinge || !plan.actuators.some((actuator) => actuator.jointId === hinge.id)) issues.push({ code: 'ANIMATION_CONTROL_SURFACE', severity: 'error', message: `${surface.role} needs an actuated hinge for the control-check animation.`, componentIds: [surface.id, ...(hinge ? [hinge.id] : [])] });
+  }
+}
+
 function validateWindshields(plan: CompiledWorldPlan, issues: DesignIssue[]) {
   const windshields = plan.components.filter((component) => component.parameters?.cockpit_windshield
     || (!component.parameters?.rear_windshield && /(?:front|cockpit) windshield|windscreen/.test(component.role.toLowerCase())));
@@ -248,6 +294,7 @@ export function validateCompiledWorldPlan(plan: CompiledWorldPlan, prompt = plan
   validateCompleteness(plan, prompt, issues);
   validateLighting(plan, prompt, issues);
   validateVehicleGeometry(plan, prompt, issues);
+  validateAnimationTopology(plan, issues);
   validateWindshields(plan, issues);
   validateUnexpectedSystems(plan, prompt, issues);
   return issues;

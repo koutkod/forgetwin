@@ -152,6 +152,40 @@ describe('ForgeTwin world-first brief compiler', () => {
     }
   });
 
+  it('gives every vehicle and aircraft template a coherent animation contract', () => {
+    const rover = compileDesignBrief(engineeringExamples.find((item) => item.id === 'rover')!.prompt);
+    const roverWheels = rover.components.filter((item) => item.parameters?.rover_wheel);
+    expect(roverWheels).toHaveLength(4);
+    expect(roverWheels.every((item) => item.parameters?.road_vehicle_wheel && item.parameters?.axle_axis === 'Z')).toBe(true);
+    expect(new Set(roverWheels.map((item) => item.parameters?.operation_index)).size).toBe(4);
+
+    const kart = compileDesignBrief(engineeringExamples.find((item) => item.id === 'go-kart')!.prompt);
+    for (const wheel of kart.components.filter((item) => item.parameters?.road_vehicle_wheel)) {
+      expect(wheel.parameters?.axle_axis).toBe('Z');
+      expect(kart.joints.some((joint) => joint.type === 'fixed' && joint.componentB === wheel.id)).toBe(true);
+    }
+
+    const motorcycle = compileDesignBrief(engineeringExamples.find((item) => item.id === 'motorcycle')!.prompt);
+    const steeringMembers = motorcycle.components.filter((item) => item.parameters?.motorcycle_steering_member || item.parameters?.motorcycle_front_wheel);
+    expect(steeringMembers.length).toBeGreaterThanOrEqual(7);
+    expect(steeringMembers.every((item) => item.parameters?.motorcycle_steering_pivot_x === .72 && item.parameters?.motorcycle_steering_pivot_y === 1.55)).toBe(true);
+
+    const airplane = compileDesignBrief(engineeringExamples.find((item) => item.id === 'airplane')!.prompt);
+    const propeller = airplane.components.find((item) => item.primitive === 'propeller')!;
+    const propellerJoint = airplane.joints.find((item) => item.type === 'revolute' && item.componentB === propeller.id)!;
+    expect(propeller.parameters).toMatchObject({ rotor_axis: 'forward', powered_propulsor: true });
+    expect(propellerJoint.axis).toEqual([1, 0, 0]);
+    expect(airplane.motors.some((motor) => motor.jointId === propellerJoint.id)).toBe(true);
+    expect(airplane.components.filter((item) => item.parameters?.aircraft_control_surface).every((item) => Number.isFinite(item.parameters?.motion_pivot_x))).toBe(true);
+
+    const helicopter = compileDesignBrief(engineeringExamples.find((item) => item.id === 'helicopter')!.prompt);
+    const mainRotor = helicopter.components.find((item) => item.parameters?.main_rotor)!;
+    const tailRotor = helicopter.components.find((item) => item.parameters?.tail_rotor)!;
+    expect(helicopter.components.filter((item) => item.assemblyId === mainRotor.assemblyId).every((item) => item.parameters?.rotorcraft_hover_member)).toBe(true);
+    expect(helicopter.joints.find((item) => item.componentB === mainRotor.id)?.axis).toEqual([0, 1, 0]);
+    expect(helicopter.joints.find((item) => item.componentB === tailRotor.id)?.axis).toEqual([1, 0, 0]);
+  });
+
   it('does not confuse engineering measurements with primitive quantities', () => {
     const crane = compileDesignBrief('Build a crane that lifts a 200 kg beam by 3 meters and places it within 10 cm without tipping.');
     expect(crane.assemblies.some((item) => item.name === 'requested primitive extension')).toBe(false);

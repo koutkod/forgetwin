@@ -312,6 +312,63 @@ export function roadVehicleWheelRoll(elapsed: number) {
   return -elapsed * 4.6;
 }
 
+/** A radius-aware wheel angle keeps different tire sizes moving at the same
+ * visible ground speed instead of making large rover tires whirl like casters. */
+export function rollingWheelAngle(elapsed: number, radius: number, linearSpeed = 1.55) {
+  return -elapsed * linearSpeed / Math.max(.12, Math.abs(radius));
+}
+
+/** Independent terrain inputs are centered around the authored ride height.
+ * Opposite corners are phase shifted so a rover reads as articulating over
+ * terrain, not as four wheels bobbing together or floating upward. */
+export function terrainWheelTravel(elapsed: number, index: number, amplitude = .075) {
+  const phase = [0, Math.PI * .82, Math.PI * 1.43, Math.PI * 2.17][Math.abs(index) % 4];
+  return Math.sin(elapsed * 1.18 + phase) * amplitude;
+}
+
+export function motorcycleSteeringAngle(elapsed: number) {
+  return Math.sin(elapsed * .72) * .19;
+}
+
+/** Rotate a component around a shared world-space pivot. This is used for
+ * steering forks and other assemblies whose children must remain connected. */
+export function rotatePoseAroundPivot(position: Vec3, rotation: Vec3, pivot: Vec3, axis: Vec3, angle: number): ProductOperationPose {
+  const unitAxis = new Vector3(...axis).normalize();
+  const motion = new Quaternion().setFromAxisAngle(unitAxis, angle);
+  const moved = new Vector3(...position).sub(new Vector3(...pivot)).applyQuaternion(motion).add(new Vector3(...pivot));
+  const orientation = motion.multiply(new Quaternion().setFromEuler(new Euler(...rotation, 'XYZ')));
+  const euler = new Euler().setFromQuaternion(orientation, 'XYZ');
+  return { position: [moved.x, moved.y, moved.z], rotation: [euler.x, euler.y, euler.z] };
+}
+
+export function aircraftControlSurfaceAngle(elapsed: number, controlAxis: string, side = '') {
+  const command = Math.sin(elapsed * .78);
+  if (controlAxis === 'roll') return command * (side === 'left' ? .18 : -.18);
+  if (controlAxis === 'yaw') return command * .14;
+  return Math.sin(elapsed * .62 + .6) * .14;
+}
+
+/** A takeoff would require aerodynamics that this concept sandbox does not
+ * claim. The rotorcraft preview therefore performs a stable ground-effect
+ * hover check: smooth lift, a short hover, and a smooth return to the skids. */
+export function rotorcraftHoverOffset(elapsed: number) {
+  return (.5 - .5 * Math.cos(elapsed * .58)) * .32;
+}
+
+export type PropulsorVisualMotion = { axis: 'y' | 'z'; angle: number; radiansPerSecond: number };
+
+/** Return one—and only one—visual rotation for a powered propulsor. Forward
+ * and tail propellers spin around local Z (their component transform maps it
+ * to the authored shaft); vertical lift rotors spin around local Y. */
+export function propulsorVisualMotion(component: Pick<MachineComponent, 'primitive' | 'role' | 'parameters'>, elapsed: number, speedScale = 1): PropulsorVisualMotion {
+  const declared = String(component.parameters.rotor_axis ?? '').toLowerCase();
+  const vertical = declared === 'vertical' || declared === 'up' || (component.primitive === 'rotor' && !['forward', 'tail', 'horizontal'].includes(declared));
+  const base = component.parameters.main_rotor ? 4.8 : component.parameters.tail_rotor ? 8.6 : /aircraft propeller/i.test(component.role) ? 7.4 : 4.2;
+  const radiansPerSecond = base * Math.max(.35, Math.min(3, Math.abs(speedScale)));
+  const direction = component.parameters.tail_rotor ? -1 : 1;
+  return { axis: vertical ? 'y' : 'z', angle: elapsed * radiansPerSecond * direction, radiansPerSecond };
+}
+
 export function roadVehicleDriveDirection(direction: number) {
   return direction === 0 ? 0 : -Math.abs(direction);
 }

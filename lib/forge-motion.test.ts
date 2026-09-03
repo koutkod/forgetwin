@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Euler, Quaternion, Vector3 } from 'three';
-import { accumulationZoneActivity, ackermannSteeringAngles, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, productOperationPoseAtProgress, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, sampleClearancePath, translateInForgeCoordinates } from './forge-motion';
+import { accumulationZoneActivity, ackermannSteeringAngles, aircraftControlSurfaceAngle, animatedCableEndpoints, createMechanismMotionGraph, drawbridgeLiftAngle, motorcycleSteeringAngle, productOperationPoseAtProgress, propulsorVisualMotion, roadVehicleDriveDirection, roadVehicleRackTravel, roadVehicleSteeringWheelTurn, roadVehicleWheelRoll, roadVehicleWheelYaw, rollingWheelAngle, rotatePoseAroundPivot, rotorcraftHoverOffset, sampleClearancePath, terrainWheelTravel, translateInForgeCoordinates } from './forge-motion';
 import type { Joint, MachineComponent, Motor } from './forge-types';
 
 function body(id: string, position: [number, number, number], bodyType: 'fixed' | 'dynamic' = 'dynamic'): MachineComponent {
@@ -113,6 +113,54 @@ describe('road vehicle operation motion', () => {
     const phase = Math.PI / (2 * 0.82);
     expect(roadVehicleSteeringWheelTurn(phase)).toBeGreaterThan(0);
     expect(roadVehicleRackTravel(phase)).toBeGreaterThan(0);
+  });
+
+  it('uses tire radius to keep rover, kart, and motorcycle ground speed consistent', () => {
+    const elapsed = 1.75;
+    const linearSpeed = 1.4;
+    for (const radius of [.29, .4, .51]) expect(Math.abs(rollingWheelAngle(elapsed, radius, linearSpeed) * radius / elapsed)).toBeCloseTo(linearSpeed, 6);
+  });
+
+  it('articulates terrain wheels independently around—not above—the authored ride height', () => {
+    const samples = [0, 1, 2, 3].map((index) => terrainWheelTravel(1.2, index));
+    expect(new Set(samples.map((value) => value.toFixed(4))).size).toBeGreaterThan(2);
+    expect(samples.every((value) => Math.abs(value) <= .075 + 1e-9)).toBe(true);
+    expect(terrainWheelTravel(0, 0)).toBeCloseTo(0, 8);
+  });
+
+  it('steers a motorcycle fork and front wheel around one shared head pivot', () => {
+    const pivot: [number, number, number] = [.72, 1.55, 0];
+    const angle = motorcycleSteeringAngle(1.8);
+    const fork = rotatePoseAroundPivot([.95, 1.1, -.11], [0, 0, 0], pivot, [0, 1, 0], angle);
+    const wheel = rotatePoseAroundPivot([1.18, .62, 0], [0, 0, 0], pivot, [0, 1, 0], angle);
+    const initialDistance = Math.hypot(.95 - 1.18, 1.1 - .62, -.11);
+    const movedDistance = Math.hypot(...fork.position.map((value, axis) => value - wheel.position[axis]));
+    expect(movedDistance).toBeCloseTo(initialDistance, 6);
+    expect(fork.rotation[1]).toBeCloseTo(wheel.rotation[1], 6);
+  });
+});
+
+describe('aircraft and rotorcraft operation motion', () => {
+  it('moves paired ailerons in opposite directions and keeps elevator travel bounded', () => {
+    const left = aircraftControlSurfaceAngle(1.7, 'roll', 'left');
+    const right = aircraftControlSurfaceAngle(1.7, 'roll', 'right');
+    expect(left).toBeCloseTo(-right, 8);
+    expect(Math.abs(aircraftControlSurfaceAngle(8.2, 'pitch'))).toBeLessThanOrEqual(.14);
+  });
+
+  it('keeps the helicopter hover smooth, positive, and close to the ground', () => {
+    expect(rotorcraftHoverOffset(0)).toBe(0);
+    for (let time = 0; time <= 12; time += .1) expect(rotorcraftHoverOffset(time)).toBeGreaterThanOrEqual(0);
+    expect(rotorcraftHoverOffset(Math.PI / .58)).toBeCloseTo(.32, 6);
+  });
+
+  it('uses one correct spin axis for airplane, main-rotor, and tail-rotor blades', () => {
+    const airplane = { ...body('aircraft propeller', [0, 0, 0]), primitive: 'propeller' as const, role: 'three-blade aircraft propeller', parameters: { rotor_axis: 'forward' } };
+    const main = { ...body('main rotor', [0, 0, 0]), primitive: 'rotor' as const, role: 'four-blade main lift rotor', parameters: { rotor_axis: 'vertical', main_rotor: true } };
+    const tail = { ...body('tail rotor', [0, 0, 0]), primitive: 'propeller' as const, role: 'anti-torque tail rotor', parameters: { rotor_axis: 'tail', tail_rotor: true } };
+    expect(propulsorVisualMotion(airplane, 1, 1)).toMatchObject({ axis: 'z', angle: 7.4 });
+    expect(propulsorVisualMotion(main, 1, 1)).toMatchObject({ axis: 'y', angle: 4.8 });
+    expect(propulsorVisualMotion(tail, 1, 1)).toMatchObject({ axis: 'z', angle: -8.6 });
   });
 });
 

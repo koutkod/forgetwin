@@ -908,8 +908,11 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
   const analysis = worldAnalysis(state);
   const rollingVehicleWheels = state.components.filter((item) => item.parameters.bicycle_wheel || item.parameters.road_vehicle_wheel);
   const drivenVehicleWheel = rollingVehicleWheels.find((item) => /rear/i.test(item.role)) ?? rollingVehicleWheels[0];
-  const drivenRoadHubId = state.motors.map((motor) => state.joints.find((joint) => joint.id === motor.jointId)?.componentB)
-    .find((id) => state.components.find((item) => item.id === id)?.parameters.road_vehicle_wheel_hub);
+  const drivenRoadBodyId = state.motors.map((motor) => state.joints.find((joint) => joint.id === motor.jointId)?.componentB)
+    .find((id) => {
+      const drivenComponent = state.components.find((item) => item.id === id);
+      return drivenComponent?.parameters.road_vehicle_wheel_hub || drivenComponent?.parameters.road_vehicle_wheel;
+    });
 
   for (let tick = 0; tick <= steps; tick += 1) {
     const time = tick * DT;
@@ -952,7 +955,10 @@ export async function simulateDesign(state: ForgeState): Promise<SimulationRun> 
     // constraint supplies that contact behavior while every revolute hub
     // remains fully simulated and anchored.
     if (drivenVehicleWheel && rollingVehicleWheels.length > 1) {
-      const drivenBody = bodyById.get(drivenRoadHubId ?? drivenVehicleWheel.id);
+      // Prefer the body actually bound to a motor. Falling back to the first
+      // visually rolling wheel can otherwise copy zero angular velocity over
+      // every powered rover wheel before the replay is sampled.
+      const drivenBody = bodyById.get(drivenRoadBodyId ?? drivenVehicleWheel.id);
       const omega = drivenBody?.angvel().z ?? 0;
       for (const wheel of rollingVehicleWheels) {
         const body = bodyById.get(wheel.id);
