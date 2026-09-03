@@ -433,6 +433,30 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(counterOnly.status).toBe(baseline.status);
   });
 
+  it('treats terminated cable and belt visuals as flexible interfaces, not disconnected rigid bodies', async () => {
+    const state = assemblePlan(compileDesignBrief('Build a bicycle with front and rear disc brakes that carries a 90 kg rider and travels 20 meters.'));
+    const frame = state.components.find((item) => ['beam', 'frame', 'tube'].includes(item.primitive))!;
+    const rearWheel = state.components.find((item) => item.parameters.bicycle_wheel && /rear/.test(item.role))!;
+    const flexibleId = 'test-flexible-chain-visual';
+    state.components.push({
+      ...frame,
+      id: flexibleId,
+      primitive: 'belt',
+      role: 'terminated chain render proxy',
+      bodyType: 'kinematic',
+      position: [0, .7, .1],
+      dimensions: [1.2, .03, .18],
+      mass: .4,
+      parameters: {},
+    });
+    state.connections.push(
+      { id: 'test-chain-start', sourceId: frame.id, targetId: flexibleId, type: 'mechanical', channel: 'chain_start' },
+      { id: 'test-chain-end', sourceId: flexibleId, targetId: rearWheel.id, type: 'mechanical', channel: 'chain_end' },
+    );
+    const run = await simulateDesign(state);
+    expect(run.metrics.measures.find((item) => item.metric === 'assembly_integrity')).toMatchObject({ value: 100, status: 'pass' });
+  }, 30_000);
+
   it('rejects unsupported measurements and stale failure evidence', async () => {
     const state = assemblePlan(compileDesignBrief('Build a crane that lifts 80 kg by 2 meters.'));
     const unknown = { ...state, goal: { ...state.goal!, constraints: [{ metric: 'magic_score', label: 'Magic', operator: 'min' as const, target: 1, unit: '', source: 'user' as const }] } };

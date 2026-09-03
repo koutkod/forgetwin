@@ -165,7 +165,15 @@ function rotateVectorByQuaternion(vector: Vec3, quaternion: QuaternionLike): Vec
 }
 
 function connectivityRatio(state: ForgeState) {
-  const machineBodies = state.components.filter((item) => !item.parameters.product_form);
+  const flexibleInterfaceIds = new Set(state.components
+    .filter((item) => ['cable', 'belt'].includes(item.primitive))
+    .filter((item) => state.connections.filter((edge) => edge.type === 'mechanical' && (edge.sourceId === item.id || edge.targetId === item.id)).length >= 2)
+    .map((item) => item.id));
+  // A cable/chain visual spans between its terminated bodies while the
+  // corresponding rope/belt joint and controller carry the physical behavior.
+  // Counting that flexible render proxy as an independent rigid body would
+  // report a false disconnected assembly even when both endpoints are wired.
+  const machineBodies = state.components.filter((item) => !item.parameters.product_form && !flexibleInterfaceIds.has(item.id));
   if (machineBodies.length <= 1) return 1;
   const allowed = new Set(machineBodies.map((item) => item.id));
   const parent = new Map([...machineBodies.map((item) => [item.id, item.id] as const), ['world-anchor', 'world-anchor'] as const]);
@@ -334,7 +342,7 @@ function source(metric: string) {
     actuator_count: 'registered joint actuators', response_time: 'actuator slew rate and controller quality', throughput: 'drive rpm and calibrated flow-control quality',
     sorting_accuracy: 'classification and destination events captured in the replay', collisions: 'classified Rapier contact episodes from this simulation run',
     drop_height: 'vertical difference between active transport and transfer surfaces', control_error: 'controller gain and current sensor calibration offset',
-    assembly_integrity: 'largest mechanically connected graph component', component_count: 'physical body count in the shared world',
+    assembly_integrity: 'largest physically constrained graph component; terminated cable and belt render proxies are represented by adjacent rope/belt joints', component_count: 'physical body count in the shared world',
     flow_rate: 'piston swept volume or centrifugal duty-point affinity law × achieved shaft speed, with a complete inlet-volute-outlet path', angular_travel: 'continuous motor travel or bounded revolute-joint envelope over simulated time',
     alignment_error: 'vision and position sensor coverage combined with fixture-controller calibration',
     clamp_force: 'sum of registered hold-down actuator force limits',
@@ -527,7 +535,7 @@ function buildRequirementCoverage(state: ForgeState, measures: MetricReading[], 
   rows.push({
     id: 'physical-integrity', category: 'safety requirement', requirement: 'Components remain physically attached through joints',
     status: integrity >= .9 ? 'complete' : integrity >= .65 ? 'partial' : 'failed', componentIds: [],
-    simulationEvidence: `${round(integrity * 100, 1)}% of bodies belong to the largest physical joint graph.`,
+    simulationEvidence: `${round(integrity * 100, 1)}% of constrained rigid bodies belong to the largest physical joint graph; terminated flexible render proxies are evaluated through their endpoint joints.`,
     missingItems: integrity >= .9 ? [] : ['fixed/revolute/prismatic joints for isolated bodies'], recommendedCorrection: integrity >= .9 ? 'No correction required.' : 'Replace semantic-only mechanical edges with explicit physical joints.',
   });
 

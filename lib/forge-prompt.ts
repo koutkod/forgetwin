@@ -1558,6 +1558,7 @@ function addCableSuspension(context: ModuleContext): ModuleResult {
   // Anchor the tension limit to the fixed boom. The visible sheave remains a
   // separately driven rotor while the winch command changes hook elevation.
   const ropeJoint = builder.joint('rope', boom, hook, [0, 1, 0], { limits: [0, Math.max(1.5, values.liftM + 1.2)], anchorA: [boomLength * .46, boomLength * .14, 0], anchorB: [0, .21, 0] });
+  builder.connect(boom, cable, 'mechanical', 'cable_head_support');
   builder.connect(cable, hook, 'mechanical', 'cable_termination');
   const payload = builder.component('beam', 'suspended beam payload', assembly, [boomEnd[0], hookY - .55, 0], [2.2, .34, .46], 'steel', 'kinematic', { payload_kg: values.payloadKg, rigged_load: true, winch_travel_m: values.liftM }, values.payloadKg);
   builder.joint('fixed', hook, payload);
