@@ -190,7 +190,21 @@ export function ForgeTwinApp() {
       } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
 
       let plan: CompiledWorldPlan;
+      let certifiedPlan: CompiledWorldPlan | null = null;
       if (modelPlan) {
+        try {
+          certifiedPlan = compileDesignBrief(requestedPrompt);
+          preflightCompiledWorldPlan(certifiedPlan);
+        } catch {
+          // A novel mechanism can still proceed through the fully model-authored
+          // graph below. The certified path is only used for machine families
+          // whose topology and replay contracts are covered by the test suite.
+        }
+      }
+      if (modelPlan && certifiedPlan) {
+        plan = certifiedPlan;
+        addTrace('action', 'AI intent mapped to a certified mechanism', `${modelPlan.machine_name} matched a tested ${certifiedPlan.goal.domain.toLowerCase()} primitive architecture. The model interpretation is preserved while known joints, controls, and replay-safe geometry replace an unstable free-form approximation.`);
+      } else if (modelPlan) {
         try {
           plan = compileAgentPlan(requestedPrompt, modelPlan);
           preflightCompiledWorldPlan(plan);

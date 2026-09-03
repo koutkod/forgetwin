@@ -145,7 +145,8 @@ describe('ForgeTwin accessible world editor shell', () => {
     await waitFor(() => expect(getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
     fireEvent.change(getByRole('textbox', { name: 'What should ForgeTwin engineer?' }), { target: { value: connectedCranePlan.normalized_prompt } });
     fireEvent.click(getByRole('button', { name: 'Engineer with AI' }));
-    expect(await findByText('Compact test crane', {}, { timeout: 20_000 })).toBeTruthy();
+    expect(await findByText('Counterbalanced lifting system', {}, { timeout: 20_000 })).toBeTruthy();
+    expect(await findByText('AI intent mapped to a certified mechanism', {}, { timeout: 20_000 })).toBeTruthy();
     expect((await findAllByText(/Model agent · gpt-5.4-mini/i)).length).toBeGreaterThan(0);
   }, 25_000);
 
