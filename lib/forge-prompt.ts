@@ -1592,14 +1592,25 @@ function addCableSuspension(context: ModuleContext): ModuleResult {
   // Reserve real headroom above the lifted load. Without this margin a full
   // requested stroke can pull the beam through the boom or head sheave.
   const hookY = Math.max(.95, boomEnd[1] - Math.max(2.1, values.liftM + 1.15));
-  const cable = builder.member('cable', 'load cable', assembly, boomEnd, [boomEnd[0], hookY + .28, 0], .035, 'steel', 'kinematic', { rigging: true, reduced_order_cable: true, winch_travel_m: values.liftM });
   const hook = builder.component('hook', 'forged load hook', assembly, [boomEnd[0], hookY, 0], [.24, .42, .1], 'steel', 'kinematic', { winch_hook: true, winch_travel_m: values.liftM });
+  const cable = builder.member('cable', 'load cable', assembly, boomEnd, [boomEnd[0], hookY + .21, 0], .035, 'steel', 'kinematic', { rigging: true, rigging_target_id: hook, reduced_order_cable: true, winch_travel_m: values.liftM });
   // Anchor the tension limit to the fixed boom. The visible sheave remains a
   // separately driven rotor while the winch command changes hook elevation.
   const ropeJoint = builder.joint('rope', boom, hook, [0, 1, 0], { limits: [0, Math.max(1.5, values.liftM + 1.2)], anchorA: [boomLength * .46, boomLength * .14, 0], anchorB: [0, .21, 0] });
   builder.connect(boom, cable, 'mechanical', 'cable_head_support');
   builder.connect(cable, hook, 'mechanical', 'cable_termination');
-  const payload = builder.component('beam', 'suspended beam payload', assembly, [boomEnd[0], hookY - .55, 0], [2.2, .34, .46], 'steel', 'kinematic', { payload_kg: values.payloadKg, rigged_load: true, winch_travel_m: values.liftM }, values.payloadKg);
+  // Suspend the beam from a visible two-leg sling instead of placing an
+  // unexplained free beam below the hook. The hook-to-load offset is retained
+  // as explicit rigging metadata so preview and replay can enforce one rigid
+  // lifting assembly even if a future physics integrator samples the two
+  // kinematic bodies in a different order.
+  const payload = builder.component('beam', 'suspended beam payload', assembly, [boomEnd[0], hookY - 1.02, 0], [2.2, .34, .46], 'steel', 'kinematic', {
+    payload_kg: values.payloadKg,
+    rigged_load: true,
+    rigging_parent_id: hook,
+    sling_apex_offset_y: .71,
+    winch_travel_m: values.liftM,
+  }, values.payloadKg);
   builder.joint('fixed', hook, payload);
   const counterMass = Math.max(70, values.payloadKg * .62);
   const counterweight = builder.component('counterweight', 'rear balance counterweight', assembly, [-2.35, .82, 0], [1.2, 1.05, 1.25], 'concrete', 'dynamic', { payload_kg: counterMass, safety_stripes: true }, counterMass);

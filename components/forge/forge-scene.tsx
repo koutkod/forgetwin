@@ -683,6 +683,18 @@ function StructuralBeam({ component, color, xray, selected }: { component: Machi
     <BoxBody size={[x, Math.max(.035, y * .22), z]} color={color} xray={xray} selected={selected} radius={.016} metalness={.82} roughness={.25} />
     <group position={[0, y * .39, 0]}><BoxBody size={[x, Math.max(.035, y * .22), z]} color={color} xray={xray} selected={selected} radius={.016} /></group>
     <group position={[0, y * .19, 0]}><BoxBody size={[x, y * .62, Math.max(.035, z * .22)]} color={color} xray={xray} selected={selected} radius={.012} /></group>
+    {component.parameters.rigged_load && (() => {
+      const liftPointX = x * .34;
+      const liftPointY = y * .55;
+      const apexY = Number(component.parameters.sling_apex_offset_y ?? Math.max(.62, y * 1.8));
+      const slingColor = selected ? '#65e5ff' : '#d9a23d';
+      return <>
+        <Line points={[[-liftPointX, liftPointY, 0], [0, apexY, 0]]} color={slingColor} lineWidth={xray ? 1.5 : 3.4} />
+        <Line points={[[liftPointX, liftPointY, 0], [0, apexY, 0]]} color={slingColor} lineWidth={xray ? 1.5 : 3.4} />
+        {[-1, 1].map((side) => <mesh key={side} position={[side * liftPointX, liftPointY, 0]}><torusGeometry args={[Math.max(.045, y * .15), Math.max(.012, y * .035), 10, 24]} /><StandardMaterial color="#d4dde0" xray={xray} selected={selected} metalness={.94} roughness={.12} /></mesh>)}
+        <mesh position={[0, apexY, 0]}><torusGeometry args={[Math.max(.06, y * .19), Math.max(.014, y * .04), 10, 26]} /><StandardMaterial color={slingColor} xray={xray} selected={selected} metalness={.86} roughness={.18} /></mesh>
+      </>;
+    })()}
   </group>;
 }
 
@@ -1885,7 +1897,8 @@ function Machine({ state, preview, operating = false, frame, replayMode, evaluat
     {components.map((component) => {
       const replay = frame?.items.find((item) => item.id === component.id);
       const replayedHook = component.parameters.rigging
-        ? components.find((item) => item.parameters.winch_hook)
+        ? components.find((item) => item.id === component.parameters.rigging_target_id)
+          ?? components.find((item) => item.parameters.winch_hook)
         : undefined;
       const cableEndPosition = playback.authoritativeBodyTransforms && replayedHook
         ? frame?.items.find((item) => item.id === replayedHook.id)?.position ?? replayedHook.position

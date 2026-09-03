@@ -48,6 +48,35 @@ describe('ForgeTwin world-first brief compiler', () => {
     for (const prompt of Object.values(briefs)) expect(compileDesignBrief(prompt).components.some((item) => forbidden.has(item.primitive))).toBe(false);
   });
 
+  it('keeps the crane cable, hook, sling, and beam in one explicit rigging chain', () => {
+    const plan = compileDesignBrief(briefs.crane);
+    const cable = plan.components.find((item) => item.role === 'load cable')!;
+    const hook = plan.components.find((item) => item.parameters?.winch_hook)!;
+    const payload = plan.components.find((item) => item.parameters?.rigged_load)!;
+
+    expect(cable.parameters?.rigging_target_id).toBe(hook.id);
+    expect(payload.parameters?.rigging_parent_id).toBe(hook.id);
+    expect(Number(payload.parameters?.sling_apex_offset_y)).toBeGreaterThan(payload.dimensions[1] / 2);
+    expect(plan.joints.some((item) => item.type === 'fixed'
+      && [item.componentA, item.componentB].includes(hook.id)
+      && [item.componentA, item.componentB].includes(payload.id))).toBe(true);
+  });
+
+  it('replays the crane hook and suspended beam with a constant rigging offset', async () => {
+    const state = assemblePlan(compileDesignBrief(briefs.crane));
+    const hook = state.components.find((item) => item.parameters.winch_hook)!;
+    const payload = state.components.find((item) => item.parameters.rigged_load)!;
+    const run = await simulateDesign(state);
+    const offsets = run.replay.map((frame) => {
+      const hookFrame = frame.items.find((item) => item.id === hook.id)!;
+      const payloadFrame = frame.items.find((item) => item.id === payload.id)!;
+      return payloadFrame.position.map((value, axis) => value - hookFrame.position[axis]);
+    });
+
+    expect(offsets.length).toBeGreaterThan(20);
+    expect(offsets.every((offset) => Math.abs(offset[0]) < .001 && Math.abs(offset[1] + 1.02) < .001 && Math.abs(offset[2]) < .001)).toBe(true);
+  }, 30_000);
+
   it('builds a recognizable, controlled scissor lift instead of a generic guided elevator', () => {
     const plan = compileDesignBrief('Build a scissor lift that raises a 300 kg load by 1.5 meters and keeps the platform level.');
     expect(plan.goal.machineName).toBe('Scissor lift');
