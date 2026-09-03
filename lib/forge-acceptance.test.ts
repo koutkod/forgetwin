@@ -13,6 +13,9 @@ describe('judge prompt acceptance matrix', () => {
     const prompt = 'Build me a cool-looking electric motorcycle for one person. Give it working wheels, steering, suspension, brakes, a battery, an electric motor, a headlight, a rear brake light and turn signals. Test everything, fix any problems and export the finished design.';
     const plan = compileDesignBrief(prompt);
     expect(plan.engineeringPlan).toMatchObject({ machineType: 'motorcycle', validation: { status: 'ready' } });
+    expect(plan.assemblies.map((item) => item.name)).toEqual(['engineered world', 'motorcycle assembly']);
+    expect(plan.goal.summary).toContain('Compose motorcycle from');
+    expect(plan.goal.summary).not.toContain('automotive-suspension');
     expect(plan.components.filter((item) => item.parameters?.motorcycle_wheel)).toHaveLength(2);
     expect(plan.components.some((item) => item.parameters?.motorcycle_front_suspension)).toBe(true);
     expect(plan.components.some((item) => item.parameters?.motorcycle_rear_shock)).toBe(true);
