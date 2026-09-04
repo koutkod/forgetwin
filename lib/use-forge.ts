@@ -134,11 +134,11 @@ function recordSchemaRepair(state: ForgeState, name: ForgeToolName, actor: Actor
 }
 
 const descriptions: Record<ForgeToolName, string> = {
-  inspect_workspace: 'Read the complete shared physical world: assemblies, bodies, dimensions, materials, masses, joints, devices, controls, revisions, and human locks.',
+  inspect_workspace: 'Start here and read the complete shared physical world: assemblies, bodies, dimensions, materials, masses, joints, devices, controls, revisions, and human locks. Use the returned revision and workspace_nonce on the next mutation, then inspect again before another mutation.',
   inspect_primitive_catalog: 'Inspect reusable low-level primitives and material properties. Complete machines are not catalog entries.',
-  set_design_goal: 'Create a free-form engineering goal with typed constraints and composable capabilities; no profile or machine template is selected. Use mobile when the machine itself travels. Reserve transport for loose-material or workpiece flow through conveyors, chutes, rollers, and processing lines.',
+  set_design_goal: 'Create a free-form engineering goal and open the visible lab with typed constraints and composable capabilities; no profile or machine template is selected. Use mobile when the machine itself travels. Reserve transport for loose-material or workpiece flow through conveyors, chutes, rollers, and processing lines. After this mutation, inspect the new revision before creating assemblies.',
   create_assembly: 'Create an empty mechanical subsystem that can contain arbitrary physical bodies.',
-  create_component: 'Create one requested or mechanically required physical body from a reusable primitive with explicit geometry, transform, material, mass, and rigid-body mode. Do not add visible calibration boxes or temporary test payloads; run_simulation supplies non-design measurement probes when appropriate.',
+  create_component: 'Create one requested or mechanically required physical body from a reusable primitive with explicit geometry, transform, material, mass, and rigid-body mode. Parameter values must be scalar strings, numbers, or booleans. Do not add visible calibration boxes or temporary test payloads; run_simulation supplies non-design measurement probes when appropriate.',
   set_dimensions: 'Resize one body and recalculate mass from material density unless mass is human-locked.',
   set_material: 'Change one body material and its friction, strength proxy, color, and density-derived mass.',
   set_mass: 'Set an explicit body mass for payloads, counterweights, or calibrated mechanisms.',
@@ -414,8 +414,8 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
     const names = Object.keys(schemas) as ForgeToolName[];
     let discoveryTimer: number | undefined;
     let registering = false;
-    let attempts = 0;
     let activeContext: typeof document.modelContext | undefined;
+    let registeredNames = new Set<ForgeToolName>();
 
     // ChatGPT can attach the WebMCP host after the page has already hydrated.
     // Keep discovery alive instead of permanently deciding that the host is
@@ -427,15 +427,20 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
         discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 250);
         return;
       }
-      if (context === activeContext) {
+      if (context !== activeContext) {
+        activeContext = context;
+        registeredNames = new Set<ForgeToolName>();
+      }
+      const pendingNames = names.filter((name) => !registeredNames.has(name));
+      if (!pendingNames.length) {
         discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 2_000);
         return;
       }
       registering = true;
-      attempts += 1;
       window.clearTimeout(unavailableTimer);
-      setCount(WEBMCP_CHECKING);
-      const registrations = names.map((name) => context.registerTool({ name, title: name.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), description: descriptions[name], inputSchema: jsonSchemaFor(name), annotations: { readOnlyHint: readTools.has(name) }, execute: async (raw, { signal }) => {
+      if (!registeredNames.size) setCount(WEBMCP_CHECKING);
+      const registrations = pendingNames.map(async (name) => {
+        await context.registerTool({ name, title: name.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()), description: descriptions[name], inputSchema: jsonSchemaFor(name), annotations: { readOnlyHint: readTools.has(name) }, execute: async (raw, { signal }) => {
         signal?.throwIfAborted();
         try {
           const prepared = prepareForgeToolArguments(name, raw);
@@ -452,19 +457,17 @@ export function useForgeWebMCP(command: ReturnType<typeof useForge>['command'], 
           }
           return commandRef.current(name, raw, 'WebMCP');
         } catch (error) { return failure(snapshotRef.current(), error); }
-      } }, { signal: lifecycle.signal }));
+        } }, { signal: lifecycle.signal });
+        return name;
+      });
       const results = await Promise.allSettled(registrations);
       if (lifecycle.signal.aborted) return;
-      const registered = results.filter((result) => result.status === 'fulfilled').length;
-      setCount(registered);
+      for (const result of results) if (result.status === 'fulfilled') registeredNames.add(result.value);
+      setCount(registeredNames.size);
       registering = false;
-      // Some hosts expose modelContext just before they are ready to accept
-      // registrations. A complete rejection is safe to retry because no tool
-      // from that attempt was installed.
-      if (registered > 0) {
-        activeContext = context;
-        discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 2_000);
-      } else if (attempts < 5) discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, 500);
+      // Browser hosts can become ready tool-by-tool. Retry only rejected names;
+      // never duplicate a definition that the host already accepted.
+      discoveryTimer = window.setTimeout(() => { void discoverAndRegister(); }, registeredNames.size === names.length ? 2_000 : 500);
     };
 
     const unavailableTimer = window.setTimeout(() => {

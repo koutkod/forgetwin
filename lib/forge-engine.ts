@@ -342,6 +342,23 @@ function optimizationActions(state: ForgeState, run: SimulationRun) {
     if (motor.maxRpm !== before) actions.push({ targetId: motor.id, field: 'maxRpm', before, after: motor.maxRpm, reason: 'Increase cycle speed from measured throughput or travel time.' });
   }
 
+  const outputSpeedReading = failed.find((reading) => reading.metric === 'output_speed');
+  if (outputSpeedReading) {
+    const requestedSpeed = Math.max(.001, satisfyingValue(outputSpeedReading));
+    const measuredSpeed = Math.max(Math.abs(outputSpeedReading.value), .001);
+    const speedScale = Math.min(20, Math.max(.05, requestedSpeed / measuredSpeed));
+    for (const motor of state.motors) {
+      const before = motor.maxRpm;
+      motor.maxRpm = Number(Math.min(100000, Math.max(.1, motor.maxRpm * speedScale)).toFixed(3));
+      if (motor.maxRpm !== before) actions.push({ targetId: motor.id, field: 'maxRpm', before, after: motor.maxRpm, reason: 'Set drive speed from the measured output-shaft speed.' });
+    }
+    for (const control of state.controls.filter((item) => (item.motorIds?.length ?? 0) > 0)) {
+      const before = control.setpoint;
+      control.setpoint = Number(requestedSpeed.toFixed(3));
+      if (control.setpoint !== before) actions.push({ targetId: control.id, field: 'setpoint', before, after: control.setpoint, reason: 'Align the motor controller setpoint with the required output speed.' });
+    }
+  }
+
   const angularTravelReading = failed.find((reading) => reading.metric === 'angular_travel');
   if (angularTravelReading) for (const motor of state.motors) {
     const before = motor.maxRpm;
@@ -467,6 +484,11 @@ export function applyForgeTool(current: ForgeState, name: ForgeToolName, input: 
 
   if (name === 'set_design_goal') {
     state.goal = asGoal(input);
+    // A WebMCP agent can start from the public landing screen without touching
+    // the visible UI first. Move the shared workspace into the lab as soon as
+    // the agent establishes a goal so every following body, joint, replay, and
+    // export is immediately visible to the human collaborator.
+    state.screen = 'lab';
     if (input.world && typeof input.world === 'object') {
       const requested = input.world as Record<string, unknown>;
       const allowed = new Set(['gravity', 'duration', 'bounds', 'environment']);

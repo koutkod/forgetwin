@@ -663,6 +663,14 @@ function recommendations(state: ForgeState, failed: MetricReading[]): Optimizati
     state.actuators.slice(0, 2).forEach((item) => add(item.id, 'maxForce', item.maxForce, round(item.maxForce * 1.5, 1), 'Increase force from measured load margin.'));
     state.motors.slice(0, 2).forEach((item) => add(item.id, 'maxTorque', item.maxTorque, round(item.maxTorque * 1.5, 1), 'Increase torque from measured drive margin.'));
   }
+  const outputSpeedReading = failed.find((item) => item.metric === 'output_speed');
+  if (outputSpeedReading) {
+    const requestedSpeed = Math.max(.001, satisfyingValue(outputSpeedReading));
+    const measuredSpeed = Math.max(Math.abs(outputSpeedReading.value), .001);
+    const speedScale = clamp(requestedSpeed / measuredSpeed, .05, 20);
+    state.motors.slice(0, 2).forEach((item) => add(item.id, 'maxRpm', item.maxRpm, round(clamp(item.maxRpm * speedScale, .1, 100000), 3), 'Set drive speed from the measured output-shaft speed.'));
+    state.controls.filter((item) => (item.motorIds?.length ?? 0) > 0).slice(0, 2).forEach((item) => add(item.id, 'setpoint', item.setpoint, round(requestedSpeed, 3), 'Align the motor controller setpoint with the required output speed.'));
+  }
   if (failed.some((item) => ['throughput', 'course_time', 'flow_rate'].includes(item.metric))) state.motors.slice(0, 2).forEach((item) => add(item.id, 'maxRpm', item.maxRpm, round(item.maxRpm * 1.3, 1), 'Increase cycle speed from measured throughput.'));
   if (failed.some((item) => ['deflection', 'safety_factor', 'load_capacity'].includes(item.metric))) state.components.filter((item) => ['beam', 'plate'].includes(item.primitive)).slice(0, 2).forEach((item) => add(item.id, 'section depth', item.dimensions[1], round(item.dimensions[1] * 1.2, 3), 'Increase section stiffness from structural evidence.'));
   if (failed.some((item) => ['stability_margin', 'platform_tilt'].includes(item.metric))) state.components.filter((item) => ['spring', 'counterweight'].includes(item.primitive)).slice(0, 2).forEach((item) => add(item.id, item.primitive === 'spring' ? 'stiffness' : 'mass', item.primitive === 'spring' ? Number(item.parameters.stiffness ?? 18000) : item.mass, item.primitive === 'spring' ? Number(item.parameters.stiffness ?? 18000) * 1.3 : item.mass * 1.3, 'Increase stability authority from measured motion.'));
@@ -728,15 +736,20 @@ function commandedRpmAt(state: ForgeState, targetId: string) {
 
 function bodySensorValue(state: ForgeState, bodyById: Map<string, ReplayBody>, sensorId: string, progress: number) {
   const sensor = state.sensors.find((item) => item.id === sensorId)!;
-  const body = bodyById.get(sensor.targetId ?? sensor.componentId);
+  const targetId = sensor.targetId ?? sensor.componentId;
+  const body = bodyById.get(targetId);
   const p = body?.translation() ?? { x: 0, y: 0, z: 0 };
   const v = body?.linvel() ?? { x: 0, y: 0, z: 0 };
   const w = body?.angvel() ?? { x: 0, y: 0, z: 0 };
   const q = body?.rotation() ?? { x: 0, y: 0, z: 0, w: 1 };
   if (sensor.type === 'position' || sensor.type === 'distance') return Math.hypot(p.x, p.y, p.z);
   if (sensor.channel === 'discharge_flow_lpm') return worldAnalysis(state).flowRate;
-  if (sensor.type === 'speed' && /(?:rpm|shaft|rotor|wheel)/.test(sensor.channel)) {
-    const commanded = commandedRpmAt(state, sensor.targetId ?? sensor.componentId);
+  const target = state.components.find((item) => item.id === targetId);
+  const rotationalTarget = Boolean(
+    target && ['wheel', 'shaft', 'gear', 'pulley', 'roller', 'propeller', 'rotor'].includes(target.primitive),
+  ) || state.joints.some((item) => item.type === 'revolute' && (item.componentA === targetId || item.componentB === targetId));
+  if (sensor.type === 'speed' && (/(?:rpm|shaft|rotor|wheel|output_speed)/.test(sensor.channel) || rotationalTarget)) {
+    const commanded = commandedRpmAt(state, targetId);
     return commanded === null ? Math.hypot(w.x, w.y, w.z) * 30 / Math.PI : Math.abs(commanded);
   }
   if (sensor.type === 'speed') return Math.hypot(v.x, v.y, v.z);

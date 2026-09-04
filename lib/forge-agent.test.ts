@@ -158,7 +158,7 @@ function editContextFor(plan: AgentPlan): EditContext {
     motors: plan.motors.map((item) => ({ id: item.id, component_id: item.component_id, joint_id: item.joint_id, max_torque: item.max_torque, max_rpm: item.max_rpm, direction: item.direction })),
     sensors: plan.sensors.map((item) => ({ id: item.id, component_id: item.component_id, sensor_type: item.sensor_type, channel: item.channel, target_id: item.target_id, range: item.range })),
     actuators: plan.actuators.map((item) => ({ id: item.id, component_id: item.component_id, joint_id: item.joint_id, actuator_type: item.actuator_type, max_force: item.max_force, max_speed: item.max_speed, travel: item.travel })),
-    controls: plan.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensor_ids, actuator_ids: item.actuator_ids, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
+    controls: plan.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensor_ids, actuator_ids: item.actuator_ids, motor_ids: item.motor_ids, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
     latest_run: null, conversation: [],
   };
 }
@@ -551,6 +551,28 @@ describe('ForgeTwin model-agent boundary', () => {
     expect(payload.result.machine_name).toBe('Compact two-wheel bicycle');
     expect(payload.result.components.filter((item) => item.primitive === 'wheel')).toHaveLength(2);
     expect(() => validateAgentPlanSemantics(payload.result, prompt)).not.toThrow();
+  });
+
+  it('accepts model-authored motor feedback controls for chat edits', async () => {
+    const plan = validPlan({ sensors: [{ id: 'wheel-speed', component_id: 'drive-wheel', sensor_type: 'speed', channel: 'wheel_speed', target_id: 'drive-wheel', range: 20 }] });
+    const output = {
+      understanding: 'Add a closed-loop speed controller around the existing traction drive.',
+      needs_clarification: false, clarification_question: '',
+      target_ids: ['drive-wheel', 'drive-motor', 'payload-chassis'],
+      preserve_ids: ['front-right-wheel', 'rear-left-wheel', 'rear-right-wheel'],
+      requested_invariants: ['Preserve every wheel and chassis transform'],
+      actions: [{ tool: 'set_control_logic', control_id: 'traction-speed-loop', name: 'Traction speed loop', mode: 'pid', sensor_ids: ['wheel-speed'], actuator_ids: [], motor_ids: ['traction-drive'], expression: 'hold the commanded wheel speed', setpoint: 8, kp: .8, ki: .03, kd: .1 }],
+      verification: ['Verify the speed sensor closes the loop around traction-drive'],
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output_text: JSON.stringify(output) }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const response = await POST(new Request('http://localhost/api/agent', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost', 'x-forgetwin-openai-key': 'sk-test-motor-control-key-123456789' },
+      body: JSON.stringify({ task: 'edit', prompt: 'Add closed-loop speed control to the traction motor.', context: editContextFor(plan) }),
+    }));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { result: { actions: Array<{ motor_ids?: string[] }> } };
+    expect(payload.result.actions[0].motor_ids).toEqual(['traction-drive']);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ text: { format: { name: 'forgetwin_agent_edit' } } });
   });
 
   it('accepts a disconnected legacy graph after one local topology repair and only one model call', async () => {

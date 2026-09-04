@@ -114,6 +114,29 @@ describe('ForgeTwin generic multi-body physics and optimizer', () => {
     expect(run.metrics.measures.find((item) => item.metric === 'output_speed')?.value).toBeGreaterThanOrEqual(240);
   }, 30_000);
 
+  it('reads a semantic output-speed encoder as shaft rpm and causally retunes its motor', async () => {
+    let state = assemblePlan(compileDesignBrief('Build an aluminum six-blade impeller and animate it at 100 rpm.'));
+    const encoder = state.sensors.find((item) => item.type === 'speed')!;
+    encoder.channel = 'output_speed';
+    state.goal!.constraints = state.goal!.constraints.filter((item) => ['output_speed', 'assembly_integrity'].includes(item.metric));
+    state.goal!.constraints.find((item) => item.metric === 'output_speed')!.operator = 'min';
+    state.goal!.constraints.find((item) => item.metric === 'output_speed')!.target = 100;
+    state.motors[0].maxRpm = 60;
+
+    const failed = await simulateDesign(state);
+    expect(failed.replay.at(-1)?.sensorValues[encoder.id]).toBeCloseTo(60, 2);
+    expect(failed.metrics.measures.find((item) => item.metric === 'output_speed')).toMatchObject({ status: 'fail', value: 60 });
+    expect(failed.diagnosis.recommendations.some((item) => item.targetId === state.motors[0].id && item.field === 'maxRpm')).toBe(true);
+
+    state = commitSimulation(state, failed, 'System').state;
+    state = testCommand(state, 'optimize_design', { run_id: failed.id, objective: 'meet the measured output speed' });
+    expect(state.motors[0].maxRpm).toBeGreaterThanOrEqual(100);
+    expect(state.controls.filter((item) => (item.motorIds?.length ?? 0) > 0).every((item) => item.setpoint >= 100)).toBe(true);
+
+    const passed = await simulateDesign(state);
+    expect(passed.metrics.measures.find((item) => item.metric === 'output_speed')).toMatchObject({ status: 'pass' });
+  }, 30_000);
+
   it('keeps aircraft propulsors on their mounted shafts while physics drives every rotor', async () => {
     const airplane = assemblePlan(compileDesignBrief('Build an electric fixed-wing aircraft with a propeller and landing gear.'));
     const airplanePropeller = airplane.components.find((item) => item.parameters.powered_propulsor)!;

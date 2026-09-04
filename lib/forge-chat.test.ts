@@ -74,4 +74,17 @@ describe('explicit motor speed edits', () => {
   it('retains the deterministic conveyor percentage behavior', () => {
     expect(directMotorSpeedEdits(conveyorState(), 'Make the conveyor belt faster').map((edit) => edit.maxRpm)).toEqual([120, 96]);
   });
+
+  it('retunes every drive for an unambiguous whole-machine speed request', () => {
+    const state = conveyorState();
+    state.components = [
+      { id: 'front-drive', primitive: 'motor', parameters: {}, role: 'front traction motor' },
+      { id: 'rear-drive', primitive: 'motor', parameters: {}, role: 'rear traction motor' },
+    ] as ForgeState['components'];
+    state.motors = [
+      { id: 'front-motor', componentId: 'front-drive', maxRpm: 400, direction: 1 },
+      { id: 'rear-motor', componentId: 'rear-drive', maxRpm: 500, direction: 1 },
+    ] as ForgeState['motors'];
+    expect(directMotorSpeedEdits(state, 'Make the vehicle 25% faster').map((edit) => edit.maxRpm)).toEqual([500, 625]);
+  });
 });

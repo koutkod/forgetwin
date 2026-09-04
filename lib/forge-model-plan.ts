@@ -291,8 +291,7 @@ export function compileAgentPlan(requestedPrompt: string, rawPlan: AgentPlan): C
     controls: plan.controls.map((item) => {
       const sensor = sensorById.get(item.sensor_ids[0] ?? '');
       const sensorBody = sensor ? components.find((component) => component.id === sensor.component_id) : undefined;
-      const motorIds = item.actuator_ids.length ? [] : plan.motors.map((motor) => motor.id);
-      return { id: item.id, name: item.name, mode: item.mode, sensorIds: [...item.sensor_ids], actuatorIds: [...item.actuator_ids], motorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibrationX: sensorBody?.position[0] ?? 0 };
+      return { id: item.id, name: item.name, mode: item.mode, sensorIds: [...item.sensor_ids], actuatorIds: [...item.actuator_ids], motorIds: [...item.motor_ids], expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd, calibrationX: sensorBody?.position[0] ?? 0 };
     }).filter((item) => item.sensorIds.length > 0 && (item.actuatorIds.length > 0 || item.motorIds.length > 0)),
     assumptions,
   };
@@ -398,7 +397,7 @@ export function agentPlanFromCompiled(originalPrompt: string, intent: AgentInten
     motors: compiled.motors.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId ?? '', max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction ?? 1 })),
     sensors: compiled.sensors.map((item) => ({ id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId ?? '', range: item.range })),
     actuators: compiled.actuators.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel })),
-    controls: compiled.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: [...item.sensorIds], actuator_ids: [...item.actuatorIds], expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
+    controls: compiled.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: [...item.sensorIds], actuator_ids: [...item.actuatorIds], motor_ids: [...(item.motorIds ?? [])], expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
     editable_component_id: compiled.goal.editableComponentId,
   };
   const parsed = agentPlanSchema.parse(raw);

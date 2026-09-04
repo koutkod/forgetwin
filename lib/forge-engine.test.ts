@@ -6,6 +6,20 @@ import { localPointToWorld } from './forge-motion';
 import { assemblePlan, testCommand } from './forge-test-utils';
 
 describe('ForgeTwin shared world command engine', () => {
+  it('opens the visible lab when an external WebMCP agent establishes a goal', () => {
+    const initial = createInitialForgeState('landing');
+    const result = applyForgeTool(initial, 'set_design_goal', {
+      machine_name: 'External agent test rig', domain: 'Test engineering',
+      brief: 'Build a grounded test rig through the external WebMCP world tools.',
+      capabilities: ['structure'],
+      constraints: [{ metric: 'component_count', label: 'Body count', operator: 'max', target: 6, unit: '', source: 'inferred' }],
+      max_components: 6,
+      expected_revision: initial.revision, expected_workspace_nonce: initial.workspaceNonce,
+    }, 'WebMCP');
+    expect(result.state.screen).toBe('lab');
+    expect(result.state.goal?.machineName).toBe('External agent test rig');
+  });
+
   it('creates arbitrary assemblies and physical bodies without a profile ID', () => {
     const plan = compileDesignBrief('Build a rotating inspection hatch with one sensor.');
     const state = assemblePlan(plan);

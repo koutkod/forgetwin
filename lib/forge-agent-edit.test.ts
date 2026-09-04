@@ -26,7 +26,7 @@ function editContext(): EditContext {
     motors: [{ id: 'arm-drive', component_id: 'drive-motor-body', joint_id: 'arm-pivot', max_torque: 120, max_rpm: 30, direction: 1 }],
     sensors: [{ id: 'arm-angle', component_id: 'angle-sensor-body', sensor_type: 'angle', channel: 'arm_angle', target_id: 'moving-arm', range: 3.14 }],
     actuators: [{ id: 'arm-servo', component_id: 'drive-motor-body', joint_id: 'arm-pivot', actuator_type: 'servo', max_force: 1500, max_speed: 1.2, travel: 1.3 }],
-    controls: [{ id: 'arm-control', name: 'Arm angle loop', mode: 'pid', sensor_ids: ['arm-angle'], actuator_ids: ['arm-servo'], expression: 'hold arm angle at setpoint', setpoint: .2, kp: .8, ki: .03, kd: .1 }],
+    controls: [{ id: 'arm-control', name: 'Arm angle loop', mode: 'pid', sensor_ids: ['arm-angle'], actuator_ids: ['arm-servo'], motor_ids: [], expression: 'hold arm angle at setpoint', setpoint: .2, kp: .8, ki: .03, kd: .1 }],
     latest_run: { status: 'passed', score: 96, failed_metrics: [] },
     conversation: [],
   };
@@ -107,8 +107,15 @@ describe('ForgeTwin chat-edit semantic guard', () => {
     ], ['drive-motor-body']), context)).toThrow(/references missing ID|motion-capable joint/i);
 
     expect(() => validateAgentEditSemantics(resolved([
-      { tool: 'set_control_logic', control_id: 'monitor-only', name: 'Monitor only', mode: 'threshold', sensor_ids: ['arm-angle'], actuator_ids: [], expression: 'observe angle', setpoint: .5, kp: 0, ki: 0, kd: 0 },
+      { tool: 'set_control_logic', control_id: 'monitor-only', name: 'Monitor only', mode: 'threshold', sensor_ids: ['arm-angle'], actuator_ids: [], motor_ids: [], expression: 'observe angle', setpoint: .5, kp: 0, ki: 0, kd: 0 },
     ], ['angle-sensor-body', 'moving-arm']), context)).toThrow(/at least one actuator/i);
+  });
+
+  it('accepts a motor-only feedback controller without inventing an actuator', () => {
+    const context = editContext();
+    expect(() => validateAgentEditSemantics(resolved([
+      { tool: 'set_control_logic', control_id: 'motor-speed-loop', name: 'Arm drive speed', mode: 'pid', sensor_ids: ['arm-angle'], actuator_ids: [], motor_ids: ['arm-drive'], expression: 'hold the motorized arm at the commanded rate', setpoint: .5, kp: .7, ki: .02, kd: .1 },
+    ], ['angle-sensor-body', 'moving-arm', 'drive-motor-body', 'ground-base']), context)).not.toThrow();
   });
 
   it('allows a recognizable mounted addition and rejects signal-only floating hardware', () => {

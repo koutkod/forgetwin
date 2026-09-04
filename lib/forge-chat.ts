@@ -184,5 +184,28 @@ export function directMotorSpeedEdits(state: ForgeState, instruction: string): C
       direction: motor.direction,
     }));
   }
-  return conveyorSpeedEdits(state, instruction);
+  const conveyorEdits = conveyorSpeedEdits(state, instruction);
+  if (conveyorEdits.length) return conveyorEdits;
+
+  const faster = /\b(faster|speed up|increase(?: the)? speed|raise(?: the)? speed|accelerate|quicker)\b/.test(text);
+  const slower = /\b(slower|slow down|decrease(?: the)? speed|reduce(?: the)? speed|decelerate)\b/.test(text);
+  if (faster === slower || !state.motors.length) return [];
+  const refersToDrivenMachine = /\b(it|machine|system|vehicle|car|kart|go-?kart|motorcycle|bike|bicycle|rover|robot|drive|motor|wheel|rotor|propeller|flywheel|shaft|gear|winch|crane|lift|pump|fan|turbine)\b/.test(text);
+  if (!refersToDrivenMachine) return [];
+  const requestedPercent = Number(text.match(/(\d+(?:\.\d+)?)\s*(?:%|percent)/)?.[1] ?? 20);
+  const boundedPercent = Math.max(1, Math.min(80, requestedPercent));
+  const scale = faster ? 1 + boundedPercent / 100 : Math.max(.1, 1 - boundedPercent / 100);
+  const qualifiers = ['front', 'rear', 'left', 'right', 'input', 'output', 'rotor', 'propeller', 'winch', 'wheel'].filter((item) => new RegExp(`\\b${item}\\b`).test(text));
+  const qualified = state.motors.filter((motor) => {
+    const component = state.components.find((item) => item.id === motor.componentId);
+    const description = `${motor.id} ${component?.role ?? ''}`.toLowerCase();
+    return qualifiers.length === 0 || qualifiers.some((item) => description.includes(item));
+  });
+  const motors = qualified.length ? qualified : qualifiers.length ? [] : state.motors;
+  return motors.map((motor) => ({
+    motorId: motor.id,
+    previousRpm: motor.maxRpm,
+    maxRpm: Number(Math.max(1, Math.min(100_000, motor.maxRpm * scale)).toFixed(2)),
+    direction: motor.direction,
+  }));
 }

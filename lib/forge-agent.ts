@@ -55,7 +55,7 @@ const planJointSchema = z.object({
 const planMotorSchema = z.object({ id: identifier, component_id: identifier, joint_id: z.string().trim().max(64), max_torque: z.number().finite().positive().max(1000000), max_rpm: z.number().finite().positive().max(100000), direction: z.number().finite().min(-1).max(1) }).strict();
 const planSensorSchema = z.object({ id: identifier, component_id: identifier, sensor_type: sensorType, channel: channelKey, target_id: z.string().trim().max(64), range: z.number().finite().positive().max(100) }).strict();
 const planActuatorSchema = z.object({ id: identifier, component_id: identifier, joint_id: identifier, actuator_type: actuatorType, max_force: z.number().finite().positive().max(10000000), max_speed: z.number().finite().positive().max(10000), travel: z.number().finite().positive().max(100) }).strict();
-const planControlSchema = z.object({ id: identifier, name: z.string().trim().min(1).max(80), mode: controlMode, sensor_ids: z.array(identifier).max(12), actuator_ids: z.array(identifier).max(12), expression: z.string().trim().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10) }).strict();
+const planControlSchema = z.object({ id: identifier, name: z.string().trim().min(1).max(80), mode: controlMode, sensor_ids: z.array(identifier).max(12), actuator_ids: z.array(identifier).max(12), motor_ids: z.array(identifier).max(12), expression: z.string().trim().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10) }).strict();
 const planRequirementSchema = z.object({ metric: supportedMetric, label: z.string().trim().min(1).max(80), operator: z.enum(['min', 'max', 'exact']), target: z.number().finite().nonnegative(), unit: z.string().trim().max(12), source: z.enum(['user', 'inferred']) }).strict();
 
 // The model plans a compact engineering intent instead of serializing the
@@ -119,7 +119,7 @@ const editActionSchema = z.discriminatedUnion('tool', [
   z.object({ tool: z.literal('set_sensor_range'), sensor_id: identifier, range: z.number().finite().positive().max(100) }).strict(),
   z.object({ tool: z.literal('add_actuator'), actuator_id: identifier, component_id: identifier, joint_id: identifier, actuator_type: actuatorType, max_force: z.number().finite().positive().max(10000000), max_speed: z.number().finite().positive().max(10000), travel: z.number().finite().positive().max(100) }).strict(),
   z.object({ tool: z.literal('set_actuator_timing'), actuator_id: identifier, max_speed: z.number().finite().positive().max(10000), travel: z.number().finite().positive().max(100) }).strict(),
-  z.object({ tool: z.literal('set_control_logic'), control_id: identifier, name: z.string().trim().min(1).max(80), mode: controlMode, sensor_ids: z.array(identifier).max(12), actuator_ids: z.array(identifier).max(12), expression: z.string().trim().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10) }).strict(),
+  z.object({ tool: z.literal('set_control_logic'), control_id: identifier, name: z.string().trim().min(1).max(80), mode: controlMode, sensor_ids: z.array(identifier).max(12), actuator_ids: z.array(identifier).max(12), motor_ids: z.array(identifier).max(12), expression: z.string().trim().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10) }).strict(),
   z.object({ tool: z.literal('update_control_logic'), control_id: identifier, expression: z.string().trim().min(1).max(180), setpoint: z.number().finite(), kp: z.number().finite().min(0).max(10), ki: z.number().finite().min(0).max(10), kd: z.number().finite().min(0).max(10) }).strict(),
 ]);
 
@@ -168,7 +168,7 @@ export interface EditContext {
   motors: Array<{ id: string; component_id: string; joint_id: string; max_torque: number; max_rpm: number; direction: number }>;
   sensors: Array<{ id: string; component_id: string; sensor_type: string; channel: string; target_id: string; range: number }>;
   actuators: Array<{ id: string; component_id: string; joint_id: string; actuator_type: string; max_force: number; max_speed: number; travel: number }>;
-  controls: Array<{ id: string; name: string; mode: string; sensor_ids: string[]; actuator_ids: string[]; expression: string; setpoint: number; kp: number; ki: number; kd: number }>;
+  controls: Array<{ id: string; name: string; mode: string; sensor_ids: string[]; actuator_ids: string[]; motor_ids: string[]; expression: string; setpoint: number; kp: number; ki: number; kd: number }>;
   latest_run: { status: string; score: number; failed_metrics: string[] } | null;
   conversation: Array<{ role: 'user' | 'agent'; text: string }>;
 }
@@ -617,7 +617,7 @@ function validatePromptFidelity(plan: AgentPlan, originalPrompt: string) {
 
 export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: string) {
   unique(plan.assemblies.map((item) => item.id), 'Assembly'); unique(plan.components.map((item) => item.id), 'Component'); unique(plan.connections.map((item) => item.id), 'Connection'); unique(plan.joints.map((item) => item.id), 'Joint'); unique(plan.motors.map((item) => item.id), 'Motor'); unique(plan.sensors.map((item) => item.id), 'Sensor'); unique(plan.actuators.map((item) => item.id), 'Actuator'); unique(plan.controls.map((item) => item.id), 'Control');
-  const assemblyIds = new Set(plan.assemblies.map((item) => item.id)); const componentIds = new Set(plan.components.map((item) => item.id)); const jointIds = new Set(plan.joints.map((item) => item.id)); const sensorIds = new Set(plan.sensors.map((item) => item.id)); const actuatorIds = new Set(plan.actuators.map((item) => item.id));
+  const assemblyIds = new Set(plan.assemblies.map((item) => item.id)); const componentIds = new Set(plan.components.map((item) => item.id)); const jointIds = new Set(plan.joints.map((item) => item.id)); const motorIds = new Set(plan.motors.map((item) => item.id)); const sensorIds = new Set(plan.sensors.map((item) => item.id)); const actuatorIds = new Set(plan.actuators.map((item) => item.id));
   const bodyById = new Map(plan.components.map((item) => [item.id, item]));
   for (const item of plan.assemblies) { if (item.parent_id) assertReference(assemblyIds, item.parent_id, `Assembly ${item.id} parent`); if (item.parent_id === item.id) throw new Error(`Assembly ${item.id} cannot parent itself.`); }
   for (const start of plan.assemblies) {
@@ -642,7 +642,12 @@ export function validateAgentPlanSemantics(plan: AgentPlan, originalPrompt?: str
   // requirement for every channel.
   for (const item of plan.sensors) { assertReference(componentIds, item.component_id, `Sensor ${item.id}`); assertReference(componentIds, item.target_id, `Sensor ${item.id}`, true); }
   for (const item of plan.actuators) { assertReference(componentIds, item.component_id, `Actuator ${item.id}`); assertReference(jointIds, item.joint_id, `Actuator ${item.id}`); if (!['motor', 'servo', 'piston'].includes(plan.components.find((part) => part.id === item.component_id)?.primitive ?? '')) throw new Error(`Actuator ${item.id} needs a motor, servo, or piston body.`); const driven = plan.joints.find((joint) => joint.id === item.joint_id)!; if (driven.joint_type === 'fixed' || bodyById.get(driven.component_b)?.body_type === 'fixed') throw new Error(`Actuator ${item.id} must drive the movable component_b endpoint of a motion joint.`); }
-  for (const item of plan.controls) { item.sensor_ids.forEach((id) => assertReference(sensorIds, id, `Control ${item.id}`)); item.actuator_ids.forEach((id) => assertReference(actuatorIds, id, `Control ${item.id}`)); }
+  for (const item of plan.controls) {
+    item.sensor_ids.forEach((id) => assertReference(sensorIds, id, `Control ${item.id}`));
+    item.actuator_ids.forEach((id) => assertReference(actuatorIds, id, `Control ${item.id}`));
+    item.motor_ids.forEach((id) => assertReference(motorIds, id, `Control ${item.id}`));
+    if (!item.sensor_ids.length || (!item.actuator_ids.length && !item.motor_ids.length)) throw new Error(`Control ${item.id} needs sensor feedback and at least one actuator or motor output.`);
+  }
   assertReference(componentIds, plan.editable_component_id, 'Editable component');
   if (!plan.components.some((item) => item.body_type === 'fixed')) throw new Error('The design needs at least one grounded fixed body.');
   if (plan.components.length > 2 && !plan.connections.length && !plan.joints.length) throw new Error('The design is an unconnected parts pile.');
@@ -789,7 +794,7 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
   const motorById = new Map(context.motors.map((item) => [item.id, { component_id: item.component_id, joint_id: item.joint_id }]));
   const sensorById = new Map(context.sensors.map((item) => [item.id, { component_id: item.component_id, target_id: item.target_id }]));
   const actuatorById = new Map(context.actuators.map((item) => [item.id, { component_id: item.component_id, joint_id: item.joint_id }]));
-  const controlById = new Map(context.controls.map((item) => [item.id, { sensor_ids: [...item.sensor_ids], actuator_ids: [...item.actuator_ids] }]));
+  const controlById = new Map(context.controls.map((item) => [item.id, { sensor_ids: [...item.sensor_ids], actuator_ids: [...item.actuator_ids], motor_ids: [...item.motor_ids] }]));
   const locked = new Map(context.components.map((item) => [item.id, new Set(item.human_locked_fields)]));
   const preserved = new Set(edit.preserve_ids); const declaredTargets = new Set(edit.target_ids); const touched = new Set<string>();
   edit.preserve_ids.forEach((id) => assertReference(existing.components, id, 'Preserved component'));
@@ -828,7 +833,7 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
   };
   const touchControl = (controlId: string) => {
     const control = controlById.get(controlId); if (!control) return;
-    control.sensor_ids.forEach(touchSensor); control.actuator_ids.forEach(touchActuator);
+    control.sensor_ids.forEach(touchSensor); control.actuator_ids.forEach(touchActuator); control.motor_ids.forEach(touchMotor);
   };
 
   const reachableFromFixed = (componentIds: Set<string>, graph: Map<string, { component_a: string; component_b: string }>) => {
@@ -894,9 +899,9 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
         motorById.delete(id); motors.delete(id);
       }
       for (const [id, control] of controlById) {
-        const changed = control.sensor_ids.some((item) => removedSensorIds.has(item)) || control.actuator_ids.some((item) => removedActuatorIds.has(item));
-        control.sensor_ids = control.sensor_ids.filter((item) => !removedSensorIds.has(item)); control.actuator_ids = control.actuator_ids.filter((item) => !removedActuatorIds.has(item));
-        if (!control.sensor_ids.length && !control.actuator_ids.length) { controlById.delete(id); controls.delete(id); }
+        const changed = control.sensor_ids.some((item) => removedSensorIds.has(item)) || control.actuator_ids.some((item) => removedActuatorIds.has(item)) || control.motor_ids.some((item) => removedMotorIds.has(item));
+        control.sensor_ids = control.sensor_ids.filter((item) => !removedSensorIds.has(item)); control.actuator_ids = control.actuator_ids.filter((item) => !removedActuatorIds.has(item)); control.motor_ids = control.motor_ids.filter((item) => !removedMotorIds.has(item));
+        if (!control.sensor_ids.length || (!control.actuator_ids.length && !control.motor_ids.length)) { control.sensor_ids.forEach(touchSensor); controlById.delete(id); controls.delete(id); }
         else if (changed) touchControl(id);
       }
       for (const [id, edge] of connectionById) if (edge.source_id === action.component_id || edge.target_id === action.component_id) { connectionById.delete(id); connections.delete(id); }
@@ -927,9 +932,9 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
       for (const id of removedMotorIds) { const motor = motorById.get(id)!; touch(motor.component_id); motorById.delete(id); motors.delete(id); }
       for (const id of removedActuatorIds) { const actuator = actuatorById.get(id)!; touch(actuator.component_id); actuatorById.delete(id); actuators.delete(id); }
       for (const [id, control] of controlById) {
-        const changed = control.actuator_ids.some((item) => removedActuatorIds.has(item));
-        control.actuator_ids = control.actuator_ids.filter((item) => !removedActuatorIds.has(item));
-        if (!control.sensor_ids.length && !control.actuator_ids.length) { controlById.delete(id); controls.delete(id); }
+        const changed = control.actuator_ids.some((item) => removedActuatorIds.has(item)) || control.motor_ids.some((item) => removedMotorIds.has(item));
+        control.actuator_ids = control.actuator_ids.filter((item) => !removedActuatorIds.has(item)); control.motor_ids = control.motor_ids.filter((item) => !removedMotorIds.has(item));
+        if (!control.sensor_ids.length || (!control.actuator_ids.length && !control.motor_ids.length)) { control.sensor_ids.forEach(touchSensor); controlById.delete(id); controls.delete(id); }
         else if (changed) touchControl(id);
       }
       joints.delete(action.joint_id); jointById.delete(action.joint_id); continue;
@@ -953,11 +958,11 @@ export function validateAgentEditSemantics(edit: AgentEdit, context: EditContext
     }
     if (action.tool === 'set_actuator_timing') { assertReference(actuators, action.actuator_id, 'Actuator timing edit'); touchActuator(action.actuator_id); continue; }
     if (action.tool === 'set_control_logic') {
-      unique(action.sensor_ids, `Control ${action.control_id} sensor`); unique(action.actuator_ids, `Control ${action.control_id} actuator`);
-      action.sensor_ids.forEach((id) => assertReference(sensors, id, `Control ${action.control_id}`)); action.actuator_ids.forEach((id) => assertReference(actuators, id, `Control ${action.control_id}`));
-      if (!action.actuator_ids.length) throw new Error(`Control ${action.control_id} needs at least one actuator.`);
-      if (action.mode !== 'timed' && !action.sensor_ids.length) throw new Error(`Control ${action.control_id} needs sensor feedback for ${action.mode} mode.`);
-      controls.add(action.control_id); controlById.set(action.control_id, { sensor_ids: [...action.sensor_ids], actuator_ids: [...action.actuator_ids] }); touchControl(action.control_id); continue;
+      unique(action.sensor_ids, `Control ${action.control_id} sensor`); unique(action.actuator_ids, `Control ${action.control_id} actuator`); unique(action.motor_ids, `Control ${action.control_id} motor`);
+      action.sensor_ids.forEach((id) => assertReference(sensors, id, `Control ${action.control_id}`)); action.actuator_ids.forEach((id) => assertReference(actuators, id, `Control ${action.control_id}`)); action.motor_ids.forEach((id) => assertReference(motors, id, `Control ${action.control_id}`));
+      if (!action.actuator_ids.length && !action.motor_ids.length) throw new Error(`Control ${action.control_id} needs at least one actuator or motor.`);
+      if (!action.sensor_ids.length) throw new Error(`Control ${action.control_id} needs sensor feedback for ${action.mode} mode.`);
+      controls.add(action.control_id); controlById.set(action.control_id, { sensor_ids: [...action.sensor_ids], actuator_ids: [...action.actuator_ids], motor_ids: [...action.motor_ids] }); touchControl(action.control_id); continue;
     }
     if (action.tool === 'update_control_logic') { assertReference(controls, action.control_id, 'Control edit'); touchControl(action.control_id); continue; }
     const exhaustive: never = action; throw new Error(`Unsupported edit action ${String(exhaustive)}`);

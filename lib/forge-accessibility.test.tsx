@@ -150,18 +150,18 @@ describe('ForgeTwin accessible world editor shell', () => {
     expect((await findAllByText(/Model agent · gpt-5.4-mini/i)).length).toBeGreaterThan(0);
   }, 25_000);
 
-  it('keeps a validated model session connected when one request falls back locally', async () => {
+  it('keeps working locally and stops retrying a rate-limited model session', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       if (init?.method === 'PUT') return new Response(JSON.stringify({ ok: true, configured: true, model: 'gpt-5.6-sol' }), { status: 200, headers: { 'content-type': 'application/json' } });
       return new Response(JSON.stringify({ ok: false, code: 'MODEL_QUOTA_OR_RATE_LIMIT', error: 'The API key is valid, but the OpenAI project has no available quota or is currently rate-limited.' }), { status: 429, headers: { 'content-type': 'application/json' } });
     });
-    const { getByRole, getByLabelText, findByText, findAllByText } = render(<ForgeTwinApp />);
+    const { getByRole, getByLabelText, findByText } = render(<ForgeTwinApp />);
     fireEvent.click(getByRole('button', { name: 'Connect AI' }));
     fireEvent.change(getByLabelText('Your OpenAI API key'), { target: { value: 'sk-test-valid-but-rate-limited-123456789' } });
     fireEvent.click(getByRole('button', { name: 'Verify & connect for this tab' }));
     await waitFor(() => expect(getByRole('button', { name: 'Engineer with AI' })).toBeTruthy());
     fireEvent.click(getByRole('button', { name: 'Engineer with AI' }));
     expect(await findByText(/Engineering mission complete|Concept run complete with limits/, {}, { timeout: 20_000 })).toBeTruthy();
-    expect((await findAllByText(/gpt-5.6-sol · your key/i)).length).toBeGreaterThan(0);
+    expect(await findByText(/Local engineer ready/i)).toBeTruthy();
   }, 25_000);
 });

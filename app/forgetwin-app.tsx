@@ -99,10 +99,16 @@ export function ForgeTwinApp() {
   };
   const recordModelFailure = (caught: unknown) => {
     const message = caught instanceof Error ? caught.message : 'The model request failed.';
-    const disconnected = caught instanceof AgentRequestError && ['MODEL_KEY_REJECTED', 'MODEL_ACCESS_DENIED'].includes(caught.code);
+    const credentialsInvalid = caught instanceof AgentRequestError && ['MODEL_KEY_REJECTED', 'MODEL_ACCESS_DENIED'].includes(caught.code);
     setAgentConnectionError(message);
-    if (disconnected) { setAgentKey(''); setAgentRuntime(sharedAgentAvailable ? 'server-model' : 'deterministic'); }
-    return { message, disconnected };
+    // The guarded deterministic engineer is a complete runtime, not an error
+    // page. Stop retrying a provider that just failed so generation, redesign,
+    // and chat continue immediately for the rest of this tab. A visitor can
+    // explicitly reconnect a key from Agent settings when its quota recovers.
+    setAgentRuntime('deterministic');
+    if (credentialsInvalid) setAgentKey('');
+    if (!agentKey) setSharedAgentAvailable(false);
+    return { message, suspended: true };
   };
   const runtimeActor = (): Actor => agentRuntime !== 'deterministic' ? 'ModelAgent' : 'Deterministic';
   const updateGoalPrompt = (prompt: string) => { setGoalPrompt(prompt); setPromptError(null); };
@@ -133,7 +139,7 @@ export function ForgeTwinApp() {
       } catch (caught) {
         actor = 'Deterministic';
         const failure = recordModelFailure(caught);
-        addTrace('fallback', 'Model redesign unavailable', `${failure.message} Continuing with the bounded local evidence loop.${failure.disconnected ? ' The hosted model or another visitor key can be used on the next retry.' : ' The model remains available for the next retry.'}`);
+        addTrace('fallback', 'Model redesign unavailable', `${failure.message} Continuing with the bounded local evidence loop. Reconnect a model from Agent settings when provider access is available.`);
       }
     }
     const failedMetric = failed.metrics.measures.find((item) => item.status === 'fail');
@@ -172,8 +178,7 @@ export function ForgeTwinApp() {
     try {
       let actor: Actor = runtimeActor();
       let modelPlan: AgentPlan | null = null;
-      let shouldUseModel = actor === 'ModelAgent';
-      if (agentKey) { shouldUseModel = true; actor = 'ModelAgent'; setAgentRuntime('session-model'); }
+      const shouldUseModel = actor === 'ModelAgent';
       if (shouldUseModel) {
         setGenerationVisual((current) => current ? { ...current, progress: 9, headline: 'Reasoning across the constraints', detail: `${agentModel} is choosing an architecture that preserves the requested machine identity.` } : current);
         addTrace('action', 'Asking the model to plan', 'Interpreting constraints, selecting a composable architecture, and choosing verification metrics.');
@@ -185,7 +190,7 @@ export function ForgeTwinApp() {
         } catch (caught) {
           actor = 'Deterministic';
           const failure = recordModelFailure(caught);
-          addTrace('fallback', 'Switched to the local engineer for this run', `${failure.message} The deterministic planner will still build, simulate, and repair the machine.${failure.disconnected ? ' The hosted model or another visitor key can be used on the next retry.' : ' The model remains available for the next retry.'}`);
+          addTrace('fallback', 'Switched to the local engineer for this run', `${failure.message} The deterministic planner will still build, simulate, and repair the machine. Reconnect a model from Agent settings when provider access is available.`);
         }
       } else addTrace('fallback', 'Local deterministic engineer active', 'No model key is connected. This mode still executes the guarded world tools and real Rapier simulation; connect a model for model-selected planning and redesign decisions.');
 
@@ -474,7 +479,7 @@ export function ForgeTwinApp() {
       else if (action.tool === 'set_sensor_range') commands.push({ tool: action.tool, input: { sensor_id: action.sensor_id, range: action.range }, label: `Retune ${action.sensor_id}` });
       else if (action.tool === 'add_actuator') commands.push({ tool: action.tool, input: { actuator_id: action.actuator_id, component_id: action.component_id, joint_id: action.joint_id, actuator_type: action.actuator_type, max_force: action.max_force, max_speed: action.max_speed, travel: action.travel }, label: `Actuate ${action.component_id}` });
       else if (action.tool === 'set_actuator_timing') commands.push({ tool: action.tool, input: { actuator_id: action.actuator_id, max_speed: action.max_speed, travel: action.travel }, label: `Retune ${action.actuator_id}` });
-      else if (action.tool === 'set_control_logic') commands.push({ tool: action.tool, input: { control_id: action.control_id, name: action.name, mode: action.mode, sensor_ids: action.sensor_ids, actuator_ids: action.actuator_ids, expression: action.expression, setpoint: action.setpoint, kp: action.kp, ki: action.ki, kd: action.kd }, label: `Control ${action.name}` });
+      else if (action.tool === 'set_control_logic') commands.push({ tool: action.tool, input: { control_id: action.control_id, name: action.name, mode: action.mode, sensor_ids: action.sensor_ids, actuator_ids: action.actuator_ids, motor_ids: action.motor_ids, expression: action.expression, setpoint: action.setpoint, kp: action.kp, ki: action.ki, kd: action.kd }, label: `Control ${action.name}` });
       else commands.push({ tool: action.tool, input: { control_id: action.control_id, expression: action.expression, setpoint: action.setpoint, kp: action.kp, ki: action.ki, kd: action.kd }, label: `Retune ${action.control_id}` });
     }
     return commands;
@@ -632,7 +637,7 @@ export function ForgeTwinApp() {
         }));
         const increasing = directSpeedEdits[0].maxRpm > directSpeedEdits[0].previousRpm;
         summary = `${increasing ? 'Increased' : 'Reduced'} ${directSpeedEdits.length === 1 ? 'the selected drive' : `all ${directSpeedEdits.length} matching drives`} to ${directSpeedEdits.map((edit) => `${edit.maxRpm} rpm`).join(', ')} without changing the machine geometry.`;
-        addTrace('reasoning', 'Resolved conveyor speed edit directly', summary);
+        addTrace('reasoning', 'Resolved drive-speed edit directly', summary);
       } else if (actor === 'ModelAgent') {
         addTrace('action', 'Model is editing the current world', modelPrompt);
         try {
@@ -656,7 +661,7 @@ export function ForgeTwinApp() {
             motors: current.motors.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId ?? '', max_torque: item.maxTorque, max_rpm: item.maxRpm, direction: item.direction })),
             sensors: current.sensors.map((item) => ({ id: item.id, component_id: item.componentId, sensor_type: item.type, channel: item.channel, target_id: item.targetId ?? '', range: item.range })),
             actuators: current.actuators.map((item) => ({ id: item.id, component_id: item.componentId, joint_id: item.jointId, actuator_type: item.type, max_force: item.maxForce, max_speed: item.maxSpeed, travel: item.travel })),
-            controls: current.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
+            controls: current.controls.map((item) => ({ id: item.id, name: item.name, mode: item.mode, sensor_ids: item.sensorIds, actuator_ids: item.actuatorIds, motor_ids: item.motorIds ?? [], expression: item.expression, setpoint: item.setpoint, kp: item.kp, ki: item.ki, kd: item.kd })),
             latest_run: latest ? { status: latest.status, score: latest.metrics.score, failed_metrics: latest.metrics.measures.filter((item) => item.status === 'fail').map((item) => item.metric) } : null,
             conversation: [...editMessages.slice(-7), userMessage].map((item) => ({ role: item.role, text: item.text })),
           }, agentKey || undefined, controller.signal);
@@ -681,7 +686,7 @@ export function ForgeTwinApp() {
         } catch (caught) {
           actor = 'Deterministic'; const failure = recordModelFailure(caught); commands = localEditCommands(effectivePrompt);
           summary = `The model was unavailable, so the local chat interpreter applied: ${commands.map((item) => item.label).join(' · ')}.`;
-          addTrace('fallback', 'Local chat editor took over for this edit', `${failure.message}${failure.disconnected ? ' The hosted model or another visitor key can be used on the next retry.' : ' The model remains available for the next retry.'}`);
+          addTrace('fallback', 'Local chat editor took over for this edit', `${failure.message} Reconnect a model from Agent settings when provider access is available.`);
         }
       } else {
         commands = localEditCommands(effectivePrompt); summary = `Local chat edit: ${commands.map((item) => item.label).join(' · ')}.`;
@@ -907,7 +912,7 @@ function AgentSettingsDialog({ runtime, model, hasTemporaryKey, connecting, conn
   const visitorModel = runtime === 'session-model' && hasTemporaryKey;
   const hostedModel = runtime === 'server-model';
   const modelConnected = visitorModel || hostedModel;
-  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !connecting) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>AI model access</small><h2 id="agent-settings-title">Hosted AI or your own key</h2></div><button onClick={onClose} aria-label="Close agent settings" disabled={connecting}><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${modelConnected ? 'connected' : 'local'}`}><i /><div><strong>{connecting ? `Checking ${model} access…` : visitorModel ? `${model} connected with your key` : hostedModel ? `${model} hosted AI is ready` : 'Local deterministic engineer active'}</strong><p>{connecting ? 'Validating the key and model without storing the key or generating a design.' : visitorModel ? 'Your key overrides the built-in model for planning, chat edits, and redesign decisions.' : hostedModel ? 'Judges receive the complete AI planning and chat-editing experience without entering credentials.' : 'ForgeTwin remains functional locally. Add your own key below to enable model-selected reasoning.'}</p></div></div>{connectionError && <p className="agent-connection-error" role="alert"><AlertTriangle size={13} />{connectionError}</p>}{!hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); void onConnect(key); }}><label htmlFor="temporary-openai-key">Your OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} maxLength={300} placeholder="sk-…" disabled={connecting} /><p><KeyRound size={12} />Optional: your key overrides the hosted model only for this browser tab. It is sent to ForgeTwin’s same-origin route and never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={connecting || key.trim().length < 20 || key.trim().length > 300}><Bot size={14} />{connecting ? 'Verifying key…' : 'Verify & connect for this tab'}</button></form>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect} disabled={connecting}>Remove my key from this tab</button>}</div><footer><span>{visitorModel ? 'Your OpenAI account is charged only for model requests in this tab.' : 'Hosted AI is included for the hackathon demo.'} Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose} disabled={connecting}>Done</button></footer></section></div>;
+  return <div className="agent-settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !connecting) onClose(); }}><section ref={dialogRef} className="agent-settings" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title"><header><span><Bot size={18} /></span><div><small>AI model access</small><h2 id="agent-settings-title">Hosted AI or your own key</h2></div><button onClick={onClose} aria-label="Close agent settings" disabled={connecting}><X size={16} /></button></header><div className="agent-settings-body"><div className={`connection-state ${modelConnected ? 'connected' : 'local'}`}><i /><div><strong>{connecting ? `Checking ${model} access…` : visitorModel ? `${model} connected with your key` : hostedModel ? `${model} hosted AI is ready` : 'Local deterministic engineer active'}</strong><p>{connecting ? 'Validating the key and model without storing the key or generating a design.' : visitorModel ? 'Your key overrides the built-in model for planning, chat edits, and redesign decisions.' : hostedModel ? 'Judges receive the complete AI planning and chat-editing experience without entering credentials.' : hasTemporaryKey ? 'This key is paused after a provider failure. Remove it below, then reconnect when quota or access is available.' : 'ForgeTwin remains functional locally. Add your own key below to enable model-selected reasoning.'}</p></div></div>{connectionError && <p className="agent-connection-error" role="alert"><AlertTriangle size={13} />{connectionError}</p>}{!hasTemporaryKey && <form onSubmit={(event) => { event.preventDefault(); void onConnect(key); }}><label htmlFor="temporary-openai-key">Your OpenAI API key</label><input id="temporary-openai-key" type="password" value={key} onChange={(event) => setKey(event.target.value)} autoComplete="off" spellCheck={false} maxLength={300} placeholder="sk-…" disabled={connecting} /><p><KeyRound size={12} />Optional: your key overrides the hosted model only for this browser tab. It is sent to ForgeTwin’s same-origin route and never stored in localStorage or the project.</p><button className="run-button" type="submit" disabled={connecting || key.trim().length < 20 || key.trim().length > 300}><Bot size={14} />{connecting ? 'Verifying key…' : 'Verify & connect for this tab'}</button></form>}{hasTemporaryKey && <button className="disconnect-agent" onClick={onDisconnect} disabled={connecting}>Remove my key from this tab</button>}</div><footer><span>{visitorModel ? 'Your OpenAI account is charged only for model requests in this tab.' : hostedModel ? 'Hosted AI is included for the hackathon demo.' : hasTemporaryKey ? 'The paused key remains only in memory until you remove it or close this tab.' : 'The local engineer remains available without credentials.'} Rapier measurements—not model claims—determine pass or fail.</span><button onClick={onClose} disabled={connecting}>Done</button></footer></section></div>;
 }
 
 function FailureBanner({ run, onReplay, onFix, busy }: { run: SimulationRun; onReplay: () => void; onFix: () => void; busy: boolean }) {
