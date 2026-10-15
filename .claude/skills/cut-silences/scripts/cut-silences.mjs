@@ -277,7 +277,7 @@ if (opts.video) {
 
   const ffArgs = [
     "-y", "-i", videoPath,
-    "-/filter_complex", scriptPath,
+    "-filter_complex_script", scriptPath,
     "-map", "[v]", "-map", "[a]",
     "-c:v", "libx264", "-preset", "medium", "-crf", "18",
     "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",

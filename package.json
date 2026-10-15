@@ -10,9 +10,17 @@
     "build": "vinext build",
     "build:netlify": "next build --webpack",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .netlify",
+    "lint": "eslint . --ignore-pattern scripts --ignore-pattern style-library --ignore-pattern examples --ignore-pattern video-projects --ignore-pattern .claude --ignore-pattern dist --ignore-pattern .next --ignore-pattern .netlify",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "video:setup": "node scripts/setup.mjs",
+    "video:new": "node scripts/new-video.mjs",
+    "video:transcribe": "node scripts/transcribe-elevenlabs.mjs",
+    "video:validate-beats": "node scripts/validate-beat-sync.mjs",
+    "video:preflight": "node scripts/preflight.mjs",
+    "video:catalog": "node scripts/style-library/build-registry.mjs",
+    "video:validate-short-form": "node .claude/skills/short-form-edit/scripts/validate-plan.mjs",
+    "video:validate-footage": "node .claude/skills/short-form-edit/scripts/validate-footage.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",
@@ -50,7 +58,10 @@
     "vite": "8.0.13",
     "vitest": "^4.1.11",
     "webmcp-types": "^0.1.5",
-    "wrangler": "4.92.0"
+    "wrangler": "4.92.0",
+    "hyperframes": "0.7.109",
+    "gsap": "3.14.2",
+    "playwright": "^1.59.1"
   },
   "type": "module"
 }

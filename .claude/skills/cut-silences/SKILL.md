@@ -59,7 +59,7 @@ node .claude/skills/cut-silences/scripts/cut-silences.mjs <transcript.json> \
 - Pauses below `--gap` (0.55s) are left alone — natural speech rhythm.
 - For a trimmed pause, a **natural breath is kept**, scaled by context: `0.24s` for long pauses (≥2s), `0.20s` after a sentence ender (`. ! ?`), `0.14s` otherwise. The kept breath is biased slightly toward the end of the previous phrase.
 - Head/tail dead air is trimmed to `--head-pad` / `--tail-pad`.
-- Delete ranges are merged; keep ranges are the complement. The cut is rendered with an ffmpeg `trim`/`atrim` + `concat` filtergraph (written to a `*.silence-filter.txt` script and passed via `-/filter_complex`), so video and audio stay in sync.
+- Delete ranges are merged; keep ranges are the complement. The cut is rendered with an ffmpeg `trim`/`atrim` + `concat` filtergraph (written to a `*.silence-filter.txt` script and passed via `-filter_complex_script`), so video and audio stay in sync.
 
 ## Outputs (written to `--out-dir`)
 
