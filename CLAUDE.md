@@ -25,3 +25,8 @@ Before a creative session read `MOTION_PHILOSOPHY.md` and the project's DESIGN.m
 - Needs Node 22+, FFmpeg/ffprobe, Chrome/Chromium. `npm run video:setup` checks them.
 - Preserve raw footage; write each stage to a new filename. Never commit footage, transcripts, credentials or renders. Never print secrets.
 - Credits: see `.claude/skills/_licenses/herk-edit-kit/` and `THIRD_PARTY_NOTICES`.
+
+# Reverse engineering (REA)
+
+`reverse-engineer-anything` (from https://github.com/morluto/rea, MIT) guides analysis of shipped binaries, Electron/JavaScript apps, .NET, Android and websites. Use it only when the answer depends on a shipped artifact; use normal repo tools for source code.
+The skill only supplies instructions: the REA MCP server is not registered here. If its tools are missing, follow `.claude/skills/reverse-engineer-anything/references/connection-and-recovery.md` (`npx -y rea-agents@latest setup --client claude_code --dry-run --json`, then ask the user before applying). Only analyze software the user is authorized to analyze; see `.claude/skills/_licenses/rea/DISCLAIMER.md`.
